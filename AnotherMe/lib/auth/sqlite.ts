@@ -4,7 +4,19 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 
-const AUTH_DATA_DIR = path.join(process.cwd(), 'data');
+function resolveAuthDataDir() {
+  if (process.env.AUTH_DATA_DIR?.trim()) {
+    return process.env.AUTH_DATA_DIR.trim();
+  }
+
+  if (process.env.VERCEL) {
+    return path.join('/tmp', 'anotherme-auth');
+  }
+
+  return path.join(process.cwd(), 'data');
+}
+
+const AUTH_DATA_DIR = resolveAuthDataDir();
 const AUTH_DB_FILE = path.join(AUTH_DATA_DIR, 'auth.sqlite');
 const AUTH_WASM_FILE = path.join(process.cwd(), 'public', 'sql-wasm.wasm');
 
