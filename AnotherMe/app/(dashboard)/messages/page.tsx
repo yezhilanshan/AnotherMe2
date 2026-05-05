@@ -582,8 +582,20 @@ export default function MessagesPage() {
     setWsConnected(false);
     let active = true;
     const wsQuery = new URLSearchParams({ user_id: currentUserId });
+    const wsUrl = `${wsBaseUrl}/ws/messages/${selectedContactId}?${wsQuery.toString()}`;
 
-    const ws = new WebSocket(`${wsBaseUrl}/ws/messages/${selectedContactId}?${wsQuery.toString()}`);
+    if (window.location.protocol === 'https:' && wsUrl.startsWith('ws://')) {
+      setWsConnected(false);
+      return;
+    }
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch {
+      setWsConnected(false);
+      return;
+    }
 
     ws.onopen = () => {
       if (!active) {
