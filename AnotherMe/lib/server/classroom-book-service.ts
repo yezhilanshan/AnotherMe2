@@ -12,10 +12,11 @@ import path from 'path';
 import type { ClassroomBook, LearningBlock, SourceAnchor } from '@/lib/types/classroom-book';
 import { createEmptyBook, addBlock, addSourceAnchor } from '@/lib/types/classroom-book';
 import { createLogger } from '@/lib/logger';
+import { getRuntimeWorkDir } from '@/lib/server/runtime-data-dir';
 
 const log = createLogger('ClassroomBookService');
 
-const STORAGE_DIR = path.join(process.cwd(), '.workbuddy', 'classroom-books');
+const STORAGE_DIR = getRuntimeWorkDir('classroom-books');
 
 async function ensureStorageDir(): Promise<void> {
   try {

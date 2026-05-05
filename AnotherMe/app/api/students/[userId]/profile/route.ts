@@ -6,6 +6,30 @@ import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
 
+function buildFallbackProfile(userId: string) {
+  const now = new Date().toISOString();
+  return {
+    user_id: userId,
+    weak_subjects: [],
+    weak_knowledge_points: [],
+    recent_focus: null,
+    ability_scores: [],
+    learning_stats: {
+      records_total: 0,
+      records_14d: 0,
+      active_days_14: 0,
+      confusion_records: 0,
+      solved_records: 0,
+      top_subjects: [],
+      top_knowledge_points: [],
+      total_weight: 0,
+    },
+    updated_at: null,
+    computed_at: now,
+    profile_source: 'gateway-unavailable',
+  };
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ userId: string }> },
@@ -20,11 +44,22 @@ export async function GET(
     const rawLookback = Number(request.nextUrl.searchParams.get('lookbackDays') || '120');
     const lookbackDays = Number.isFinite(rawLookback) ? rawLookback : 120;
 
-    const profile = await getGatewayStudentProfile({
-      userId,
-      lookbackDays,
-    });
-    return apiSuccess({ profile });
+    try {
+      const profile = await getGatewayStudentProfile({
+        userId,
+        lookbackDays,
+      });
+      return apiSuccess({ profile });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({
+        profile: buildFallbackProfile(userId),
+        degraded: true,
+        warning: error.message,
+      });
+    }
   } catch (error) {
     if (error instanceof AuthError) {
       return apiError('INVALID_REQUEST', error.status, error.message, error.code);

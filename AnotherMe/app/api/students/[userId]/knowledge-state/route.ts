@@ -13,6 +13,20 @@ import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
 
+function buildFallbackKnowledgeState(userId: string, knowledgePointId: string) {
+  return {
+    user_id: userId,
+    knowledge_point_id: knowledgePointId,
+    p_mastery: 0,
+    p_learn: 0,
+    p_guess: 0,
+    p_slip: 0,
+    attempts: 0,
+    correct_attempts: 0,
+    last_updated_at: null,
+  };
+}
+
 function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
   if (value == null) {
     return defaultValue;
@@ -50,10 +64,33 @@ export async function GET(
     );
 
     if (knowledgePointId) {
-      const state = await getGatewayStudentKnowledgeState({
-        userId,
-        knowledgePointId,
-      });
+      let state;
+      try {
+        state = await getGatewayStudentKnowledgeState({
+          userId,
+          knowledgePointId,
+        });
+      } catch (error) {
+        if (!isAnotherMe2GatewayError(error)) {
+          throw error;
+        }
+        return apiSuccess({
+          state: buildFallbackKnowledgeState(userId, knowledgePointId),
+          ...(includeDecision
+            ? {
+                decision: {
+                  target_knowledge_point_id: knowledgePointId,
+                  mastery: 0,
+                  action: 'review',
+                  reason: 'AnotherMe2 gateway is not connected.',
+                },
+              }
+            : {}),
+          ...(includeContext ? { context: { context_text: '' } } : {}),
+          degraded: true,
+          warning: error.message,
+        });
+      }
 
       const response: Record<string, unknown> = { state };
       if (includeDecision) {
@@ -72,11 +109,24 @@ export async function GET(
     const rawLimit = Number(request.nextUrl.searchParams.get('limit') || '200');
     const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 200;
 
-    const states = await getGatewayStudentKnowledgeStates({
-      userId,
-      minMastery,
-      limit,
-    });
+    let states;
+    try {
+      states = await getGatewayStudentKnowledgeStates({
+        userId,
+        minMastery,
+        limit,
+      });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({
+        states: [],
+        ...(includeDecision ? { decisions: [] } : {}),
+        degraded: true,
+        warning: error.message,
+      });
+    }
 
     const response: Record<string, unknown> = { states };
     if (includeDecision) {

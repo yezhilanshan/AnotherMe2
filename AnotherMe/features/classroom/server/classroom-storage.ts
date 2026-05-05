@@ -5,10 +5,11 @@ import type { Scene, Stage } from '@/lib/types/stage';
 import type { CourseGenerationMeta } from '@/lib/server/course-engine';
 import type { LearningBlock } from '@/lib/types/learning-block';
 import { sceneToLearningBlock } from '@/lib/types/learning-block';
+import { getRuntimeDataDir } from '@/lib/server/runtime-data-dir';
 
-export const CLASSROOMS_DIR = path.join(process.cwd(), 'data', 'classrooms');
-export const CLASSROOM_JOBS_DIR = path.join(process.cwd(), 'data', 'classroom-jobs');
-export const LEARNING_BLOCKS_DIR = path.join(process.cwd(), 'data', 'learning-blocks');
+export const CLASSROOMS_DIR = getRuntimeDataDir('classrooms');
+export const CLASSROOM_JOBS_DIR = getRuntimeDataDir('classroom-jobs');
+export const LEARNING_BLOCKS_DIR = getRuntimeDataDir('learning-blocks');
 
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });

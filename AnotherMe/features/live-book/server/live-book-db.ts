@@ -3,10 +3,11 @@ import 'server-only';
 import { promises as fs } from 'fs';
 import path from 'path';
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
+import { getRuntimeDataDir } from '@/lib/server/runtime-data-dir';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = getRuntimeDataDir();
 const DB_FILE = path.join(DATA_DIR, 'live-books.sqlite');
-const WASM_FILE = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+const WASM_FILE = path.join(process.cwd(), 'public', 'sql-wasm.wasm');
 
 let sqlRuntimePromise: Promise<SqlJsStatic> | null = null;
 let dbPromise: Promise<Database> | null = null;

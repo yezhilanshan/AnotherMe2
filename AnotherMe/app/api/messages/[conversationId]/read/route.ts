@@ -26,11 +26,28 @@ export async function POST(
 
     const userId = await resolveRequestUserId(request, body.userId);
 
-    const readState = await markGatewayConversationRead({
-      conversationId,
-      userId,
-      lastReadSeq: body.lastReadSeq,
-    });
+    let readState;
+    try {
+      readState = await markGatewayConversationRead({
+        conversationId,
+        userId,
+        lastReadSeq: body.lastReadSeq,
+      });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({
+        readState: {
+          conversation_id: conversationId,
+          user_id: userId,
+          last_read_seq: body.lastReadSeq || 0,
+          unread_count: 0,
+        },
+        degraded: true,
+        warning: error.message,
+      });
+    }
 
     return apiSuccess({ readState });
   } catch (error) {

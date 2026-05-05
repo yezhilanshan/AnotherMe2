@@ -10,15 +10,43 @@ import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
 
+const FALLBACK_CONVERSATION_ID = 'local-system-assistant';
+
+function buildFallbackConversation(userId: string) {
+  const now = new Date().toISOString();
+  return {
+    conversation_id: FALLBACK_CONVERSATION_ID,
+    type: 'single',
+    name: '系统助手',
+    creator_id: userId,
+    last_message_id: null,
+    last_message_time: null,
+    unread_count: 0,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const userId = await resolveRequestUserId(request, request.nextUrl.searchParams.get('userId'));
     const limit = Number(request.nextUrl.searchParams.get('limit') || '50');
-    const conversations = await listGatewayConversations({
-      userId,
-      limit: Number.isFinite(limit) ? limit : 50,
-    });
-    return apiSuccess({ conversations });
+    try {
+      const conversations = await listGatewayConversations({
+        userId,
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      return apiSuccess({ conversations });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({
+        conversations: [buildFallbackConversation(userId)],
+        degraded: true,
+        warning: error.message,
+      });
+    }
   } catch (error) {
     if (error instanceof AuthError) {
       return apiError('INVALID_REQUEST', error.status, error.message, error.code);

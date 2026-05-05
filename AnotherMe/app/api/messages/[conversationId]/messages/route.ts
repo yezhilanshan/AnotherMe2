@@ -10,6 +10,8 @@ import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
 
+const FALLBACK_CONVERSATION_ID = 'local-system-assistant';
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ conversationId: string }> },
@@ -25,13 +27,44 @@ export async function GET(
     const beforeSeq = beforeSeqRaw ? Number(beforeSeqRaw) : undefined;
     const userId = await resolveRequestUserId(request, request.nextUrl.searchParams.get('userId'));
 
-    const messages = await listGatewayMessages({
-      conversationId,
-      userId,
-      limit: Number.isFinite(limit) ? limit : 100,
-      beforeSeq: typeof beforeSeq === 'number' && Number.isFinite(beforeSeq) ? beforeSeq : undefined,
-    });
-    return apiSuccess({ messages });
+    try {
+      const messages = await listGatewayMessages({
+        conversationId,
+        userId,
+        limit: Number.isFinite(limit) ? limit : 100,
+        beforeSeq: typeof beforeSeq === 'number' && Number.isFinite(beforeSeq) ? beforeSeq : undefined,
+      });
+      return apiSuccess({ messages });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      if (conversationId !== FALLBACK_CONVERSATION_ID) {
+        return apiSuccess({ messages: [], degraded: true, warning: error.message });
+      }
+      return apiSuccess({
+        messages: [
+          {
+            message_id: 'local-system-welcome',
+            conversation_id: FALLBACK_CONVERSATION_ID,
+            seq: 1,
+            sender_id: 'system-assistant',
+            message_type: 'text',
+            content: '消息网关尚未连接。页面可以浏览，但实时消息需要先配置 AnotherMe2 网关。',
+            reply_to_message_id: null,
+            status: 'sent',
+            source_type: 'system',
+            source_ref_id: null,
+            recalled_flag: false,
+            deleted_flag: false,
+            created_at: new Date().toISOString(),
+            attachments: [],
+          },
+        ],
+        degraded: true,
+        warning: error.message,
+      });
+    }
   } catch (error) {
     if (error instanceof AuthError) {
       return apiError('INVALID_REQUEST', error.status, error.message, error.code);

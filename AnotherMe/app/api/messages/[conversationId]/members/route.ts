@@ -22,10 +22,18 @@ export async function GET(
 
     const userId = await resolveRequestUserId(request, request.nextUrl.searchParams.get('userId'));
 
-    const members = await listGatewayConversationMembers({
-      conversationId,
-      userId,
-    });
+    let members;
+    try {
+      members = await listGatewayConversationMembers({
+        conversationId,
+        userId,
+      });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({ members: [], degraded: true, warning: error.message });
+    }
 
     return apiSuccess({ members });
   } catch (error) {

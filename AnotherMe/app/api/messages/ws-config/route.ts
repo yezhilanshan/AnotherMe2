@@ -24,10 +24,10 @@ export async function GET(request: NextRequest) {
 
     const resolved = explicit || (gatewayHttp ? toWebSocketBaseUrl(gatewayHttp) : '');
     if (!resolved) {
-      return apiError('INTERNAL_ERROR', 500, 'Gateway websocket url is not configured');
+      return apiSuccess({ wsBaseUrl: '', enabled: false });
     }
 
-    return apiSuccess({ wsBaseUrl: resolved.replace(/\/+$/, '') });
+    return apiSuccess({ wsBaseUrl: resolved.replace(/\/+$/, ''), enabled: true });
   } catch (error) {
     if (error instanceof AuthError) {
       return apiError('INVALID_REQUEST', error.status, error.message, error.code);

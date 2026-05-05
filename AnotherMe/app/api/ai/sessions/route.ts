@@ -16,11 +16,19 @@ export async function GET(request: NextRequest) {
     const limit = Number(request.nextUrl.searchParams.get('limit') || '50');
     const linkedConversationId = request.nextUrl.searchParams.get('conversationId') || undefined;
 
-    const sessions = await listGatewayAISessions({
-      userId,
-      limit: Number.isFinite(limit) ? limit : 50,
-      linkedConversationId,
-    });
+    let sessions;
+    try {
+      sessions = await listGatewayAISessions({
+        userId,
+        limit: Number.isFinite(limit) ? limit : 50,
+        linkedConversationId,
+      });
+    } catch (error) {
+      if (!isAnotherMe2GatewayError(error)) {
+        throw error;
+      }
+      return apiSuccess({ sessions: [], degraded: true, warning: error.message });
+    }
     return apiSuccess({ sessions });
   } catch (error) {
     if (error instanceof AuthError) {
