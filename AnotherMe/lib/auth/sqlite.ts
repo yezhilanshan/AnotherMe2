@@ -6,7 +6,7 @@ import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 
 const AUTH_DATA_DIR = path.join(process.cwd(), 'data');
 const AUTH_DB_FILE = path.join(AUTH_DATA_DIR, 'auth.sqlite');
-const AUTH_WASM_FILE = path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+const AUTH_WASM_FILE = path.join(process.cwd(), 'public', 'sql-wasm.wasm');
 
 let sqlRuntimePromise: Promise<SqlJsStatic> | null = null;
 let authDbPromise: Promise<Database> | null = null;
