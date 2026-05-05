@@ -18,8 +18,20 @@ function getSigningSecret() {
   return process.env.AUTH_SECRET || process.env.AUTH_ADMIN_PASSWORD || '';
 }
 
-function getAdminEmail() {
+export function getStatelessAdminEmail() {
   return process.env.AUTH_ADMIN_EMAIL?.trim().toLowerCase() || '';
+}
+
+export function hasStatelessAdminPassword() {
+  return Boolean(process.env.AUTH_ADMIN_PASSWORD);
+}
+
+export function hasStatelessAuthSecret() {
+  return Boolean(getSigningSecret());
+}
+
+function getAdminEmail() {
+  return getStatelessAdminEmail();
 }
 
 function getAdminPassword() {
