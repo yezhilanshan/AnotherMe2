@@ -3,6 +3,12 @@ import 'server-only';
 import { randomBytes, randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
 import { queryRows, withAuthDatabase } from '@/lib/auth/sqlite';
+import {
+  authenticateStatelessAdmin,
+  createStatelessAdminSession,
+  getUserFromStatelessSession,
+  isStatelessSession,
+} from '@/lib/auth/stateless';
 import { AuthError, type AuthSession, type AuthUser } from '@/lib/auth/types';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
@@ -137,6 +143,14 @@ export async function loginAndCreateSession(
   email: string,
   password: string,
 ): Promise<{ user: AuthUser; session: AuthSession }> {
+  const statelessAdmin = authenticateStatelessAdmin(email, password);
+  if (statelessAdmin) {
+    return {
+      user: statelessAdmin,
+      session: createStatelessAdminSession(statelessAdmin),
+    };
+  }
+
   const user = await authenticateUser(email, password);
 
   // Revoke all existing sessions for this user to prevent session fixation
@@ -189,6 +203,10 @@ export async function createSession(userId: string): Promise<AuthSession> {
 
 export async function getUserBySession(sessionId: string): Promise<AuthUser | null> {
   if (!sessionId) return null;
+
+  const statelessUser = getUserFromStatelessSession(sessionId);
+  if (statelessUser) return statelessUser;
+
   const now = Date.now();
 
   let shouldPersist = false;
@@ -238,6 +256,8 @@ export async function getUserBySession(sessionId: string): Promise<AuthUser | nu
 
 export async function revokeSession(sessionId: string): Promise<void> {
   if (!sessionId) return;
+  if (isStatelessSession(sessionId)) return;
+
   await withAuthDatabase(
     (db) => {
       db.run('DELETE FROM sessions WHERE id = ?', [sessionId]);

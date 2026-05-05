@@ -36,6 +36,10 @@ ANOTHERME2_GATEWAY_TOKEN=<same value as GATEWAY_API_TOKEN on Alibaba Cloud>
 NEXT_PUBLIC_VIDEO_GENERATION_MODE=gateway-job
 AUTH_COOKIE_SECURE=true
 AUTH_DATA_DIR=/tmp/anotherme-auth
+AUTH_ADMIN_EMAIL=admin@example.com
+AUTH_ADMIN_PASSWORD=<strong password>
+AUTH_ADMIN_DISPLAY_NAME=管理员
+AUTH_SECRET=<strong random secret>
 ```
 
 Configure at least one model provider:
@@ -75,3 +79,5 @@ Then test a browser flow that calls the gateway, such as the problem-video path 
 The current auth implementation stores users and sessions in a local SQLite file under `data/auth.sqlite`. Vercel's runtime filesystem is not suitable for durable user account storage. This is acceptable for a short internal smoke test, but production auth should be moved to a durable external database or the Alibaba Cloud gateway.
 
 On Vercel, `AUTH_DATA_DIR=/tmp/anotherme-auth` avoids read-only filesystem errors during smoke tests. Data in `/tmp` is ephemeral and can disappear after cold starts or redeployments.
+
+For a stable Vercel login before durable auth is implemented, set `AUTH_ADMIN_EMAIL`, `AUTH_ADMIN_PASSWORD`, and `AUTH_SECRET`. That admin login uses a signed cookie and does not depend on the temporary SQLite file.
