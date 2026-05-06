@@ -48,6 +48,8 @@ class ProblemVideoGenerateInput(BaseModel):
     image_object_key: str = Field(..., min_length=1)
     problem_text: Optional[str] = None
     geometry_file: Optional[str] = None
+    model_name: Optional[str] = None
+    llm_config: Optional[Dict[str, Any]] = None
     output_profile: str = "1080p"
     learner_user_id: Optional[str] = None
     learner_session_id: Optional[str] = None

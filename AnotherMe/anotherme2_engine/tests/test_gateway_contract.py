@@ -307,6 +307,25 @@ def test_study_package_requires_output():
         raise AssertionError("Expected validation failure")
 
 
+def test_problem_video_payload_preserves_llm_config():
+    normalized = validate_job_payload(
+        JobType.PROBLEM_VIDEO_GENERATE,
+        {
+            "image_object_key": "uploads/problem.png",
+            "model_name": "qwen:qwen3.5-flash",
+            "llm_config": {
+                "model": "qwen:qwen3.5-flash",
+                "api_key": "dashscope-key",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            },
+        },
+    )
+
+    assert normalized["model_name"] == "qwen:qwen3.5-flash"
+    assert normalized["llm_config"]["api_key"] == "dashscope-key"
+    assert normalized["llm_config"]["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
 def test_problem_video_result_contract(tmp_path: Path):
     db_path = tmp_path / "pv.db"
     obj_root = tmp_path / "objects"

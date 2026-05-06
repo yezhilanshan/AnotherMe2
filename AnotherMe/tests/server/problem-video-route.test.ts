@@ -55,6 +55,9 @@ describe('problem-video routes', () => {
     const formData = new FormData();
     formData.append('image', new File(['image-bytes'], 'problem.png', { type: 'image/png' }));
     formData.append('problemText', '已知 Rt△ABC，求 AB。');
+    formData.append('model', 'qwen:qwen3.5-flash');
+    formData.append('apiKey', 'dashscope-key');
+    formData.append('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
 
     const response = await POST(
       new NextRequest('http://localhost/api/problem-video', {
@@ -71,6 +74,13 @@ describe('problem-video routes', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:8080/v1/uploads');
     expect(mockFetch.mock.calls[1][0]).toBe('http://127.0.0.1:8080/v1/jobs');
+    const createJobBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));
+    expect(createJobBody.payload.model_name).toBe('qwen:qwen3.5-flash');
+    expect(createJobBody.payload.llm_config).toMatchObject({
+      model: 'qwen:qwen3.5-flash',
+      api_key: 'dashscope-key',
+      base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    });
   });
 
   it('returns a validation error when the image is missing', async () => {

@@ -35,6 +35,61 @@ class MissingInputObjectError(FileNotFoundError):
 _VIDEO_FILE_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
 
 
+def _strip_provider_prefix(model: str | None) -> str | None:
+    value = str(model or "").strip()
+    if not value:
+        return None
+    if ":" in value:
+        provider, model_name = value.split(":", 1)
+        if provider and model_name:
+            return model_name.strip() or None
+    return value
+
+
+def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    api_key = str(raw.get("api_key") or raw.get("apiKey") or "").strip()
+    base_url = str(raw.get("base_url") or raw.get("baseUrl") or "").strip()
+    model = _strip_provider_prefix(str(raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
+    result: Dict[str, Any] = {}
+    if api_key:
+        result["api_key"] = api_key
+    if base_url:
+        result["base_url"] = base_url
+    if model:
+        result["model"] = model
+    return result
+
+
+def _merge_runtime_configs(
+    *,
+    base_llm_config: Dict[str, Any],
+    base_vision_config: Dict[str, Any],
+    override: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    llm_config = dict(base_llm_config)
+    vision_config = dict(base_vision_config)
+
+    api_key = str(override.get("api_key") or "").strip()
+    base_url = str(override.get("base_url") or "").strip()
+    model = _strip_provider_prefix(str(override.get("model") or ""))
+
+    if api_key:
+        llm_config["api_key"] = api_key
+        vision_config["api_key"] = api_key
+    if base_url:
+        llm_config["base_url"] = base_url
+        vision_config["base_url"] = base_url
+    if model:
+        llm_config["model"] = model
+        model_lower = model.lower()
+        if "vl" in model_lower or "vision" in model_lower or "ocr" in model_lower:
+            vision_config["model"] = model
+
+    return llm_config, vision_config
+
+
 def _is_video_artifact(path: str) -> bool:
     target = Path(path)
     return target.suffix.lower() in _VIDEO_FILE_SUFFIXES and target.exists() and target.stat().st_size > 0
@@ -46,6 +101,7 @@ def _generation_subprocess_entry(
     output_dir: str,
     geometry_file: str | None,
     learner_memory: Dict[str, Any] | None,
+    llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     result_queue: "mp.queues.Queue",
 ) -> None:
@@ -53,9 +109,14 @@ def _generation_subprocess_entry(
         from agents.foundation.config import build_default_llm_config, build_vision_model_config
         from main import MathVideoGenerator
 
+        llm_config, vision_config = _merge_runtime_configs(
+            base_llm_config=build_default_llm_config(),
+            base_vision_config=build_vision_model_config(),
+            override=_clean_llm_config(llm_config_override),
+        )
         generator = MathVideoGenerator(
-            llm_config=build_default_llm_config(),
-            vision_config=build_vision_model_config(),
+            llm_config=llm_config,
+            vision_config=vision_config,
         )
         final_video_path = generator.generate(
             image_path=image_path,
@@ -89,6 +150,7 @@ def _run_generation_with_timeout(
     output_dir: str,
     geometry_file: str | None,
     learner_memory: Dict[str, Any] | None,
+    llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     timeout_seconds: int,
 ) -> str:
@@ -103,6 +165,7 @@ def _run_generation_with_timeout(
             output_dir,
             geometry_file,
             learner_memory,
+            llm_config_override,
             export_ggb,
             result_queue,
         ),
@@ -267,6 +330,7 @@ def run_problem_video_job(
             output_dir=str(output_dir),
             geometry_file=str(geometry_local) if geometry_local else None,
             learner_memory=payload.get("learner_memory") if isinstance(payload.get("learner_memory"), dict) else None,
+            llm_config_override=payload.get("llm_config") if isinstance(payload.get("llm_config"), dict) else None,
             export_ggb=True,
             timeout_seconds=timeout_seconds,
         )
