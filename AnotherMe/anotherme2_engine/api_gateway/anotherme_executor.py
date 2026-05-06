@@ -66,28 +66,45 @@ def _merge_runtime_configs(
     *,
     base_llm_config: Dict[str, Any],
     base_vision_config: Dict[str, Any],
+    base_ocr_config: Dict[str, Any],
     override: Dict[str, Any],
-) -> tuple[Dict[str, Any], Dict[str, Any]]:
+) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     llm_config = dict(base_llm_config)
     vision_config = dict(base_vision_config)
+    ocr_config = dict(base_ocr_config)
 
     api_key = str(override.get("api_key") or "").strip()
     base_url = str(override.get("base_url") or "").strip()
     model = _strip_provider_prefix(str(override.get("model") or ""))
+    base_url_lower = base_url.lower()
+    model_lower = (model or "").lower()
+    is_dashscope_runtime = "dashscope.aliyuncs.com" in base_url_lower or model_lower.startswith("qwen")
 
     if api_key:
         llm_config["api_key"] = api_key
         vision_config["api_key"] = api_key
+        ocr_config["api_key"] = api_key
     if base_url:
         llm_config["base_url"] = base_url
         vision_config["base_url"] = base_url
+        ocr_config["base_url"] = base_url
     if model:
         llm_config["model"] = model
         model_lower = model.lower()
         if "vl" in model_lower or "vision" in model_lower or "ocr" in model_lower:
             vision_config["model"] = model
+            if "ocr" in model_lower:
+                ocr_config["model"] = model
 
-    return llm_config, vision_config
+    if is_dashscope_runtime:
+        vision_model = str(vision_config.get("model") or "").lower()
+        ocr_model = str(ocr_config.get("model") or "").lower()
+        if not vision_model.startswith("qwen") or ("vl" not in vision_model and "ocr" not in vision_model):
+            vision_config["model"] = "qwen3-vl-plus"
+        if not ocr_model.startswith("qwen") or ("vl" not in ocr_model and "ocr" not in ocr_model):
+            ocr_config["model"] = "qwen-vl-ocr-latest"
+
+    return llm_config, vision_config, ocr_config
 
 
 def _is_video_artifact(path: str) -> bool:
@@ -106,17 +123,19 @@ def _generation_subprocess_entry(
     result_queue: "mp.queues.Queue",
 ) -> None:
     try:
-        from agents.foundation.config import build_default_llm_config, build_vision_model_config
+        from agents.foundation.config import build_default_llm_config, build_ocr_model_config, build_vision_model_config
         from main import MathVideoGenerator
 
-        llm_config, vision_config = _merge_runtime_configs(
+        llm_config, vision_config, ocr_config = _merge_runtime_configs(
             base_llm_config=build_default_llm_config(),
             base_vision_config=build_vision_model_config(),
+            base_ocr_config=build_ocr_model_config(),
             override=_clean_llm_config(llm_config_override),
         )
         generator = MathVideoGenerator(
             llm_config=llm_config,
             vision_config=vision_config,
+            ocr_vision_config=ocr_config,
         )
         final_video_path = generator.generate(
             image_path=image_path,

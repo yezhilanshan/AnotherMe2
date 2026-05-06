@@ -39,7 +39,7 @@ from api_gateway.models import (
 from api_gateway.queueing import QueueMessage
 from api_gateway.schemas import CreateJobRequest, JobType, validate_job_payload
 from api_gateway.storage import LocalObjectStorage
-from api_gateway.anotherme_executor import MissingInputObjectError, ProblemVideoExecutionResult
+from api_gateway.anotherme_executor import MissingInputObjectError, ProblemVideoExecutionResult, _merge_runtime_configs
 
 
 class FakeQueueClient:
@@ -324,6 +324,40 @@ def test_problem_video_payload_preserves_llm_config():
     assert normalized["model_name"] == "qwen:qwen3.5-flash"
     assert normalized["llm_config"]["api_key"] == "dashscope-key"
     assert normalized["llm_config"]["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_problem_video_runtime_config_applies_dashscope_to_vision_and_ocr():
+    llm_config, vision_config, ocr_config = _merge_runtime_configs(
+        base_llm_config={
+            "api_key": "",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-seed-2-0-pro-260215",
+        },
+        base_vision_config={
+            "api_key": "",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-1.5-vision-pro-250328",
+        },
+        base_ocr_config={
+            "api_key": "",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-1.5-vision-pro-250328",
+        },
+        override={
+            "api_key": "dashscope-key",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "model": "qwen:qwen3.5-flash",
+        },
+    )
+
+    assert llm_config["api_key"] == "dashscope-key"
+    assert llm_config["model"] == "qwen3.5-flash"
+    assert vision_config["api_key"] == "dashscope-key"
+    assert vision_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert vision_config["model"] == "qwen3-vl-plus"
+    assert ocr_config["api_key"] == "dashscope-key"
+    assert ocr_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert ocr_config["model"] == "qwen-vl-ocr-latest"
 
 
 def test_problem_video_result_contract(tmp_path: Path):

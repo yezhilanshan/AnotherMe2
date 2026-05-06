@@ -97,8 +97,11 @@ class MathVideoGenerator:
             print(f"Output: {project.final_video_path}")
         if project.error_message:
             print(f"Error: {project.error_message}")
+        if not project.final_video_path:
+            details = project.error_message or f"workflow ended with status: {project.status}"
+            raise RuntimeError(f"AnotherMe2 generation failed: {details}")
 
-        return project.final_video_path or ""
+        return project.final_video_path
 
 
 def _resolve_api_key() -> str:
