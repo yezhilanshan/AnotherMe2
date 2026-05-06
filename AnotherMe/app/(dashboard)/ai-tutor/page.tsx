@@ -1339,10 +1339,13 @@ export default function AITutorPage() {
       if (controller.signal.aborted) {
         // switched session or new request; ignore aborted errors
       } else {
-        setErrorText(error instanceof Error ? error.message : 'AI 导师请求失败。');
+        const message = error instanceof Error ? error.message : 'AI 导师请求失败。';
+        setErrorText(message);
         updateSessionMessages(targetSessionId, (prev) =>
           prev.map((msg) =>
-            msg.id === assistantId ? { ...msg, content: '请求失败，请检查后端模型配置是否可用。' } : msg,
+            msg.id === assistantId
+              ? { ...msg, content: `请求失败：${message}` }
+              : msg,
           ),
         );
       }

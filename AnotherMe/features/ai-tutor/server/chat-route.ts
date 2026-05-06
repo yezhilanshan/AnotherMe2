@@ -791,6 +791,14 @@ export async function POST(req: NextRequest) {
       `Chat request failed [model=${chatModel ?? 'unknown'}, messages=${chatMessageCount ?? 0}]:`,
       error,
     );
-    return apiError('INTERNAL_ERROR', 500, 'Failed to process request');
+    const message = error instanceof Error ? error.message : 'Failed to process request';
+    if (/api key required/i.test(message)) {
+      return apiError('MISSING_API_KEY', 401, message);
+    }
+    return apiError(
+      'INTERNAL_ERROR',
+      500,
+      message,
+    );
   }
 }

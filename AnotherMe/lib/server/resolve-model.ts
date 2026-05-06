@@ -6,7 +6,7 @@
  */
 
 import type { NextRequest } from 'next/server';
-import { getModel, parseModelString, type ModelWithInfo } from '@/lib/ai/providers';
+import { getModel, parseModelString, PROVIDERS, type ModelWithInfo } from '@/lib/ai/providers';
 import { resolveApiKey, resolveBaseUrl, resolveProxy } from '@/lib/server/provider-config';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
@@ -29,8 +29,21 @@ export function resolveModel(params: {
   providerType?: string;
   requiresApiKey?: boolean;
 }): ResolvedModel {
-  const modelString = params.modelString || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
-  const { providerId, modelId } = parseModelString(modelString);
+  const requestedModelString = params.modelString || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
+  const parsed = parseModelString(requestedModelString);
+  const defaultModel = process.env.DEFAULT_MODEL
+    ? parseModelString(process.env.DEFAULT_MODEL)
+    : null;
+  const providerId = parsed.providerId;
+  const modelId =
+    parsed.modelId ||
+    PROVIDERS[providerId]?.models?.[0]?.id ||
+    defaultModel?.modelId ||
+    '';
+
+  if (!modelId) {
+    throw new Error(`Model id is required for provider: ${providerId}`);
+  }
 
   const clientBaseUrl = params.baseUrl || undefined;
   // Always validate SSRF in production; skip only in explicit dev mode
@@ -57,7 +70,7 @@ export function resolveModel(params: {
     requiresApiKey: params.requiresApiKey,
   });
 
-  return { model, modelInfo, modelString, apiKey };
+  return { model, modelInfo, modelString: `${providerId}:${modelId}`, apiKey };
 }
 
 /**
