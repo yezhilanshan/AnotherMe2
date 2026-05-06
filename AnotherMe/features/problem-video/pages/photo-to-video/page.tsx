@@ -841,6 +841,12 @@ export default function PhotoToVideoPage() {
       if (modelConfig.modelString) {
         formData.append('model', modelConfig.modelString);
       }
+      if (modelConfig.visionModelString) {
+        formData.append('visionModel', modelConfig.visionModelString);
+      }
+      if (modelConfig.ocrModelString) {
+        formData.append('ocrModel', modelConfig.ocrModelString);
+      }
       if (modelConfig.apiKey) {
         formData.append('apiKey', modelConfig.apiKey);
       }

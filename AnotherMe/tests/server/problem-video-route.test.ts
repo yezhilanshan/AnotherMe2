@@ -56,6 +56,8 @@ describe('problem-video routes', () => {
     formData.append('image', new File(['image-bytes'], 'problem.png', { type: 'image/png' }));
     formData.append('problemText', '已知 Rt△ABC，求 AB。');
     formData.append('model', 'qwen:qwen3.5-flash');
+    formData.append('visionModel', 'qwen:qwen3-vl-plus');
+    formData.append('ocrModel', 'qwen:qwen-vl-ocr-latest');
     formData.append('apiKey', 'dashscope-key');
     formData.append('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
 
@@ -78,6 +80,8 @@ describe('problem-video routes', () => {
     expect(createJobBody.payload.model_name).toBe('qwen:qwen3.5-flash');
     expect(createJobBody.payload.llm_config).toMatchObject({
       model: 'qwen:qwen3.5-flash',
+      vision_model: 'qwen:qwen3-vl-plus',
+      ocr_model: 'qwen:qwen-vl-ocr-latest',
       api_key: 'dashscope-key',
       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     });

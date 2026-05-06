@@ -520,6 +520,13 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         outputWindow: 32768,
         capabilities: { streaming: true, tools: true, vision: true },
       },
+      {
+        id: 'qwen-vl-ocr-latest',
+        name: 'Qwen VL OCR Latest',
+        contextWindow: 128000,
+        outputWindow: 8192,
+        capabilities: { streaming: false, tools: false, vision: true },
+      },
     ],
   },
 

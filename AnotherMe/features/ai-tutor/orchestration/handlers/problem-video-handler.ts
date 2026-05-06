@@ -13,6 +13,8 @@ export interface ProblemVideoCapabilityPayload {
   imageObjectKey: string;
   problemText?: string;
   model?: string;
+  visionModel?: string;
+  ocrModel?: string;
   apiKey?: string;
   baseUrl?: string;
   providerType?: string;
@@ -48,6 +50,8 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       imageObjectKey: p.imageObjectKey,
       problemText: typeof p.problemText === 'string' ? p.problemText : undefined,
       model: typeof p.model === 'string' ? p.model : undefined,
+      visionModel: typeof p.visionModel === 'string' ? p.visionModel : undefined,
+      ocrModel: typeof p.ocrModel === 'string' ? p.ocrModel : undefined,
       apiKey: typeof p.apiKey === 'string' ? p.apiKey : undefined,
       baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : undefined,
       providerType: typeof p.providerType === 'string' ? p.providerType : undefined,
@@ -65,6 +69,8 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       imageObjectKey,
       problemText,
       model,
+      visionModel,
+      ocrModel,
       apiKey,
       baseUrl,
       providerType,
@@ -107,6 +113,8 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
         imageObjectKey,
         ...(problemText ? { problemText } : {}),
         ...(model ? { model } : {}),
+        ...(visionModel ? { visionModel } : {}),
+        ...(ocrModel ? { ocrModel } : {}),
         ...(apiKey ? { apiKey } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         ...(providerType ? { providerType } : {}),

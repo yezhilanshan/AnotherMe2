@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
     const image = formData.get('image');
     const problemText = String(formData.get('problemText') || '').trim();
     const model = String(formData.get('model') || '').trim();
+    const visionModel = String(formData.get('visionModel') || '').trim();
+    const ocrModel = String(formData.get('ocrModel') || '').trim();
     const apiKey = String(formData.get('apiKey') || '').trim();
     const baseUrl = String(formData.get('baseUrl') || '').trim();
     const providerType = String(formData.get('providerType') || '').trim();
@@ -108,6 +110,8 @@ export async function POST(request: NextRequest) {
         imageObjectKey: upload.object_key,
         ...(problemText ? { problemText } : {}),
         ...(model ? { model } : {}),
+        ...(visionModel ? { visionModel } : {}),
+        ...(ocrModel ? { ocrModel } : {}),
         ...(apiKey ? { apiKey } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         ...(providerType ? { providerType } : {}),

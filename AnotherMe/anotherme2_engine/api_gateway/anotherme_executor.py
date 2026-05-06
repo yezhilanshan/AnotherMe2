@@ -52,6 +52,8 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     api_key = str(raw.get("api_key") or raw.get("apiKey") or "").strip()
     base_url = str(raw.get("base_url") or raw.get("baseUrl") or "").strip()
     model = _strip_provider_prefix(str(raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
+    vision_model = _strip_provider_prefix(str(raw.get("vision_model") or raw.get("visionModel") or ""))
+    ocr_model = _strip_provider_prefix(str(raw.get("ocr_model") or raw.get("ocrModel") or ""))
     result: Dict[str, Any] = {}
     if api_key:
         result["api_key"] = api_key
@@ -59,6 +61,10 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
         result["base_url"] = base_url
     if model:
         result["model"] = model
+    if vision_model:
+        result["vision_model"] = vision_model
+    if ocr_model:
+        result["ocr_model"] = ocr_model
     return result
 
 
@@ -76,9 +82,16 @@ def _merge_runtime_configs(
     api_key = str(override.get("api_key") or "").strip()
     base_url = str(override.get("base_url") or "").strip()
     model = _strip_provider_prefix(str(override.get("model") or ""))
+    vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
+    ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
     base_url_lower = base_url.lower()
     model_lower = (model or "").lower()
-    is_dashscope_runtime = "dashscope.aliyuncs.com" in base_url_lower or model_lower.startswith("qwen")
+    is_dashscope_runtime = (
+        "dashscope.aliyuncs.com" in base_url_lower
+        or model_lower.startswith("qwen")
+        or str(vision_model or "").lower().startswith("qwen")
+        or str(ocr_model or "").lower().startswith("qwen")
+    )
 
     if api_key:
         llm_config["api_key"] = api_key
@@ -90,11 +103,14 @@ def _merge_runtime_configs(
         ocr_config["base_url"] = base_url
     if model:
         llm_config["model"] = model
-        model_lower = model.lower()
         if "vl" in model_lower or "vision" in model_lower or "ocr" in model_lower:
             vision_config["model"] = model
             if "ocr" in model_lower:
                 ocr_config["model"] = model
+    if vision_model:
+        vision_config["model"] = vision_model
+    if ocr_model:
+        ocr_config["model"] = ocr_model
 
     if is_dashscope_runtime:
         vision_model = str(vision_config.get("model") or "").lower()

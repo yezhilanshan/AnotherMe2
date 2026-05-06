@@ -137,6 +137,25 @@ function inferProviderIdFromConnection(providerId: ProviderId, baseUrl: string):
   return providerId;
 }
 
+function isQwenConnection(providerId: ProviderId, baseUrl: string) {
+  return providerId === 'qwen' || /dashscope|aliyun|aliyuncs|qwen/i.test(baseUrl);
+}
+
+function resolveDefaultVisionModel(
+  providerId: ProviderId,
+  baseUrl: string,
+  models: Array<{ id: string; capabilities?: { vision?: boolean } }>,
+  fallbackModelId: string,
+) {
+  if (isQwenConnection(providerId, baseUrl)) return 'qwen3-vl-plus';
+  return models.find((model) => model.capabilities?.vision)?.id || fallbackModelId;
+}
+
+function resolveDefaultOcrModel(providerId: ProviderId, baseUrl: string, fallbackVisionModelId: string) {
+  if (isQwenConnection(providerId, baseUrl)) return 'qwen-vl-ocr-latest';
+  return fallbackVisionModelId;
+}
+
 const sectionIcons = {
   profile: UserCircle,
   ai: Sparkles,
@@ -170,9 +189,13 @@ export default function SettingsPage() {
 
   const providerId = useSettingsStore((s) => s.providerId);
   const modelId = useSettingsStore((s) => s.modelId);
+  const visionModelId = useSettingsStore((s) => s.visionModelId);
+  const ocrModelId = useSettingsStore((s) => s.ocrModelId);
   const providersConfig = useSettingsStore((s) => s.providersConfig);
   const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
   const setModel = useSettingsStore((s) => s.setModel);
+  const setVisionModelId = useSettingsStore((s) => s.setVisionModelId);
+  const setOcrModelId = useSettingsStore((s) => s.setOcrModelId);
   const fetchServerProviders = useSettingsStore((s) => s.fetchServerProviders);
 
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
@@ -207,6 +230,8 @@ export default function SettingsPage() {
 
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
   const [modelIdDraft, setModelIdDraft] = useState('');
+  const [visionModelIdDraft, setVisionModelIdDraft] = useState('');
+  const [ocrModelIdDraft, setOcrModelIdDraft] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [baseUrlDraft, setBaseUrlDraft] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -243,11 +268,24 @@ export default function SettingsPage() {
   useEffect(() => {
     const selected = providersConfig[selectedProviderId];
     const fallbackModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    const fallbackVisionModelId = resolveDefaultVisionModel(
+      selectedProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      selected?.models || [],
+      fallbackModelId,
+    );
+    const fallbackOcrModelId = resolveDefaultOcrModel(
+      selectedProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      fallbackVisionModelId,
+    );
     setApiKeyDraft(selected?.apiKey || '');
     setBaseUrlDraft(selected?.baseUrl || '');
     setModelIdDraft(selectedProviderId === providerId && modelId ? modelId : fallbackModelId);
+    setVisionModelIdDraft(selectedProviderId === providerId && visionModelId ? visionModelId : fallbackVisionModelId);
+    setOcrModelIdDraft(selectedProviderId === providerId && ocrModelId ? ocrModelId : fallbackOcrModelId);
     setTestResult(null);
-  }, [modelId, providerId, selectedProviderId, providersConfig]);
+  }, [modelId, ocrModelId, providerId, selectedProviderId, providersConfig, visionModelId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +398,19 @@ export default function SettingsPage() {
     });
     setSelectedProviderId(inferredProviderId);
     setModel(inferredProviderId, targetModelId);
+    setVisionModelId(
+      visionModelIdDraft.trim() ||
+        resolveDefaultVisionModel(inferredProviderId, baseUrlDraft, targetProvider.models || [], targetModelId),
+    );
+    setOcrModelId(
+      ocrModelIdDraft.trim() ||
+        resolveDefaultOcrModel(
+          inferredProviderId,
+          baseUrlDraft,
+          visionModelIdDraft.trim() ||
+            resolveDefaultVisionModel(inferredProviderId, baseUrlDraft, targetProvider.models || [], targetModelId),
+        ),
+    );
     setAiSaved(true);
     window.setTimeout(() => setAiSaved(false), 1500);
   };
@@ -915,7 +966,7 @@ export default function SettingsPage() {
                         <div className="space-y-2">
                           <label className="text-sm font-medium text-foreground flex items-center gap-2">
                             <Sparkles className="h-4 w-4 text-gray-400" />
-                            模型
+                            文本模型
                           </label>
                           <input
                             type="text"
@@ -932,6 +983,44 @@ export default function SettingsPage() {
                               </option>
                             ))}
                           </datalist>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                              <Eye className="h-4 w-4 text-gray-400" />
+                              视觉模型
+                            </label>
+                            <input
+                              type="text"
+                              list={`models-${selectedProviderId}`}
+                              value={visionModelIdDraft}
+                              onChange={(e) => setVisionModelIdDraft(e.target.value)}
+                              placeholder="qwen3-vl-plus"
+                              className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              用于拍题图片理解和几何信息识别。
+                            </p>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-gray-400" />
+                              OCR 模型
+                            </label>
+                            <input
+                              type="text"
+                              list={`models-${selectedProviderId}`}
+                              value={ocrModelIdDraft}
+                              onChange={(e) => setOcrModelIdDraft(e.target.value)}
+                              placeholder="qwen-vl-ocr-latest"
+                              className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              用于题目文字识别，可与视觉模型分开配置。
+                            </p>
+                          </div>
                         </div>
                       </div>
 

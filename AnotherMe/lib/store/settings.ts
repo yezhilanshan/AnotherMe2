@@ -32,6 +32,8 @@ export interface SettingsState {
   // Model selection
   providerId: ProviderId;
   modelId: string;
+  visionModelId: string;
+  ocrModelId: string;
 
   // Provider configurations (unified JSON storage)
   providersConfig: ProvidersConfig;
@@ -162,6 +164,8 @@ export interface SettingsState {
   // Actions
   setProvider: (providerId: ProviderId) => void;
   setModel: (providerId: ProviderId, modelId: string) => void;
+  setVisionModelId: (modelId: string) => void;
+  setOcrModelId: (modelId: string) => void;
   setProviderConfig: (providerId: ProviderId, config: Partial<ProvidersConfig[ProviderId]>) => void;
   setProvidersConfig: (config: ProvidersConfig) => void;
   setTtsModel: (model: string) => void;
@@ -544,6 +548,8 @@ export const useSettingsStore = create<SettingsState>()(
         // Initial state (use migrated data if available)
         providerId: migratedData?.providerId || 'openai',
         modelId: migratedData?.modelId || '',
+        visionModelId: '',
+        ocrModelId: '',
         providersConfig: migratedData?.providersConfig || getDefaultProvidersConfig(),
         ttsModel: migratedData?.ttsModel || 'openai-tts',
         selectedAgentIds: migratedData?.selectedAgentIds || [...DEFAULT_SELECTED_AGENT_IDS],
@@ -590,6 +596,8 @@ export const useSettingsStore = create<SettingsState>()(
         // Actions
         setProvider: (providerId) => set({ providerId }),
         setModel: (providerId, modelId) => set({ providerId, modelId }),
+        setVisionModelId: (modelId) => set({ visionModelId: modelId }),
+        setOcrModelId: (modelId) => set({ ocrModelId: modelId }),
 
         setProviderConfig: (providerId, config) =>
           set((state) => ({

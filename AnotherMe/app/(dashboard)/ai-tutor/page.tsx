@@ -1183,6 +1183,8 @@ export default function AITutorPage() {
             apiKey: modelConfig.apiKey || '',
             baseUrl: modelConfig.baseUrl || undefined,
             model: modelConfig.modelString || undefined,
+            visionModel: modelConfig.visionModelString || undefined,
+            ocrModel: modelConfig.ocrModelString || undefined,
             providerType: modelConfig.providerType || undefined,
             requiresApiKey: modelConfig.requiresApiKey,
           }

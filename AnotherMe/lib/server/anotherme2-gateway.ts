@@ -304,6 +304,8 @@ export async function createAnotherMe2ProblemVideoJob(params: {
   imageObjectKey: string;
   problemText?: string;
   model?: string;
+  visionModel?: string;
+  ocrModel?: string;
   apiKey?: string;
   baseUrl?: string;
   providerType?: string;
@@ -324,9 +326,17 @@ export async function createAnotherMe2ProblemVideoJob(params: {
   if (params.model?.trim()) {
     payload.model_name = params.model.trim();
   }
-  if (params.apiKey?.trim() || params.baseUrl?.trim() || params.providerType?.trim()) {
+  if (
+    params.apiKey?.trim() ||
+    params.baseUrl?.trim() ||
+    params.providerType?.trim() ||
+    params.visionModel?.trim() ||
+    params.ocrModel?.trim()
+  ) {
     payload.llm_config = {
       ...(params.model?.trim() ? { model: params.model.trim() } : {}),
+      ...(params.visionModel?.trim() ? { vision_model: params.visionModel.trim() } : {}),
+      ...(params.ocrModel?.trim() ? { ocr_model: params.ocrModel.trim() } : {}),
       ...(params.apiKey?.trim() ? { api_key: params.apiKey.trim() } : {}),
       ...(params.baseUrl?.trim() ? { base_url: params.baseUrl.trim() } : {}),
       ...(params.providerType?.trim() ? { provider_type: params.providerType.trim() } : {}),
