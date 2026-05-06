@@ -237,14 +237,14 @@ export function getServerProviders(): Record<string, { models?: string[]; baseUr
   return result;
 }
 
-/** Resolve API key: server key > client key > empty string */
+/** Resolve API key: client key > server key > empty string */
 export function resolveApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().providers[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().providers[providerId]?.apiKey || '';
 }
 
-/** Resolve base URL: server > client > undefined */
+/** Resolve base URL: client > server > undefined */
 export function resolveBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return getConfig().providers[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().providers[providerId]?.baseUrl;
 }
 
 /** Resolve proxy URL for a provider (server config only) */

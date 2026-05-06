@@ -130,6 +130,13 @@ function maskApiKey(apiKey: string) {
   return `${apiKey.slice(0, 4)}********${apiKey.slice(-4)}`;
 }
 
+function inferProviderIdFromConnection(providerId: ProviderId, baseUrl: string): ProviderId {
+  if (providerId === 'openai' && /dashscope|aliyun|aliyuncs|qwen/i.test(baseUrl)) {
+    return 'qwen' as ProviderId;
+  }
+  return providerId;
+}
+
 const sectionIcons = {
   profile: UserCircle,
   ai: Sparkles,
@@ -162,8 +169,10 @@ export default function SettingsPage() {
   const setBio = useUserProfileStore((s) => s.setBio);
 
   const providerId = useSettingsStore((s) => s.providerId);
+  const modelId = useSettingsStore((s) => s.modelId);
   const providersConfig = useSettingsStore((s) => s.providersConfig);
   const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
+  const setModel = useSettingsStore((s) => s.setModel);
   const fetchServerProviders = useSettingsStore((s) => s.fetchServerProviders);
 
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
@@ -197,6 +206,7 @@ export default function SettingsPage() {
   );
 
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
+  const [modelIdDraft, setModelIdDraft] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [baseUrlDraft, setBaseUrlDraft] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -232,10 +242,12 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const selected = providersConfig[selectedProviderId];
+    const fallbackModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
     setApiKeyDraft(selected?.apiKey || '');
     setBaseUrlDraft(selected?.baseUrl || '');
+    setModelIdDraft(selectedProviderId === providerId && modelId ? modelId : fallbackModelId);
     setTestResult(null);
-  }, [selectedProviderId, providersConfig]);
+  }, [modelId, providerId, selectedProviderId, providersConfig]);
 
   useEffect(() => {
     let cancelled = false;
@@ -307,6 +319,7 @@ export default function SettingsPage() {
   );
 
   const selectedProvider = providersConfig[selectedProviderId];
+  const selectedModels = selectedProvider?.models || [];
 
   const handleSaveProfile = () => {
     setNickname(profileDraft.nickname.trim());
@@ -323,18 +336,50 @@ export default function SettingsPage() {
 
   const handleSaveAiPreference = () => {
     if (!selectedProvider) return;
-    setProviderConfig(selectedProviderId, {
+    const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
+    const targetProvider = providersConfig[inferredProviderId] || selectedProvider;
+    const targetModelIds = new Set([
+      ...(targetProvider.models?.map((model) => model.id) || []),
+      ...(targetProvider.serverModels || []),
+    ]);
+    const selectedModelId =
+      inferredProviderId === selectedProviderId
+        ? modelIdDraft.trim()
+        : modelIdDraft.trim() && targetModelIds.has(modelIdDraft.trim())
+          ? modelIdDraft.trim()
+          : '';
+    const targetModelId =
+      selectedModelId ||
+      targetProvider.models?.[0]?.id ||
+      targetProvider.serverModels?.[0] ||
+      '';
+
+    setProviderConfig(inferredProviderId, {
       apiKey: apiKeyDraft.trim(),
       baseUrl: baseUrlDraft.trim(),
     });
+    setSelectedProviderId(inferredProviderId);
+    setModel(inferredProviderId, targetModelId);
     setAiSaved(true);
     window.setTimeout(() => setAiSaved(false), 1500);
   };
 
   const handleVerifyProvider = async () => {
     if (!selectedProvider) return;
-    const modelId = selectedProvider.models?.[0]?.id;
-    if (!modelId) {
+    const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
+    const verifyProvider = providersConfig[inferredProviderId] || selectedProvider;
+    const verifyModelIds = new Set([
+      ...(verifyProvider.models?.map((model) => model.id) || []),
+      ...(verifyProvider.serverModels || []),
+    ]);
+    const verifyDraftModelId =
+      inferredProviderId === selectedProviderId
+        ? modelIdDraft.trim()
+        : modelIdDraft.trim() && verifyModelIds.has(modelIdDraft.trim())
+          ? modelIdDraft.trim()
+          : '';
+    const verifyModelId = verifyDraftModelId || verifyProvider.models?.[0]?.id;
+    if (!verifyModelId) {
       setTestResult({ ok: false, text: '当前提供商没有可测试模型。' });
       return;
     }
@@ -348,9 +393,9 @@ export default function SettingsPage() {
         body: JSON.stringify({
           apiKey: apiKeyDraft.trim(),
           baseUrl: baseUrlDraft.trim(),
-          model: `${selectedProviderId}:${modelId}`,
-          providerType: selectedProvider.type,
-          requiresApiKey: selectedProvider.requiresApiKey,
+          model: `${inferredProviderId}:${verifyModelId}`,
+          providerType: verifyProvider.type,
+          requiresApiKey: verifyProvider.requiresApiKey,
         }),
       });
       const payload = (await resp.json()) as {
@@ -361,7 +406,7 @@ export default function SettingsPage() {
       if (!resp.ok || !payload.success) {
         throw new Error(payload.error || '连接测试失败');
       }
-      setTestResult({ ok: true, text: `连接成功（测试模型：${modelId}）` });
+      setTestResult({ ok: true, text: `连接成功（测试模型：${verifyModelId}）` });
     } catch (error) {
       setTestResult({
         ok: false,
@@ -865,6 +910,28 @@ export default function SettingsPage() {
                             placeholder={selectedProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
                             className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
                           />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                            <Sparkles className="h-4 w-4 text-gray-400" />
+                            模型
+                          </label>
+                          <input
+                            type="text"
+                            list={`models-${selectedProviderId}`}
+                            value={modelIdDraft}
+                            onChange={(e) => setModelIdDraft(e.target.value)}
+                            placeholder={selectedModels[0]?.id || '请输入模型 ID'}
+                            className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                          />
+                          <datalist id={`models-${selectedProviderId}`}>
+                            {selectedModels.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.name || model.id}
+                              </option>
+                            ))}
+                          </datalist>
                         </div>
                       </div>
 
