@@ -30,6 +30,11 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const image = formData.get('image');
     const problemText = String(formData.get('problemText') || '').trim();
+    const model = String(formData.get('model') || '').trim();
+    const apiKey = String(formData.get('apiKey') || '').trim();
+    const baseUrl = String(formData.get('baseUrl') || '').trim();
+    const providerType = String(formData.get('providerType') || '').trim();
+    const requiresApiKeyValue = String(formData.get('requiresApiKey') || '').trim();
     const learnerSessionId = String(formData.get('learnerSessionId') || '').trim();
     const learnerLookbackRaw = Number(formData.get('learnerLookbackDays'));
     const learnerLookbackDays = Number.isFinite(learnerLookbackRaw)
@@ -102,6 +107,11 @@ export async function POST(request: NextRequest) {
       payload: {
         imageObjectKey: upload.object_key,
         ...(problemText ? { problemText } : {}),
+        ...(model ? { model } : {}),
+        ...(apiKey ? { apiKey } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(providerType ? { providerType } : {}),
+        ...(requiresApiKeyValue ? { requiresApiKey: requiresApiKeyValue === 'true' } : {}),
         ...(userId ? { userId } : {}),
         ...(learnerSessionId ? { learnerSessionId } : {}),
         ...(typeof learnerLookbackDays === 'number' ? { learnerLookbackDays } : {}),

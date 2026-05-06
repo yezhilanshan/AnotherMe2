@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
+import { getCurrentModelConfig } from '@/lib/utils/model-config';
 
 interface ProblemVideoJobCreateResponse {
   success: boolean;
@@ -836,6 +837,20 @@ export default function PhotoToVideoPage() {
         formData.append('problemText', problemText.trim());
       }
       formData.append('autoAddAuxiliaryLines', autoAddAuxiliaryLines ? 'true' : 'false');
+      const modelConfig = getCurrentModelConfig();
+      if (modelConfig.modelString) {
+        formData.append('model', modelConfig.modelString);
+      }
+      if (modelConfig.apiKey) {
+        formData.append('apiKey', modelConfig.apiKey);
+      }
+      if (modelConfig.baseUrl) {
+        formData.append('baseUrl', modelConfig.baseUrl);
+      }
+      if (modelConfig.providerType) {
+        formData.append('providerType', modelConfig.providerType);
+      }
+      formData.append('requiresApiKey', modelConfig.requiresApiKey ? 'true' : 'false');
 
       const createResp = await fetch('/api/problem-video', {
         method: 'POST',

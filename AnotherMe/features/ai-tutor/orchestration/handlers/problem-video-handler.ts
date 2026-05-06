@@ -12,6 +12,11 @@ import type { LearningContext } from '@/lib/types/learning-context';
 export interface ProblemVideoCapabilityPayload {
   imageObjectKey: string;
   problemText?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  providerType?: string;
+  requiresApiKey?: boolean;
   userId?: string;
   learnerSessionId?: string;
   learnerLookbackDays?: number;
@@ -42,6 +47,11 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
     return {
       imageObjectKey: p.imageObjectKey,
       problemText: typeof p.problemText === 'string' ? p.problemText : undefined,
+      model: typeof p.model === 'string' ? p.model : undefined,
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : undefined,
+      baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : undefined,
+      providerType: typeof p.providerType === 'string' ? p.providerType : undefined,
+      requiresApiKey: typeof p.requiresApiKey === 'boolean' ? p.requiresApiKey : undefined,
       userId: typeof p.userId === 'string' ? p.userId : undefined,
       learnerSessionId: typeof p.learnerSessionId === 'string' ? p.learnerSessionId : undefined,
       learnerLookbackDays: typeof p.learnerLookbackDays === 'number' ? p.learnerLookbackDays : undefined,
@@ -51,7 +61,19 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
 
   async *execute(request: CapabilityRequest<ProblemVideoCapabilityPayload>): AsyncGenerator<CapabilityStageResult, CapabilityResult, unknown> {
     const startTime = Date.now();
-    const { imageObjectKey, problemText, userId, learnerSessionId, learnerLookbackDays, learningContext } = request.payload;
+    const {
+      imageObjectKey,
+      problemText,
+      model,
+      apiKey,
+      baseUrl,
+      providerType,
+      requiresApiKey,
+      userId,
+      learnerSessionId,
+      learnerLookbackDays,
+      learningContext,
+    } = request.payload;
 
     // Stage: pre_process
     const preStart = Date.now();
@@ -84,6 +106,11 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       jobResult = await createAnotherMe2ProblemVideoJob({
         imageObjectKey,
         ...(problemText ? { problemText } : {}),
+        ...(model ? { model } : {}),
+        ...(apiKey ? { apiKey } : {}),
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(providerType ? { providerType } : {}),
+        ...(typeof requiresApiKey === 'boolean' ? { requiresApiKey } : {}),
         ...(userId ? { userId } : {}),
         ...(learnerSessionId ? { learnerSessionId } : {}),
         ...(typeof learnerLookbackDays === 'number' ? { learnerLookbackDays } : {}),

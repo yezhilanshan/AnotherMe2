@@ -17,7 +17,7 @@ import { formatTeacherPersonaForPrompt } from '@/lib/generation/prompt-formatter
 import { getRequiredClassroomAgentInfos } from '@/lib/orchestration/registry/classroom-presets';
 import { createLogger } from '@/lib/logger';
 import { parseModelString } from '@/lib/ai/providers';
-import { resolveApiKey, resolveWebSearchApiKey } from '@/lib/server/provider-config';
+import { resolveWebSearchApiKey } from '@/lib/server/provider-config';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { buildSearchQuery } from '@/lib/server/search-query-builder';
 import { searchWithTavily, formatSearchResultsAsContext } from '@/lib/web-search/tavily';
@@ -60,6 +60,14 @@ export interface GenerateClassroomInput {
   agentMode?: 'default' | 'generate';
   pedagogy_profile?: PedagogyProfileInput;
   learningContext?: LearningContext;
+  modelConfig?: {
+    modelString?: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    providerType?: string;
+    requiresApiKey?: boolean;
+  };
 }
 
 export type ClassroomGenerationStep =
@@ -180,16 +188,21 @@ export async function generateClassroom(
     scenesGenerated: 0,
   });
 
-  const { model: languageModel, modelInfo, modelString } = resolveModel({});
-  log.info(`Using server-configured model: ${modelString}`);
+  const { model: languageModel, modelInfo, modelString, apiKey } = resolveModel({
+    modelString: input.modelConfig?.modelString || input.modelConfig?.model,
+    apiKey: input.modelConfig?.apiKey,
+    baseUrl: input.modelConfig?.baseUrl,
+    providerType: input.modelConfig?.providerType,
+    requiresApiKey: input.modelConfig?.requiresApiKey,
+  });
+  log.info(`Using classroom generation model: ${modelString}`);
 
   // Fail fast if the resolved provider has no API key configured
   const { providerId } = parseModelString(modelString);
-  const apiKey = resolveApiKey(providerId);
   if (!apiKey) {
     throw new Error(
       `No API key configured for provider "${providerId}". ` +
-        `Set the appropriate key in .env.local or server-providers.yml (e.g. ${providerId.toUpperCase()}_API_KEY).`,
+        `Set the key in Settings, .env.local, or server-providers.yml (e.g. ${providerId.toUpperCase()}_API_KEY).`,
     );
   }
 

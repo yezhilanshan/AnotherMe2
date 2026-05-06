@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Upload, Sparkles, Settings2, ArrowRight, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useSettingsStore } from '@/lib/store/settings';
+import { getCurrentModelConfig } from '@/lib/utils/model-config';
 
 interface ParsePdfSuccess {
   success: true;
@@ -163,6 +164,7 @@ export default function CreateClassPage() {
           enableVideoGeneration: true,
           enableTTS: true,
           agentMode: 'generate',
+          modelConfig: getCurrentModelConfig(),
         }),
       });
 

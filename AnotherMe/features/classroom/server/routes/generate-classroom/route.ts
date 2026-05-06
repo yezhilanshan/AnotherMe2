@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       ...(rawBody.enableTTS != null ? { enableTTS: rawBody.enableTTS } : {}),
       ...(rawBody.agentMode ? { agentMode: rawBody.agentMode } : {}),
       ...(rawBody.pedagogy_profile ? { pedagogy_profile: rawBody.pedagogy_profile } : {}),
+      ...(rawBody.modelConfig ? { modelConfig: rawBody.modelConfig } : {}),
     };
     const { requirement } = body;
 

@@ -267,11 +267,11 @@ export function getServerTTSProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolveTTSApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().tts[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().tts[providerId]?.apiKey || '';
 }
 
 export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return getConfig().tts[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().tts[providerId]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,11 +289,11 @@ export function getServerASRProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolveASRApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().asr[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().asr[providerId]?.apiKey || '';
 }
 
 export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return getConfig().asr[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().asr[providerId]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,11 +311,11 @@ export function getServerPDFProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolvePDFApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().pdf[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().pdf[providerId]?.apiKey || '';
 }
 
 export function resolvePDFBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return getConfig().pdf[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().pdf[providerId]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,14 +332,14 @@ export function getServerImageProviders(): Record<string, Record<string, never>>
 }
 
 export function resolveImageApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().image[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().image[providerId]?.apiKey || '';
 }
 
 export function resolveImageBaseUrl(
   providerId: string,
   clientBaseUrl?: string,
 ): string | undefined {
-  return getConfig().image[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().image[providerId]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,14 +356,14 @@ export function getServerVideoProviders(): Record<string, Record<string, never>>
 }
 
 export function resolveVideoApiKey(providerId: string, clientKey?: string): string {
-  return getConfig().video[providerId]?.apiKey || clientKey || '';
+  return clientKey || getConfig().video[providerId]?.apiKey || '';
 }
 
 export function resolveVideoBaseUrl(
   providerId: string,
   clientBaseUrl?: string,
 ): string | undefined {
-  return getConfig().video[providerId]?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().video[providerId]?.baseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,14 +381,13 @@ export function getServerWebSearchProviders(): Record<string, { baseUrl?: string
   return result;
 }
 
-/** Resolve Tavily API key: server key > client key > TAVILY_API_KEY env > empty */
+/** Resolve Tavily API key: client key > server key > TAVILY_API_KEY env > empty */
 export function resolveWebSearchApiKey(clientKey?: string): string {
   const serverKey = getConfig().webSearch.tavily?.apiKey;
-  if (serverKey) return serverKey;
-  return clientKey || process.env.TAVILY_API_KEY || '';
+  return clientKey || serverKey || process.env.TAVILY_API_KEY || '';
 }
 
-/** Resolve Tavily base URL: server > client > undefined */
+/** Resolve Tavily base URL: client > server > undefined */
 export function resolveWebSearchBaseUrl(clientBaseUrl?: string): string | undefined {
-  return getConfig().webSearch.tavily?.baseUrl || clientBaseUrl;
+  return clientBaseUrl || getConfig().webSearch.tavily?.baseUrl;
 }

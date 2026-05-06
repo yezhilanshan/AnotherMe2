@@ -303,6 +303,11 @@ export async function uploadProblemImageToAnotherMe2(file: File): Promise<Anothe
 export async function createAnotherMe2ProblemVideoJob(params: {
   imageObjectKey: string;
   problemText?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  providerType?: string;
+  requiresApiKey?: boolean;
   outputProfile?: '1080p';
   userId?: string;
   learnerSessionId?: string;
@@ -315,6 +320,18 @@ export async function createAnotherMe2ProblemVideoJob(params: {
   };
   if (params.problemText?.trim()) {
     payload.problem_text = params.problemText.trim();
+  }
+  if (params.model?.trim()) {
+    payload.model_name = params.model.trim();
+  }
+  if (params.apiKey?.trim() || params.baseUrl?.trim() || params.providerType?.trim()) {
+    payload.llm_config = {
+      ...(params.model?.trim() ? { model: params.model.trim() } : {}),
+      ...(params.apiKey?.trim() ? { api_key: params.apiKey.trim() } : {}),
+      ...(params.baseUrl?.trim() ? { base_url: params.baseUrl.trim() } : {}),
+      ...(params.providerType?.trim() ? { provider_type: params.providerType.trim() } : {}),
+      ...(typeof params.requiresApiKey === 'boolean' ? { requires_api_key: params.requiresApiKey } : {}),
+    };
   }
   if (params.userId?.trim()) {
     payload.learner_user_id = params.userId.trim();

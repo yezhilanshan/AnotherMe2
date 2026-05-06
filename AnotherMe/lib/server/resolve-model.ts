@@ -7,7 +7,13 @@
 
 import type { NextRequest } from 'next/server';
 import { getModel, parseModelString, PROVIDERS, type ModelWithInfo } from '@/lib/ai/providers';
-import { resolveApiKey, resolveBaseUrl, resolveProxy } from '@/lib/server/provider-config';
+import type { ProviderId } from '@/lib/types/provider';
+import {
+  getServerProviders,
+  resolveApiKey,
+  resolveBaseUrl,
+  resolveProxy,
+} from '@/lib/server/provider-config';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 export interface ResolvedModel extends ModelWithInfo {
@@ -15,6 +21,18 @@ export interface ResolvedModel extends ModelWithInfo {
   modelString: string;
   /** Effective API key after server-side fallback resolution */
   apiKey: string;
+}
+
+function getServerDefaultModelString(): string | undefined {
+  const serverProviders = getServerProviders();
+  for (const [providerId, config] of Object.entries(serverProviders)) {
+    const typedProviderId = providerId as ProviderId;
+    const modelId = config.models?.[0] || PROVIDERS[typedProviderId]?.models?.[0]?.id;
+    if (modelId) {
+      return `${providerId}:${modelId}`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -29,7 +47,8 @@ export function resolveModel(params: {
   providerType?: string;
   requiresApiKey?: boolean;
 }): ResolvedModel {
-  const requestedModelString = params.modelString || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
+  const requestedModelString =
+    params.modelString || process.env.DEFAULT_MODEL || getServerDefaultModelString() || 'gpt-4o-mini';
   const parsed = parseModelString(requestedModelString);
   const defaultModel = process.env.DEFAULT_MODEL
     ? parseModelString(process.env.DEFAULT_MODEL)
