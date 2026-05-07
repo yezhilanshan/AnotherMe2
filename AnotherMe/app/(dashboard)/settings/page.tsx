@@ -245,7 +245,11 @@ export default function SettingsPage() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testResults, setTestResults] = useState<{
+    text: { ok: boolean; text: string } | null;
+    vision: { ok: boolean; text: string } | null;
+    ocr: { ok: boolean; text: string } | null;
+  }>({ text: null, vision: null, ocr: null });
 
   // Collapsible sections state
   const [showVisionOcrSettings, setShowVisionOcrSettings] = useState(false);
@@ -473,56 +477,143 @@ export default function SettingsPage() {
   };
 
   const handleVerifyProvider = async () => {
-    if (!selectedProvider) return;
-    const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
-    const verifyProvider = providersConfig[inferredProviderId] || selectedProvider;
-    const verifyModelIds = new Set([
-      ...(verifyProvider.models?.map((model) => model.id) || []),
-      ...(verifyProvider.serverModels || []),
-    ]);
-    const verifyDraftModelId =
-      inferredProviderId === selectedProviderId
-        ? modelIdDraft.trim()
-        : modelIdDraft.trim() && verifyModelIds.has(modelIdDraft.trim())
-          ? modelIdDraft.trim()
-          : '';
-    const verifyModelId = verifyDraftModelId || verifyProvider.models?.[0]?.id;
-    if (!verifyModelId) {
-      setTestResult({ ok: false, text: '当前提供商没有可测试模型。' });
-      return;
-    }
-
     setTesting(true);
-    setTestResult(null);
-    try {
-      const resp = await fetch('/api/verify-model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: apiKeyDraft.trim(),
-          baseUrl: baseUrlDraft.trim(),
-          model: `${inferredProviderId}:${verifyModelId}`,
-          providerType: verifyProvider.type,
-          requiresApiKey: verifyProvider.requiresApiKey,
-        }),
-      });
-      const payload = (await resp.json()) as {
-        success: boolean;
-        error?: string;
-      };
+    setTestResults({ text: null, vision: null, ocr: null });
 
-      if (!resp.ok || !payload.success) {
-        throw new Error(payload.error || '连接测试失败');
+    // Test text model
+    const testTextModel = async (): Promise<{ ok: boolean; text: string }> => {
+      if (!selectedProvider) {
+        return { ok: false, text: '未选择文本模型提供商' };
       }
-      setTestResult({ ok: true, text: `连接成功（测试模型：${verifyModelId}）` });
-    } catch (error) {
-      setTestResult({
-        ok: false,
-        text: error instanceof Error ? error.message : '连接测试失败',
-      });
-    } finally {
-      setTesting(false);
-    }
+      const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
+      const verifyProvider = providersConfig[inferredProviderId] || selectedProvider;
+      const verifyModelIds = new Set([
+        ...(verifyProvider.models?.map((model) => model.id) || []),
+        ...(verifyProvider.serverModels || []),
+      ]);
+      const verifyDraftModelId =
+        inferredProviderId === selectedProviderId
+          ? modelIdDraft.trim()
+          : modelIdDraft.trim() && verifyModelIds.has(modelIdDraft.trim())
+            ? modelIdDraft.trim()
+            : '';
+      const verifyModelId = verifyDraftModelId || verifyProvider.models?.[0]?.id;
+      if (!verifyModelId) {
+        return { ok: false, text: '没有可测试的文本模型' };
+      }
+
+      try {
+        const resp = await fetch('/api/verify-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: apiKeyDraft.trim(),
+            baseUrl: baseUrlDraft.trim(),
+            model: `${inferredProviderId}:${verifyModelId}`,
+            providerType: verifyProvider.type,
+            requiresApiKey: verifyProvider.requiresApiKey,
+          }),
+        });
+        const payload = (await resp.json()) as { success: boolean; error?: string };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || '连接测试失败');
+        }
+        return { ok: true, text: `连接成功（${verifyModelId}）` };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Test vision model
+    const testVisionModel = async (): Promise<{ ok: boolean; text: string }> => {
+      const inferredVisionProviderId = inferProviderIdFromConnection(selectedVisionProviderId, visionBaseUrlDraft);
+      const visionProvider = providersConfig[inferredVisionProviderId] || providersConfig[selectedVisionProviderId];
+      if (!visionProvider) {
+        return { ok: false, text: '未选择视觉模型提供商' };
+      }
+      const visionModelIds = new Set([
+        ...(visionProvider.models?.map((model) => model.id) || []),
+        ...(visionProvider.serverModels || []),
+      ]);
+      const visionDraftModelId =
+        inferredVisionProviderId === selectedVisionProviderId
+          ? visionModelIdDraft.trim()
+          : visionModelIdDraft.trim() && visionModelIds.has(visionModelIdDraft.trim())
+            ? visionModelIdDraft.trim()
+            : '';
+      const visionModel = visionDraftModelId || visionProvider.models?.[0]?.id;
+      if (!visionModel) {
+        return { ok: false, text: '没有可测试的视觉模型' };
+      }
+
+      try {
+        const resp = await fetch('/api/verify-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: visionApiKeyDraft.trim() || apiKeyDraft.trim(),
+            baseUrl: visionBaseUrlDraft.trim() || baseUrlDraft.trim(),
+            model: `${inferredVisionProviderId}:${visionModel}`,
+            providerType: visionProvider.type,
+            requiresApiKey: visionProvider.requiresApiKey,
+          }),
+        });
+        const payload = (await resp.json()) as { success: boolean; error?: string };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || '连接测试失败');
+        }
+        return { ok: true, text: `连接成功（${visionModel}）` };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Test OCR model
+    const testOcrModel = async (): Promise<{ ok: boolean; text: string }> => {
+      const inferredOcrProviderId = inferProviderIdFromConnection(selectedOcrProviderId, ocrBaseUrlDraft);
+      const ocrProvider = providersConfig[inferredOcrProviderId] || providersConfig[selectedOcrProviderId];
+      if (!ocrProvider) {
+        return { ok: false, text: '未选择 OCR 模型提供商' };
+      }
+
+      // Use specialized OCR verification API for MinerU and other OCR providers
+      try {
+        const resp = await fetch('/api/verify-ocr-provider', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            providerId: inferredOcrProviderId,
+            apiKey: ocrApiKeyDraft.trim() || apiKeyDraft.trim(),
+            baseUrl: ocrBaseUrlDraft.trim() || baseUrlDraft.trim(),
+            model: ocrModelIdDraft.trim() || ocrProvider.models?.[0]?.id,
+          }),
+        });
+        const payload = (await resp.json()) as { success?: boolean; error?: string; message?: string };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || payload.message || '连接测试失败');
+        }
+        return { ok: true, text: payload.message || '连接成功' };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Run all tests
+    const [textResult, visionResult, ocrResult] = await Promise.all([
+      testTextModel(),
+      testVisionModel(),
+      testOcrModel(),
+    ]);
+
+    setTestResults({
+      text: textResult,
+      vision: visionResult,
+      ocr: ocrResult,
+    });
+    setTesting(false);
   };
 
   const handleSaveNotifications = () => {
@@ -1190,20 +1281,61 @@ export default function SettingsPage() {
                         </motion.button>
                       </div>
 
-                      {testResult && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className={cn(
-                            'mt-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
-                            testResult.ok
-                              ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
-                              : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                      {/* Test Results */}
+                      {(testResults.text || testResults.vision || testResults.ocr) && (
+                        <div className="mt-3 space-y-2">
+                          {/* Text Model Result */}
+                          {testResults.text && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className={cn(
+                                'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                                testResults.text.ok
+                                  ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                  : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                              )}
+                            >
+                              {testResults.text.ok ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />}
+                              <span className="font-medium">文本模型:</span>
+                              {testResults.text.text}
+                            </motion.div>
                           )}
-                        >
-                          {testResult.ok ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />}
-                          {testResult.text}
-                        </motion.div>
+                          {/* Vision Model Result */}
+                          {testResults.vision && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className={cn(
+                                'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                                testResults.vision.ok
+                                  ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                  : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                              )}
+                            >
+                              {testResults.vision.ok ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />}
+                              <span className="font-medium">视觉模型:</span>
+                              {testResults.vision.text}
+                            </motion.div>
+                          )}
+                          {/* OCR Model Result */}
+                          {testResults.ocr && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className={cn(
+                                'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                                testResults.ocr.ok
+                                  ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                  : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+                              )}
+                            >
+                              {testResults.ocr.ok ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />}
+                              <span className="font-medium">OCR 模型:</span>
+                              {testResults.ocr.text}
+                            </motion.div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>

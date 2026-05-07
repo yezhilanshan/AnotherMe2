@@ -958,6 +958,23 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
       },
     ],
   },
+  mineru: {
+    id: 'mineru',
+    name: 'MinerU',
+    type: 'openai',
+    defaultBaseUrl: 'http://localhost:8080',
+    requiresApiKey: false,
+    icon: '/logos/mineru.svg',
+    models: [
+      {
+        id: 'mineru-ocr',
+        name: 'MinerU OCR',
+        contextWindow: 0,
+        outputWindow: 0,
+        capabilities: { streaming: false, tools: false, vision: true },
+      },
+    ],
+  },
 };
 
 /**
