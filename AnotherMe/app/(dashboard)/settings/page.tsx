@@ -1047,13 +1047,14 @@ export default function SettingsPage() {
                                 transition={{ duration: 0.2 }}
                                 className="overflow-hidden"
                               >
-                                <div className="p-3 space-y-3">
+                                <div className="p-3 space-y-4">
                                   {/* Vision Settings */}
-                                  <div className="space-y-2">
+                                  <div className="space-y-2 border-b border-border pb-3">
                                     <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                                       <Eye className="h-3 w-3 text-violet-500" />
-                                      视觉识别
+                                      视觉识别配置
                                     </h4>
+                                    {/* Vision Provider & Model */}
                                     <div className="grid grid-cols-2 gap-2">
                                       <select
                                         value={selectedVisionProviderId}
@@ -1075,13 +1076,40 @@ export default function SettingsPage() {
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       />
                                     </div>
+                                    {/* Vision API Key & Base URL */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                      <div className="relative">
+                                        <input
+                                          type={showApiKey ? 'text' : 'password'}
+                                          value={visionApiKeyDraft}
+                                          onChange={(e) => setVisionApiKeyDraft(e.target.value)}
+                                          placeholder="视觉 API Key（可选）"
+                                          className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setShowApiKey((v) => !v)}
+                                          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                                        >
+                                          {showApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                        </button>
+                                      </div>
+                                      <input
+                                        type="url"
+                                        value={visionBaseUrlDraft}
+                                        onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
+                                        placeholder="视觉 Base URL（可选）"
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      />
+                                    </div>
                                   </div>
                                   {/* OCR Settings */}
                                   <div className="space-y-2">
                                     <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                                       <FileText className="h-3 w-3 text-violet-500" />
-                                      OCR 识别
+                                      OCR 识别配置
                                     </h4>
+                                    {/* OCR Provider & Model */}
                                     <div className="grid grid-cols-2 gap-2">
                                       <select
                                         value={selectedOcrProviderId}
@@ -1100,6 +1128,32 @@ export default function SettingsPage() {
                                         value={ocrModelIdDraft}
                                         onChange={(e) => setOcrModelIdDraft(e.target.value)}
                                         placeholder="OCR 模型"
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      />
+                                    </div>
+                                    {/* OCR API Key & Base URL */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                      <div className="relative">
+                                        <input
+                                          type={showApiKey ? 'text' : 'password'}
+                                          value={ocrApiKeyDraft}
+                                          onChange={(e) => setOcrApiKeyDraft(e.target.value)}
+                                          placeholder="OCR API Key（可选）"
+                                          className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setShowApiKey((v) => !v)}
+                                          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                                        >
+                                          {showApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                        </button>
+                                      </div>
+                                      <input
+                                        type="url"
+                                        value={ocrBaseUrlDraft}
+                                        onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
+                                        placeholder="OCR Base URL（可选）"
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       />
                                     </div>
