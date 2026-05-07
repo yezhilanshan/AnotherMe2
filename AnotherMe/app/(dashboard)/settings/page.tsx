@@ -247,6 +247,9 @@ export default function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // Collapsible sections state
+  const [showVisionOcrSettings, setShowVisionOcrSettings] = useState(false);
+
   useEffect(() => {
     const profileExtra = loadWithLegacyKey<ProfileExtras>(
       PROFILE_EXTRA_STORAGE_KEY,
@@ -850,46 +853,46 @@ export default function SettingsPage() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.3 }}
-                className="space-y-6"
+                className="space-y-4"
               >
                 {/* Header */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-gradient-to-br from-violet-100 to-purple-100 dark:from-violet-900/30 dark:to-purple-900/30 rounded-xl">
-                      <Sparkles className="h-6 w-6 text-violet-600" />
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-gradient-to-br from-violet-100 to-purple-100 dark:from-violet-900/30 dark:to-purple-900/30 rounded-xl">
+                      <Sparkles className="h-5 w-5 text-violet-600" />
                     </div>
                     <div>
-                      <h2 className="text-xl font-bold text-foreground">AI 偏好</h2>
-                      <p className="text-sm text-muted-foreground">配置模型提供商和 API 连接</p>
+                      <h2 className="text-lg font-bold text-foreground">AI 偏好</h2>
+                      <p className="text-xs text-muted-foreground">配置模型提供商和 API 连接</p>
                     </div>
                   </div>
                   {/* Backend Status Badge */}
                   <motion.div
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="hidden sm:flex items-center gap-2 px-4 py-2 bg-card rounded-full shadow-sm border border-border"
+                    className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-card rounded-full shadow-sm border border-border"
                   >
                     <span className={cn(
                       'h-2 w-2 rounded-full',
                       health?.status === 'ok' ? 'bg-green-500 animate-pulse' : 'bg-amber-500'
                     )} />
-                    <span className="text-sm font-medium text-foreground">
+                    <span className="text-xs font-medium text-foreground">
                       后端 {health?.status === 'ok' ? '正常' : '异常'}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-[10px] text-muted-foreground">
                       v{health?.version || 'unknown'}
                     </span>
                   </motion.div>
                 </div>
 
                 {/* Main Content Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Left Column - Provider Selection */}
-                  <div className="lg:col-span-2 space-y-4">
-                    {/* Provider List */}
-                    <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-6 border border-border">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-semibold text-foreground flex items-center gap-2">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                  {/* Left Column - Provider Selection & Settings */}
+                  <div className="lg:col-span-8 space-y-3">
+                    {/* Compact Provider Selector */}
+                    <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
                           <Settings className="h-4 w-4 text-violet-500" />
                           选择模型提供商
                         </h3>
@@ -897,66 +900,46 @@ export default function SettingsPage() {
                           {providerIds.length} 个可用
                         </span>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Horizontal scrollable provider tabs */}
+                      <div className="flex flex-wrap gap-2">
                         {providerIds.map((id, index) => {
                           const item = providersConfig[id];
                           const active = selectedProviderId === id;
                           return (
                             <motion.button
                               key={id}
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ delay: 0.1 + index * 0.05 }}
-                              whileHover={{ scale: 1.02, y: -2 }}
-                              whileTap={{ scale: 0.98 }}
+                              initial={{ opacity: 0, scale: 0.9 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ delay: index * 0.03 }}
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
                               type="button"
                               onClick={() => setSelectedProviderId(id)}
                               className={cn(
-                                'text-left p-4 rounded-xl border-2 transition-all duration-300 relative overflow-hidden',
+                                'flex items-center gap-2 px-3 py-2 rounded-lg border transition-all duration-200',
                                 active
-                                  ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-lg shadow-violet-500/10'
-                                  : 'border-border bg-card hover:border-primary/30 hover:shadow-md'
+                                  ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
+                                  : 'border-border bg-card hover:border-primary/30 hover:shadow-sm'
                               )}
                             >
-                              {/* Active Indicator Line */}
+                              <div className={cn(
+                                'w-2 h-2 rounded-full',
+                                active ? 'bg-violet-500' : item?.isServerConfigured ? 'bg-green-400' : 'bg-gray-300'
+                              )} />
+                              <span className={cn(
+                                'text-sm font-medium',
+                                active ? 'text-violet-700 dark:text-violet-300' : 'text-foreground'
+                              )}>
+                                {item?.name || id}
+                              </span>
                               {active && (
                                 <motion.div
-                                  layoutId="activeProvider"
-                                  className="absolute left-0 top-0 bottom-0 w-1 bg-violet-500"
-                                />
-                              )}
-                              <div className="flex items-start justify-between">
-                                <div className="flex-1 min-w-0">
-                                  <div className={cn(
-                                    'font-semibold truncate',
-                                    active ? 'text-primary' : 'text-foreground'
-                                  )}>
-                                    {item?.name || id}
-                                  </div>
-                                  <div className="text-xs mt-1 text-muted-foreground">
-                                    API：{maskApiKey(item?.apiKey || '')}
-                                  </div>
-                                </div>
-                                {active && (
-                                  <motion.div
-                                    initial={{ scale: 0 }}
-                                    animate={{ scale: 1 }}
-                                    className="p-1.5 bg-violet-500 rounded-full text-white"
-                                  >
-                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                  </motion.div>
-                                )}
-                              </div>
-                              {item?.isServerConfigured && (
-                                <div className={cn(
-                                  'inline-flex items-center gap-1.5 mt-3 px-2 py-0.5 rounded-full text-xs font-medium',
-                                  active 
-                                    ? 'bg-violet-200 dark:bg-violet-800 text-primary' 
-                                    : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                                )}>
-                                  <Shield className="h-3 w-3" />
-                                  服务端已配置
-                                </div>
+                                  initial={{ scale: 0 }}
+                                  animate={{ scale: 1 }}
+                                  className="ml-1"
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5 text-violet-500" />
+                                </motion.div>
                               )}
                             </motion.button>
                           );
@@ -964,62 +947,62 @@ export default function SettingsPage() {
                       </div>
                     </div>
 
-                    {/* Connection Settings */}
-                    <div className="bg-card rounded-xl p-6 border border-border shadow-sm">
-                      <div className="flex items-center gap-3 mb-5">
-                        <div className="p-2 bg-violet-100 dark:bg-violet-900/30 rounded-xl">
-                          <Server className="h-5 w-5 text-violet-600" />
+                    {/* Connection Settings with Tabs */}
+                    <div className="bg-card rounded-xl p-4 border border-border shadow-sm">
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className="p-1.5 bg-violet-100 dark:bg-violet-900/30 rounded-lg">
+                          <Server className="h-4 w-4 text-violet-600" />
                         </div>
-                        <div>
-                          <h3 className="font-semibold text-foreground">
-                            {selectedProvider?.name || selectedProviderId} 连接设置
-                          </h3>
-                        </div>
+                        <h3 className="font-semibold text-foreground text-sm">
+                          {selectedProvider?.name || selectedProviderId} 连接设置
+                        </h3>
                       </div>
 
-                      <div className="space-y-4">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                            <Shield className="h-4 w-4 text-gray-400" />
-                            API Key
-                          </label>
-                          <div className="relative">
+                      {/* Compact Form Layout */}
+                      <div className="space-y-3">
+                        {/* API Key & Base URL in one row on larger screens */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                              <Shield className="h-3 w-3 text-gray-400" />
+                              API Key
+                            </label>
+                            <div className="relative">
+                              <input
+                                type={showApiKey ? 'text' : 'password'}
+                                value={apiKeyDraft}
+                                onChange={(e) => setApiKeyDraft(e.target.value)}
+                                placeholder="请输入 API Key"
+                                className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowApiKey((v) => !v)}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                              >
+                                {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                              <Globe className="h-3 w-3 text-gray-400" />
+                              Base URL
+                            </label>
                             <input
-                              type={showApiKey ? 'text' : 'password'}
-                              value={apiKeyDraft}
-                              onChange={(e) => setApiKeyDraft(e.target.value)}
-                              placeholder="请输入你的 API Key"
-                              className="w-full px-4 py-3 pr-12 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              type="url"
+                              value={baseUrlDraft}
+                              onChange={(e) => setBaseUrlDraft(e.target.value)}
+                              placeholder={selectedProvider?.defaultBaseUrl || '可选'}
+                              className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
                             />
-                            <motion.button
-                              whileHover={{ scale: 1.1 }}
-                              whileTap={{ scale: 0.9 }}
-                              type="button"
-                              onClick={() => setShowApiKey((v) => !v)}
-                              className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                            </motion.button>
                           </div>
                         </div>
 
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                            <Globe className="h-4 w-4 text-gray-400" />
-                            Base URL（可选）
-                          </label>
-                          <input
-                            type="url"
-                            value={baseUrlDraft}
-                            onChange={(e) => setBaseUrlDraft(e.target.value)}
-                            placeholder={selectedProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
-                            className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                            <Sparkles className="h-4 w-4 text-gray-400" />
+                        {/* Model Selection */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                            <Sparkles className="h-3 w-3 text-gray-400" />
                             文本模型
                           </label>
                           <input
@@ -1028,7 +1011,7 @@ export default function SettingsPage() {
                             value={modelIdDraft}
                             onChange={(e) => setModelIdDraft(e.target.value)}
                             placeholder={selectedModels[0]?.id || '请输入模型 ID'}
-                            className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                            className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
                           />
                           <datalist id={`models-${selectedProviderId}`}>
                             {selectedModels.map((model) => (
@@ -1039,140 +1022,105 @@ export default function SettingsPage() {
                           </datalist>
                         </div>
 
-                        <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-4">
-                          <div className="flex items-center gap-2">
-                            <Eye className="h-4 w-4 text-violet-500" />
-                            <h4 className="text-sm font-semibold text-foreground">视觉识别配置</h4>
-                          </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">提供商</label>
-                              <select
-                                value={selectedVisionProviderId}
-                                onChange={(e) => setSelectedVisionProviderId(e.target.value as ProviderId)}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                        {/* Collapsible Advanced Settings */}
+                        <div className="border border-border rounded-lg overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => setShowVisionOcrSettings(!showVisionOcrSettings)}
+                            className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/50 hover:bg-muted transition-colors"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Eye className="h-3.5 w-3.5 text-violet-500" />
+                              <span className="text-xs font-medium text-foreground">视觉识别 & OCR 配置</span>
+                            </div>
+                            <ChevronRight className={cn(
+                              'h-4 w-4 text-muted-foreground transition-transform duration-200',
+                              showVisionOcrSettings ? 'rotate-90' : ''
+                            )} />
+                          </button>
+                          <AnimatePresence>
+                            {showVisionOcrSettings && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="overflow-hidden"
                               >
-                                {providerIds.map((id) => (
-                                  <option key={id} value={id}>
-                                    {providersConfig[id]?.name || id}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">视觉模型</label>
-                              <input
-                                type="text"
-                                list={`models-vision-${selectedVisionProviderId}`}
-                                value={visionModelIdDraft}
-                                onChange={(e) => setVisionModelIdDraft(e.target.value)}
-                                placeholder={selectedVisionModels.find((model) => model.capabilities?.vision)?.id || 'qwen3-vl-plus'}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                              <datalist id={`models-vision-${selectedVisionProviderId}`}>
-                                {selectedVisionModels.map((model) => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.name || model.id}
-                                  </option>
-                                ))}
-                              </datalist>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">视觉 API Key</label>
-                              <input
-                                type={showApiKey ? 'text' : 'password'}
-                                value={visionApiKeyDraft}
-                                onChange={(e) => setVisionApiKeyDraft(e.target.value)}
-                                placeholder="未填写时使用该提供商已有配置"
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">视觉 Base URL</label>
-                              <input
-                                type="url"
-                                value={visionBaseUrlDraft}
-                                onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
-                                placeholder={selectedVisionProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground">用于拍题图片理解和几何信息识别。</p>
-                        </div>
-
-                        <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-4">
-                          <div className="flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-violet-500" />
-                            <h4 className="text-sm font-semibold text-foreground">OCR 配置</h4>
-                          </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">提供商</label>
-                              <select
-                                value={selectedOcrProviderId}
-                                onChange={(e) => setSelectedOcrProviderId(e.target.value as ProviderId)}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              >
-                                {providerIds.map((id) => (
-                                  <option key={id} value={id}>
-                                    {providersConfig[id]?.name || id}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">OCR 模型</label>
-                              <input
-                                type="text"
-                                list={`models-ocr-${selectedOcrProviderId}`}
-                                value={ocrModelIdDraft}
-                                onChange={(e) => setOcrModelIdDraft(e.target.value)}
-                                placeholder={isQwenConnection(selectedOcrProviderId, ocrBaseUrlDraft) ? 'qwen-vl-ocr-latest' : selectedOcrModels[0]?.id || '请输入 OCR 模型 ID'}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                              <datalist id={`models-ocr-${selectedOcrProviderId}`}>
-                                {selectedOcrModels.map((model) => (
-                                  <option key={model.id} value={model.id}>
-                                    {model.name || model.id}
-                                  </option>
-                                ))}
-                              </datalist>
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">OCR API Key</label>
-                              <input
-                                type={showApiKey ? 'text' : 'password'}
-                                value={ocrApiKeyDraft}
-                                onChange={(e) => setOcrApiKeyDraft(e.target.value)}
-                                placeholder="未填写时使用该提供商已有配置"
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium text-foreground">OCR Base URL</label>
-                              <input
-                                type="url"
-                                value={ocrBaseUrlDraft}
-                                onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
-                                placeholder={selectedOcrProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
-                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                              />
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground">用于题目文字识别，可与视觉模型使用不同提供商。</p>
+                                <div className="p-3 space-y-3">
+                                  {/* Vision Settings */}
+                                  <div className="space-y-2">
+                                    <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                      <Eye className="h-3 w-3 text-violet-500" />
+                                      视觉识别
+                                    </h4>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <select
+                                        value={selectedVisionProviderId}
+                                        onChange={(e) => setSelectedVisionProviderId(e.target.value as ProviderId)}
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      >
+                                        {providerIds.map((id) => (
+                                          <option key={id} value={id}>
+                                            {providersConfig[id]?.name || id}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="text"
+                                        list={`models-vision-${selectedVisionProviderId}`}
+                                        value={visionModelIdDraft}
+                                        onChange={(e) => setVisionModelIdDraft(e.target.value)}
+                                        placeholder="视觉模型"
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      />
+                                    </div>
+                                  </div>
+                                  {/* OCR Settings */}
+                                  <div className="space-y-2">
+                                    <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                      <FileText className="h-3 w-3 text-violet-500" />
+                                      OCR 识别
+                                    </h4>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <select
+                                        value={selectedOcrProviderId}
+                                        onChange={(e) => setSelectedOcrProviderId(e.target.value as ProviderId)}
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      >
+                                        {providerIds.map((id) => (
+                                          <option key={id} value={id}>
+                                            {providersConfig[id]?.name || id}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <input
+                                        type="text"
+                                        list={`models-ocr-${selectedOcrProviderId}`}
+                                        value={ocrModelIdDraft}
+                                        onChange={(e) => setOcrModelIdDraft(e.target.value)}
+                                        placeholder="OCR 模型"
+                                        className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-3 pt-5">
+                      {/* Action Buttons */}
+                      <div className="flex flex-wrap gap-2 pt-3 mt-3 border-t border-border">
                         <motion.button
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                           type="button"
                           onClick={handleSaveAiPreference}
-                          className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-violet-600/25 inline-flex items-center gap-2"
+                          className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm inline-flex items-center gap-1.5"
                         >
-                          {aiSaved ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                          {aiSaved ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                           {aiSaved ? '已保存' : '保存设置'}
                         </motion.button>
                         <motion.button
@@ -1181,9 +1129,9 @@ export default function SettingsPage() {
                           type="button"
                           onClick={handleVerifyProvider}
                           disabled={testing}
-                          className="px-5 py-2.5 bg-muted hover:bg-muted/80 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-sm font-semibold rounded-xl transition-all inline-flex items-center gap-2 disabled:opacity-70"
+                          className="px-4 py-2 bg-muted hover:bg-muted/80 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 disabled:opacity-70"
                         >
-                          {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                          {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                           测试连接
                         </motion.button>
                       </div>
@@ -1193,13 +1141,13 @@ export default function SettingsPage() {
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           className={cn(
-                            'mt-4 px-4 py-3 rounded-xl flex items-center gap-3 text-sm',
+                            'mt-3 px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
                             testResult.ok
                               ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
                               : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
                           )}
                         >
-                          {testResult.ok ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" /> : <AlertCircle className="h-4 w-4 flex-shrink-0" />}
+                          {testResult.ok ? <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />}
                           {testResult.text}
                         </motion.div>
                       )}
@@ -1207,38 +1155,36 @@ export default function SettingsPage() {
                   </div>
 
                   {/* Right Column - Stats & Quick Actions */}
-                  <div className="space-y-4">
-                    {/* Stats */}
-                    <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl p-6 text-white">
-                      <h3 className="font-semibold mb-4 flex items-center gap-2">
-                        <Zap className="h-4 w-4" />
+                  <div className="lg:col-span-4 space-y-3">
+                    {/* Compact Stats */}
+                    <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl p-4 text-white">
+                      <h3 className="font-semibold mb-3 text-sm flex items-center gap-1.5">
+                        <Zap className="h-3.5 w-3.5" />
                         系统概览
                       </h3>
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <span className="text-violet-100 text-sm">可用提供商</span>
-                          <span className="text-2xl font-bold">{providerIds.length}</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="text-center">
+                          <div className="text-xl font-bold">{providerIds.length}</div>
+                          <div className="text-[10px] text-violet-100">提供商</div>
                         </div>
-                        <div className="h-px bg-white/20" />
-                        <div className="flex items-center justify-between">
-                          <span className="text-violet-100 text-sm">已配置</span>
-                          <span className="text-2xl font-bold">{serverConfiguredCount}</span>
+                        <div className="text-center border-x border-white/20">
+                          <div className="text-xl font-bold">{serverConfiguredCount}</div>
+                          <div className="text-[10px] text-violet-100">已配置</div>
                         </div>
-                        <div className="h-px bg-white/20" />
-                        <div className="flex items-center justify-between">
-                          <span className="text-violet-100 text-sm">模型数量</span>
-                          <span className="text-2xl font-bold">{backendModelCount}</span>
+                        <div className="text-center">
+                          <div className="text-xl font-bold">{backendModelCount}</div>
+                          <div className="text-[10px] text-violet-100">模型数</div>
                         </div>
                       </div>
                     </div>
 
                     {/* Quick Actions */}
-                    <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-5 border border-border">
-                      <h3 className="font-semibold text-foreground mb-4 text-sm flex items-center gap-2">
-                        <Settings className="h-4 w-4 text-amber-500" />
+                    <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-3 border border-border">
+                      <h3 className="font-semibold text-foreground mb-2 text-xs flex items-center gap-1.5">
+                        <Settings className="h-3.5 w-3.5 text-amber-500" />
                         更多配置
                       </h3>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-1.5">
                         {[
                           { label: 'TTS', section: 'tts' as const, icon: Volume2, color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600' },
                           { label: 'ASR', section: 'asr' as const, icon: Mic, color: 'bg-green-100 dark:bg-green-900/30 text-green-600' },
@@ -1253,27 +1199,27 @@ export default function SettingsPage() {
                             whileTap={{ scale: 0.95 }}
                             type="button"
                             onClick={() => openAdvancedSettings(item.section)}
-                            className="flex items-center gap-2 p-3 rounded-xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all"
+                            className="flex flex-col items-center gap-1 p-2 rounded-lg bg-card border border-border hover:border-primary/30 hover:shadow-sm transition-all"
                           >
-                            <div className={cn('p-1.5 rounded-lg', item.color)}>
-                              <item.icon className="h-3.5 w-3.5" />
+                            <div className={cn('p-1 rounded-md', item.color)}>
+                              <item.icon className="h-3 w-3" />
                             </div>
-                            <span className="text-sm font-medium text-foreground">{item.label}</span>
+                            <span className="text-[10px] font-medium text-foreground">{item.label}</span>
                           </motion.button>
                         ))}
                       </div>
                     </div>
 
-                    {/* Help Card */}
-                    <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-xl p-5 border border-amber-100 dark:border-amber-800">
-                      <div className="flex items-start gap-3">
-                        <div className="p-2 bg-amber-100 dark:bg-amber-800 rounded-xl">
-                          <Sparkles className="h-4 w-4 text-amber-600" />
+                    {/* Compact Help Card */}
+                    <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-xl p-3 border border-amber-100 dark:border-amber-800">
+                      <div className="flex items-start gap-2">
+                        <div className="p-1.5 bg-amber-100 dark:bg-amber-800 rounded-lg shrink-0">
+                          <Sparkles className="h-3 w-3 text-amber-600" />
                         </div>
                         <div>
-                          <h4 className="font-semibold text-amber-900 dark:text-amber-300 text-sm">提示</h4>
-                          <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 leading-relaxed">
-                            配置 API Key 后，系统会自动保存并在所有 AI 功能中使用。点击测试连接可验证配置是否正确。
+                          <h4 className="font-semibold text-amber-900 dark:text-amber-300 text-xs">提示</h4>
+                          <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 leading-relaxed">
+                            配置 API Key 后自动保存。点击测试连接可验证配置。
                           </p>
                         </div>
                       </div>

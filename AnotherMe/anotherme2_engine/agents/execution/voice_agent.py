@@ -1,15 +1,26 @@
 """
-Voice agent: generate per-step narration audio with Edge TTS.
+Voice agent: generate per-step narration audio with Edge TTS or cloud TTS APIs.
 集成 Teaching Narration Skills 提升讲解质量。
 """
 
 import asyncio
 import subprocess
 import wave
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import edge_tts
+try:
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
+except ImportError:
+    EDGE_TTS_AVAILABLE = False
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
 
 from ..foundation.base_agent import BaseAgent
 from ..perception.vision_tool import VisionTool
@@ -75,9 +86,23 @@ class VoiceAgent(BaseAgent):
         else:
             self.system_prompt = config.get("system_prompt", self.SYSTEM_PROMPT)
             self._narration_engine = None
+        
+        # TTS Provider configuration
+        self.tts_provider = config.get("tts_provider", "edge")
+        self.tts_api_key = config.get("tts_api_key", "")
+        self.tts_base_url = config.get("tts_base_url", "")
         self.voice_name = config.get("voice", "zh-CN-XiaoxiaoNeural")
         self.rate = config.get("rate", "+30%")
         self.volume = config.get("volume", "+10%")
+        self.tts_speed = config.get("tts_speed", 1.0)
+        
+        # Validate TTS provider
+        if self.tts_provider != "edge" and not HTTPX_AVAILABLE:
+            print(f"[VoiceAgent] 警告: httpx 未安装，回退到 Edge TTS")
+            self.tts_provider = "edge"
+        if self.tts_provider == "edge" and not EDGE_TTS_AVAILABLE:
+            print(f"[VoiceAgent] 警告: edge_tts 未安装，TTS 将不可用")
+        
         self.optimize_narration_with_llm = bool(config.get("optimize_narration_with_llm", True))
         raw_tts_concurrency = config.get("tts_concurrency", 3)
         try:
@@ -363,6 +388,28 @@ class VoiceAgent(BaseAgent):
         rate: Optional[str] = None,
         volume: Optional[str] = None,
     ) -> bool:
+        """Generate TTS audio using configured provider."""
+        if self.tts_provider == "edge":
+            return await self._generate_tts_edge(text, output_path, rate=rate, volume=volume)
+        elif self.tts_provider in ("openai", "azure", "doubao", "minimax", "elevenlabs"):
+            return await self._generate_tts_cloud(text, output_path)
+        else:
+            print(f"[VoiceAgent] 未知的 TTS 提供方: {self.tts_provider}，回退到 Edge TTS")
+            return await self._generate_tts_edge(text, output_path, rate=rate, volume=volume)
+
+    async def _generate_tts_edge(
+        self,
+        text: str,
+        output_path: str,
+        *,
+        rate: Optional[str] = None,
+        volume: Optional[str] = None,
+    ) -> bool:
+        """Generate TTS using Edge TTS (local, free)."""
+        if not EDGE_TTS_AVAILABLE:
+            print("[VoiceAgent] Edge TTS 不可用")
+            return False
+            
         max_retries = 3
         output = Path(output_path)
         for attempt in range(max_retries):
@@ -386,6 +433,177 @@ class VoiceAgent(BaseAgent):
                     print(f"Edge TTS 最终失败: {exc}")
                     return False
         return False
+
+    async def _generate_tts_cloud(self, text: str, output_path: str) -> bool:
+        """Generate TTS using cloud API providers."""
+        if not HTTPX_AVAILABLE:
+            print("[VoiceAgent] httpx 未安装，无法使用云端 TTS")
+            return False
+            
+        max_retries = 3
+        output = Path(output_path)
+        
+        for attempt in range(max_retries):
+            try:
+                if self.tts_provider == "openai":
+                    await self._generate_tts_openai(text, output)
+                elif self.tts_provider == "azure":
+                    await self._generate_tts_azure(text, output)
+                elif self.tts_provider == "doubao":
+                    await self._generate_tts_doubao(text, output)
+                elif self.tts_provider == "minimax":
+                    await self._generate_tts_minimax(text, output)
+                elif self.tts_provider == "elevenlabs":
+                    await self._generate_tts_elevenlabs(text, output)
+                else:
+                    raise ValueError(f"不支持的 TTS 提供方: {self.tts_provider}")
+                
+                if not self._is_valid_audio_file(output):
+                    raise ValueError(f"TTS output is empty or invalid: {output}")
+                print(f"[VoiceAgent] {self.tts_provider} TTS 生成成功")
+                return True
+            except Exception as exc:
+                self._delete_if_exists(output)
+                if attempt < max_retries - 1:
+                    print(f"{self.tts_provider} TTS 重试 {attempt + 1}/{max_retries}: {exc}")
+                    await asyncio.sleep(1)
+                else:
+                    print(f"{self.tts_provider} TTS 最终失败: {exc}")
+                    # Fallback to edge TTS if cloud fails
+                    if self.tts_provider != "edge" and EDGE_TTS_AVAILABLE:
+                        print("[VoiceAgent] 尝试回退到 Edge TTS...")
+                        return await self._generate_tts_edge(text, output_path)
+                    return False
+        return False
+
+    async def _generate_tts_openai(self, text: str, output: Path) -> None:
+        """Generate TTS using OpenAI API."""
+        url = f"{self.tts_base_url.rstrip('/')}/audio/speech"
+        headers = {
+            "Authorization": f"Bearer {self.tts_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "tts-1",
+            "input": text,
+            "voice": self.voice_name,
+            "speed": self.tts_speed,
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            output.write_bytes(response.content)
+
+    async def _generate_tts_azure(self, text: str, output: Path) -> None:
+        """Generate TTS using Azure Speech API."""
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.tts_api_key,
+            "Content-Type": "application/ssml+xml",
+            "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+        }
+        
+        ssml = f"""<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>
+            <voice name='{self.voice_name}'>
+                <prosody rate='{self.tts_speed}'>{text}</prosody>
+            </voice>
+        </speak>"""
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(self.tts_base_url, headers=headers, content=ssml, timeout=60)
+            response.raise_for_status()
+            output.write_bytes(response.content)
+
+    async def _generate_tts_doubao(self, text: str, output: Path) -> None:
+        """Generate TTS using Doubao (Volcengine) API."""
+        url = "https://openspeech.bytedance.com/api/v1/tts"
+        headers = {
+            "Authorization": f"Bearer; {self.tts_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "app": {
+                "appid": "",
+                "token": "",
+                "cluster": "volcano_tts",
+            },
+            "user": {
+                "uid": "user_001",
+            },
+            "audio": {
+                "voice_type": self.voice_name,
+                "encoding": "mp3",
+                "speed_ratio": self.tts_speed,
+            },
+            "request": {
+                "reqid": str(os.urandom(16).hex()),
+                "text": text,
+                "operation": "query",
+            },
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("data"):
+                import base64
+                audio_data = base64.b64decode(data["data"])
+                output.write_bytes(audio_data)
+            else:
+                raise ValueError(f"Doubao TTS 返回无效数据: {data}")
+
+    async def _generate_tts_minimax(self, text: str, output: Path) -> None:
+        """Generate TTS using MiniMax API."""
+        url = "https://api.minimaxi.com/v1/t2a_v2"
+        headers = {
+            "Authorization": f"Bearer {self.tts_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "speech-01-turbo",
+            "text": text,
+            "voice_setting": {
+                "voice_id": self.voice_name,
+                "speed": self.tts_speed,
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+            },
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("data") and data["data"].get("audio"):
+                import base64
+                audio_data = base64.b64decode(data["data"]["audio"])
+                output.write_bytes(audio_data)
+            else:
+                raise ValueError(f"MiniMax TTS 返回无效数据: {data}")
+
+    async def _generate_tts_elevenlabs(self, text: str, output: Path) -> None:
+        """Generate TTS using ElevenLabs API."""
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_name}"
+        headers = {
+            "xi-api-key": self.tts_api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "speed": self.tts_speed,
+            },
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=60)
+            response.raise_for_status()
+            output.write_bytes(response.content)
 
     def _get_audio_duration(self, audio_path: str) -> Optional[float]:
         try:

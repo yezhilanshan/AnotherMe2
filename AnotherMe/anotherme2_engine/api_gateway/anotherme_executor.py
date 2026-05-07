@@ -80,6 +80,85 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     return result
 
 
+# Supported provider base URL patterns for auto-detection
+_PROVIDER_PATTERNS = {
+    "openai": ["api.openai.com"],
+    "anthropic": ["api.anthropic.com"],
+    "gemini": ["generativelanguage.googleapis.com", "googleapis.com"],
+    "deepseek": ["api.deepseek.com"],
+    "qwen": ["dashscope.aliyuncs.com"],
+    "kimi": ["api.moonshot.cn"],
+    "minimax": ["api.minimaxi.com"],
+    "glm": ["open.bigmodel.cn"],
+    "siliconflow": ["api.siliconflow.cn"],
+    "doubao": ["ark.cn-beijing.volces.com", "volces.com"],
+    "grok": ["api.x.ai", "x.ai"],
+}
+
+
+def _detect_provider_from_url(base_url: str) -> str | None:
+    """Detect provider from base URL."""
+    base_url_lower = base_url.lower()
+    for provider, patterns in _PROVIDER_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in base_url_lower:
+                return provider
+    return None
+
+
+def _is_vision_capable_model(model: str) -> bool:
+    """Check if a model supports vision capabilities."""
+    model_lower = model.lower()
+    vision_keywords = [
+        "vision", "vl", "gpt-4o", "claude-3", "gemini", "qwen-vl", "qwen2-vl",
+        "kimi-k2", "doubao-vision", "glm-4v"
+    ]
+    return any(kw in model_lower for kw in vision_keywords)
+
+
+def _is_ocr_capable_model(model: str) -> bool:
+    """Check if a model supports OCR capabilities."""
+    model_lower = model.lower()
+    ocr_keywords = ["ocr", "qwen-vl-ocr"]
+    return any(kw in model_lower for kw in ocr_keywords)
+
+
+def _get_default_vision_model(provider: str, current_model: str) -> str:
+    """Get default vision model for a provider."""
+    defaults = {
+        "openai": "gpt-4o",
+        "anthropic": "claude-3-5-sonnet-20241022",
+        "gemini": "gemini-2.0-flash",
+        "deepseek": "deepseek-chat",
+        "qwen": "qwen3-vl-plus",
+        "kimi": "kimi-k2-5",
+        "minimax": "MiniMax-Text-01",
+        "glm": "glm-4v-plus",
+        "siliconflow": "Qwen/Qwen2-VL-72B-Instruct",
+        "doubao": "doubao-1.5-vision-pro-250328",
+        "grok": "grok-3",
+    }
+    return defaults.get(provider, current_model)
+
+
+def _get_default_ocr_model(provider: str, current_model: str) -> str:
+    """Get default OCR model for a provider."""
+    defaults = {
+        "openai": "gpt-4o",
+        "anthropic": "claude-3-5-sonnet-20241022",
+        "gemini": "gemini-2.0-flash",
+        "deepseek": "deepseek-chat",
+        "qwen": "qwen-vl-ocr-latest",
+        "kimi": "kimi-k2-5",
+        "minimax": "MiniMax-Text-01",
+        "glm": "glm-4v-plus",
+        "siliconflow": "Qwen/Qwen2-VL-72B-Instruct",
+        "doubao": "doubao-1.5-vision-pro-250328",
+        "grok": "grok-3",
+    }
+    return defaults.get(provider, current_model)
+
+
 def _merge_runtime_configs(
     *,
     base_llm_config: Dict[str, Any],
@@ -100,7 +179,11 @@ def _merge_runtime_configs(
     model = _strip_provider_prefix(str(override.get("model") or ""))
     vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
     ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
-    model_lower = (model or "").lower()
+
+    # Detect provider from base URL
+    provider = _detect_provider_from_url(base_url) if base_url else None
+    vision_provider = _detect_provider_from_url(vision_base_url) if vision_base_url else provider
+    ocr_provider = _detect_provider_from_url(ocr_base_url) if ocr_base_url else provider
 
     if api_key:
         llm_config["api_key"] = api_key
@@ -112,9 +195,10 @@ def _merge_runtime_configs(
         ocr_config["base_url"] = base_url
     if model:
         llm_config["model"] = model
-        if "vl" in model_lower or "vision" in model_lower or "ocr" in model_lower:
+        # Auto-detect vision capability
+        if _is_vision_capable_model(model):
             vision_config["model"] = model
-            if "ocr" in model_lower:
+            if _is_ocr_capable_model(model):
                 ocr_config["model"] = model
     if vision_api_key:
         vision_config["api_key"] = vision_api_key
@@ -129,20 +213,40 @@ def _merge_runtime_configs(
     if ocr_model:
         ocr_config["model"] = ocr_model
 
-    vision_model_lower = str(vision_config.get("model") or "").lower()
-    ocr_model_lower = str(ocr_config.get("model") or "").lower()
-    vision_base_url_lower = str(vision_config.get("base_url") or "").lower()
-    ocr_base_url_lower = str(ocr_config.get("base_url") or "").lower()
-    is_vision_dashscope = "dashscope.aliyuncs.com" in vision_base_url_lower or vision_model_lower.startswith("qwen")
-    is_ocr_dashscope = "dashscope.aliyuncs.com" in ocr_base_url_lower or ocr_model_lower.startswith("qwen")
-    if is_vision_dashscope and (
-        not vision_model_lower.startswith("qwen") or ("vl" not in vision_model_lower and "ocr" not in vision_model_lower)
-    ):
-        vision_config["model"] = "qwen3-vl-plus"
-    if is_ocr_dashscope and (
-        not ocr_model_lower.startswith("qwen") or ("vl" not in ocr_model_lower and "ocr" not in ocr_model_lower)
-    ):
-        ocr_config["model"] = "qwen-vl-ocr-latest"
+    # Validate and fix vision/ocr models based on provider
+    vision_model_current = str(vision_config.get("model") or "").lower()
+    vision_base_url_current = str(vision_config.get("base_url") or "").lower()
+    detected_vision_provider = vision_provider or _detect_provider_from_url(vision_base_url_current)
+    
+    if detected_vision_provider:
+        # Check if current vision model is appropriate for the provider
+        is_appropriate = False
+        if detected_vision_provider == "qwen":
+            is_appropriate = vision_model_current.startswith("qwen") and ("vl" in vision_model_current or "vision" in vision_model_current)
+        elif detected_vision_provider == "doubao":
+            is_appropriate = "vision" in vision_model_current or "vl" in vision_model_current
+        elif detected_vision_provider in ["openai", "anthropic", "gemini"]:
+            is_appropriate = _is_vision_capable_model(vision_model_current)
+        
+        if not is_appropriate:
+            vision_config["model"] = _get_default_vision_model(detected_vision_provider, vision_model_current)
+
+    # Validate and fix OCR model
+    ocr_model_current = str(ocr_config.get("model") or "").lower()
+    ocr_base_url_current = str(ocr_config.get("base_url") or "").lower()
+    detected_ocr_provider = ocr_provider or _detect_provider_from_url(ocr_base_url_current) or detected_vision_provider
+    
+    if detected_ocr_provider:
+        is_ocr_appropriate = False
+        if detected_ocr_provider == "qwen":
+            is_ocr_appropriate = "qwen" in ocr_model_current and ("vl" in ocr_model_current or "ocr" in ocr_model_current)
+        elif detected_ocr_provider == "doubao":
+            is_ocr_appropriate = "vision" in ocr_model_current
+        else:
+            is_ocr_appropriate = _is_vision_capable_model(ocr_model_current)
+        
+        if not is_ocr_appropriate:
+            ocr_config["model"] = _get_default_ocr_model(detected_ocr_provider, ocr_model_current)
 
     return llm_config, vision_config, ocr_config
 
@@ -163,15 +267,38 @@ def _generation_subprocess_entry(
     result_queue: "mp.queues.Queue",
 ) -> None:
     try:
-        from agents.foundation.config import build_default_llm_config, build_ocr_model_config, build_vision_model_config
+        from agents.foundation.config import (
+            build_default_llm_config,
+            build_ocr_model_config,
+            build_vision_model_config,
+            build_llm_config_from_env,
+            build_vision_config_from_env,
+            build_ocr_config_from_env,
+        )
         from main import MathVideoGenerator
 
-        llm_config, vision_config, ocr_config = _merge_runtime_configs(
-            base_llm_config=build_default_llm_config(),
-            base_vision_config=build_vision_model_config(),
-            base_ocr_config=build_ocr_model_config(),
-            override=_clean_llm_config(llm_config_override),
-        )
+        cleaned_config = _clean_llm_config(llm_config_override)
+        
+        # If override has api_key and base_url, use them; otherwise auto-detect from env
+        if cleaned_config.get("api_key") and cleaned_config.get("base_url"):
+            llm_config, vision_config, ocr_config = _merge_runtime_configs(
+                base_llm_config=build_default_llm_config(),
+                base_vision_config=build_vision_model_config(),
+                base_ocr_config=build_ocr_model_config(),
+                override=cleaned_config,
+            )
+        else:
+            # Auto-detect provider from environment variables
+            llm_config = build_llm_config_from_env()
+            vision_config = build_vision_config_from_env()
+            ocr_config = build_ocr_config_from_env()
+            # Apply any partial overrides
+            if cleaned_config.get("model"):
+                llm_config["model"] = cleaned_config["model"]
+            if cleaned_config.get("vision_model"):
+                vision_config["model"] = cleaned_config["vision_model"]
+            if cleaned_config.get("ocr_model"):
+                ocr_config["model"] = cleaned_config["ocr_model"]
         generator = MathVideoGenerator(
             llm_config=llm_config,
             vision_config=vision_config,
