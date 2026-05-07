@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
       if (result.ok) {
         return apiSuccess({ message: result.message });
       } else {
-        return apiError('VERIFICATION_FAILED', 400, result.message);
+        return apiError('MODEL_VERIFICATION_FAILED', 400, result.message);
       }
     }
 
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
     if (result.ok) {
       return apiSuccess({ message: result.message });
     } else {
-      return apiError('VERIFICATION_FAILED', 400, result.message);
+      return apiError('MODEL_VERIFICATION_FAILED', 400, result.message);
     }
   } catch (error) {
     log.error('OCR provider verification failed:', error);
