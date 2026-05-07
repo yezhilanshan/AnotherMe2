@@ -292,7 +292,7 @@ export default function SettingsPage() {
     setApiKeyDraft(selected?.apiKey || '');
     setBaseUrlDraft(selected?.baseUrl || '');
     setModelIdDraft(selectedProviderId === providerId && modelId ? modelId : fallbackModelId);
-    setTestResult(null);
+    setTestResults((prev) => ({ ...prev, text: null }));
   }, [modelId, providerId, selectedProviderId, providersConfig]);
 
   useEffect(() => {
