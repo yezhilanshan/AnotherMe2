@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X, Settings, Languages, Volume2, Mic, FileText, Image as ImageIcon, Video, Globe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -87,16 +87,15 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
   const ttsSpeed = useSettingsStore((s) => s.ttsSpeed);
   const setTTSSpeed = useSettingsStore((s) => s.setTTSSpeed);
 
-  // Derive mounted state during render to avoid setState in effect
-  const isClient = typeof window !== 'undefined';
-  if (!mounted && isClient) {
+  useEffect(() => {
     setMounted(true);
-  }
+  }, []);
 
-  // Derive active section during render to avoid setState in effect
-  if (open && activeSection !== initialSection) {
-    setActiveSection(initialSection);
-  }
+  useEffect(() => {
+    if (open) {
+      setActiveSection(initialSection);
+    }
+  }, [open, initialSection]);
 
   const providerIds = useMemo(
     () =>
