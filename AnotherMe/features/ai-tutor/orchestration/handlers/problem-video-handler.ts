@@ -19,6 +19,14 @@ export interface ProblemVideoCapabilityPayload {
   baseUrl?: string;
   providerType?: string;
   requiresApiKey?: boolean;
+  visionApiKey?: string;
+  visionBaseUrl?: string;
+  visionProviderType?: string;
+  visionRequiresApiKey?: boolean;
+  ocrApiKey?: string;
+  ocrBaseUrl?: string;
+  ocrProviderType?: string;
+  ocrRequiresApiKey?: boolean;
   userId?: string;
   learnerSessionId?: string;
   learnerLookbackDays?: number;
@@ -56,6 +64,14 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : undefined,
       providerType: typeof p.providerType === 'string' ? p.providerType : undefined,
       requiresApiKey: typeof p.requiresApiKey === 'boolean' ? p.requiresApiKey : undefined,
+      visionApiKey: typeof p.visionApiKey === 'string' ? p.visionApiKey : undefined,
+      visionBaseUrl: typeof p.visionBaseUrl === 'string' ? p.visionBaseUrl : undefined,
+      visionProviderType: typeof p.visionProviderType === 'string' ? p.visionProviderType : undefined,
+      visionRequiresApiKey: typeof p.visionRequiresApiKey === 'boolean' ? p.visionRequiresApiKey : undefined,
+      ocrApiKey: typeof p.ocrApiKey === 'string' ? p.ocrApiKey : undefined,
+      ocrBaseUrl: typeof p.ocrBaseUrl === 'string' ? p.ocrBaseUrl : undefined,
+      ocrProviderType: typeof p.ocrProviderType === 'string' ? p.ocrProviderType : undefined,
+      ocrRequiresApiKey: typeof p.ocrRequiresApiKey === 'boolean' ? p.ocrRequiresApiKey : undefined,
       userId: typeof p.userId === 'string' ? p.userId : undefined,
       learnerSessionId: typeof p.learnerSessionId === 'string' ? p.learnerSessionId : undefined,
       learnerLookbackDays: typeof p.learnerLookbackDays === 'number' ? p.learnerLookbackDays : undefined,
@@ -75,6 +91,14 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       baseUrl,
       providerType,
       requiresApiKey,
+      visionApiKey,
+      visionBaseUrl,
+      visionProviderType,
+      visionRequiresApiKey,
+      ocrApiKey,
+      ocrBaseUrl,
+      ocrProviderType,
+      ocrRequiresApiKey,
       userId,
       learnerSessionId,
       learnerLookbackDays,
@@ -119,6 +143,14 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
         ...(baseUrl ? { baseUrl } : {}),
         ...(providerType ? { providerType } : {}),
         ...(typeof requiresApiKey === 'boolean' ? { requiresApiKey } : {}),
+        ...(visionApiKey ? { visionApiKey } : {}),
+        ...(visionBaseUrl ? { visionBaseUrl } : {}),
+        ...(visionProviderType ? { visionProviderType } : {}),
+        ...(typeof visionRequiresApiKey === 'boolean' ? { visionRequiresApiKey } : {}),
+        ...(ocrApiKey ? { ocrApiKey } : {}),
+        ...(ocrBaseUrl ? { ocrBaseUrl } : {}),
+        ...(ocrProviderType ? { ocrProviderType } : {}),
+        ...(typeof ocrRequiresApiKey === 'boolean' ? { ocrRequiresApiKey } : {}),
         ...(userId ? { userId } : {}),
         ...(learnerSessionId ? { learnerSessionId } : {}),
         ...(typeof learnerLookbackDays === 'number' ? { learnerLookbackDays } : {}),

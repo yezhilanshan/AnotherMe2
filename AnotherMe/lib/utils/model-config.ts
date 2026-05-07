@@ -2,8 +2,10 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { PROVIDERS } from '@/lib/ai/providers';
 import type { ProviderId } from '@/lib/types/provider';
 
-function hasUserConfig(providerConfig: { apiKey?: string; baseUrl?: string } | undefined) {
-  return Boolean(providerConfig?.apiKey?.trim() || providerConfig?.baseUrl?.trim());
+function hasUserConfig(
+  providerConfig: { apiKey?: string; baseUrl?: string; isServerConfigured?: boolean } | undefined,
+) {
+  return Boolean(providerConfig?.apiKey?.trim() || providerConfig?.baseUrl?.trim() || providerConfig?.isServerConfigured);
 }
 
 function resolveProviderFromClientConfig(
@@ -20,6 +22,19 @@ function resolveProviderFromClientConfig(
   );
 
   return configuredProvider || providerId;
+}
+
+function resolveProviderForRole(
+  providerId: ProviderId | undefined,
+  fallbackProviderId: ProviderId,
+  providersConfig: ReturnType<typeof useSettingsStore.getState>['providersConfig'],
+): ProviderId {
+  const requestedProviderId = (providerId || fallbackProviderId) as ProviderId;
+  const requestedConfig = providersConfig[requestedProviderId] || PROVIDERS[requestedProviderId];
+  if (requestedConfig && hasUserConfig(requestedConfig)) {
+    return requestedProviderId;
+  }
+  return fallbackProviderId;
 }
 
 function stripProviderPrefix(modelId: string) {
@@ -56,7 +71,15 @@ function resolveTaskModel(params: {
  * Get current model configuration from settings store
  */
 export function getCurrentModelConfig() {
-  const { providerId, modelId, visionModelId, ocrModelId, providersConfig } = useSettingsStore.getState();
+  const {
+    providerId,
+    modelId,
+    visionProviderId,
+    visionModelId,
+    ocrProviderId,
+    ocrModelId,
+    providersConfig,
+  } = useSettingsStore.getState();
   const safeProviderId = resolveProviderFromClientConfig((providerId || 'openai') as ProviderId, providersConfig);
   const providerConfig = providersConfig[safeProviderId] || PROVIDERS[safeProviderId];
   const providerModelIds = new Set([
@@ -73,31 +96,39 @@ export function getCurrentModelConfig() {
     providerConfig?.serverModels?.[0] ||
     PROVIDERS[safeProviderId]?.models?.[0]?.id ||
     '';
-  const models = providerConfig?.models || PROVIDERS[safeProviderId]?.models || [];
+  const safeVisionProviderId = resolveProviderForRole(visionProviderId, safeProviderId, providersConfig);
+  const visionProviderConfig = providersConfig[safeVisionProviderId] || PROVIDERS[safeVisionProviderId];
+  const safeOcrProviderId = resolveProviderForRole(ocrProviderId, safeVisionProviderId, providersConfig);
+  const ocrProviderConfig = providersConfig[safeOcrProviderId] || PROVIDERS[safeOcrProviderId];
+
+  const visionModels = visionProviderConfig?.models || PROVIDERS[safeVisionProviderId]?.models || [];
+  const ocrModels = ocrProviderConfig?.models || PROVIDERS[safeOcrProviderId]?.models || [];
   const safeVisionModelId = resolveTaskModel({
     configuredModelId: visionModelId,
-    providerId: safeProviderId,
-    baseUrl: providerConfig?.baseUrl || providerConfig?.defaultBaseUrl,
-    models,
+    providerId: safeVisionProviderId,
+    baseUrl: visionProviderConfig?.baseUrl || visionProviderConfig?.defaultBaseUrl,
+    models: visionModels,
     fallbackModelId: safeModelId,
     kind: 'vision',
   });
   const safeOcrModelId = resolveTaskModel({
     configuredModelId: ocrModelId,
-    providerId: safeProviderId,
-    baseUrl: providerConfig?.baseUrl || providerConfig?.defaultBaseUrl,
-    models,
+    providerId: safeOcrProviderId,
+    baseUrl: ocrProviderConfig?.baseUrl || ocrProviderConfig?.defaultBaseUrl,
+    models: ocrModels,
     fallbackModelId: safeVisionModelId || safeModelId,
     kind: 'ocr',
   });
   const modelString = safeModelId ? `${safeProviderId}:${safeModelId}` : '';
-  const visionModelString = safeVisionModelId ? `${safeProviderId}:${safeVisionModelId}` : '';
-  const ocrModelString = safeOcrModelId ? `${safeProviderId}:${safeOcrModelId}` : '';
+  const visionModelString = safeVisionModelId ? `${safeVisionProviderId}:${safeVisionModelId}` : '';
+  const ocrModelString = safeOcrModelId ? `${safeOcrProviderId}:${safeOcrModelId}` : '';
 
   return {
     providerId: safeProviderId,
     modelId: safeModelId,
+    visionProviderId: safeVisionProviderId,
     visionModelId: safeVisionModelId,
+    ocrProviderId: safeOcrProviderId,
     ocrModelId: safeOcrModelId,
     modelString,
     visionModelString,
@@ -107,5 +138,15 @@ export function getCurrentModelConfig() {
     providerType: providerConfig?.type,
     requiresApiKey: providerConfig?.requiresApiKey,
     isServerConfigured: providerConfig?.isServerConfigured,
+    visionApiKey: visionProviderConfig?.apiKey || '',
+    visionBaseUrl: visionProviderConfig?.baseUrl || '',
+    visionProviderType: visionProviderConfig?.type,
+    visionRequiresApiKey: visionProviderConfig?.requiresApiKey,
+    visionIsServerConfigured: visionProviderConfig?.isServerConfigured,
+    ocrApiKey: ocrProviderConfig?.apiKey || '',
+    ocrBaseUrl: ocrProviderConfig?.baseUrl || '',
+    ocrProviderType: ocrProviderConfig?.type,
+    ocrRequiresApiKey: ocrProviderConfig?.requiresApiKey,
+    ocrIsServerConfigured: ocrProviderConfig?.isServerConfigured,
   };
 }

@@ -51,6 +51,10 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
         return {}
     api_key = str(raw.get("api_key") or raw.get("apiKey") or "").strip()
     base_url = str(raw.get("base_url") or raw.get("baseUrl") or "").strip()
+    vision_api_key = str(raw.get("vision_api_key") or raw.get("visionApiKey") or "").strip()
+    vision_base_url = str(raw.get("vision_base_url") or raw.get("visionBaseUrl") or "").strip()
+    ocr_api_key = str(raw.get("ocr_api_key") or raw.get("ocrApiKey") or "").strip()
+    ocr_base_url = str(raw.get("ocr_base_url") or raw.get("ocrBaseUrl") or "").strip()
     model = _strip_provider_prefix(str(raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
     vision_model = _strip_provider_prefix(str(raw.get("vision_model") or raw.get("visionModel") or ""))
     ocr_model = _strip_provider_prefix(str(raw.get("ocr_model") or raw.get("ocrModel") or ""))
@@ -59,6 +63,14 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
         result["api_key"] = api_key
     if base_url:
         result["base_url"] = base_url
+    if vision_api_key:
+        result["vision_api_key"] = vision_api_key
+    if vision_base_url:
+        result["vision_base_url"] = vision_base_url
+    if ocr_api_key:
+        result["ocr_api_key"] = ocr_api_key
+    if ocr_base_url:
+        result["ocr_base_url"] = ocr_base_url
     if model:
         result["model"] = model
     if vision_model:
@@ -81,17 +93,14 @@ def _merge_runtime_configs(
 
     api_key = str(override.get("api_key") or "").strip()
     base_url = str(override.get("base_url") or "").strip()
+    vision_api_key = str(override.get("vision_api_key") or "").strip()
+    vision_base_url = str(override.get("vision_base_url") or "").strip()
+    ocr_api_key = str(override.get("ocr_api_key") or "").strip()
+    ocr_base_url = str(override.get("ocr_base_url") or "").strip()
     model = _strip_provider_prefix(str(override.get("model") or ""))
     vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
     ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
-    base_url_lower = base_url.lower()
     model_lower = (model or "").lower()
-    is_dashscope_runtime = (
-        "dashscope.aliyuncs.com" in base_url_lower
-        or model_lower.startswith("qwen")
-        or str(vision_model or "").lower().startswith("qwen")
-        or str(ocr_model or "").lower().startswith("qwen")
-    )
 
     if api_key:
         llm_config["api_key"] = api_key
@@ -107,18 +116,33 @@ def _merge_runtime_configs(
             vision_config["model"] = model
             if "ocr" in model_lower:
                 ocr_config["model"] = model
+    if vision_api_key:
+        vision_config["api_key"] = vision_api_key
+    if vision_base_url:
+        vision_config["base_url"] = vision_base_url
+    if ocr_api_key:
+        ocr_config["api_key"] = ocr_api_key
+    if ocr_base_url:
+        ocr_config["base_url"] = ocr_base_url
     if vision_model:
         vision_config["model"] = vision_model
     if ocr_model:
         ocr_config["model"] = ocr_model
 
-    if is_dashscope_runtime:
-        vision_model = str(vision_config.get("model") or "").lower()
-        ocr_model = str(ocr_config.get("model") or "").lower()
-        if not vision_model.startswith("qwen") or ("vl" not in vision_model and "ocr" not in vision_model):
-            vision_config["model"] = "qwen3-vl-plus"
-        if not ocr_model.startswith("qwen") or ("vl" not in ocr_model and "ocr" not in ocr_model):
-            ocr_config["model"] = "qwen-vl-ocr-latest"
+    vision_model_lower = str(vision_config.get("model") or "").lower()
+    ocr_model_lower = str(ocr_config.get("model") or "").lower()
+    vision_base_url_lower = str(vision_config.get("base_url") or "").lower()
+    ocr_base_url_lower = str(ocr_config.get("base_url") or "").lower()
+    is_vision_dashscope = "dashscope.aliyuncs.com" in vision_base_url_lower or vision_model_lower.startswith("qwen")
+    is_ocr_dashscope = "dashscope.aliyuncs.com" in ocr_base_url_lower or ocr_model_lower.startswith("qwen")
+    if is_vision_dashscope and (
+        not vision_model_lower.startswith("qwen") or ("vl" not in vision_model_lower and "ocr" not in vision_model_lower)
+    ):
+        vision_config["model"] = "qwen3-vl-plus"
+    if is_ocr_dashscope and (
+        not ocr_model_lower.startswith("qwen") or ("vl" not in ocr_model_lower and "ocr" not in ocr_model_lower)
+    ):
+        ocr_config["model"] = "qwen-vl-ocr-latest"
 
     return llm_config, vision_config, ocr_config
 

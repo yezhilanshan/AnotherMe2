@@ -37,6 +37,14 @@ export async function POST(request: NextRequest) {
     const baseUrl = String(formData.get('baseUrl') || '').trim();
     const providerType = String(formData.get('providerType') || '').trim();
     const requiresApiKeyValue = String(formData.get('requiresApiKey') || '').trim();
+    const visionApiKey = String(formData.get('visionApiKey') || '').trim();
+    const visionBaseUrl = String(formData.get('visionBaseUrl') || '').trim();
+    const visionProviderType = String(formData.get('visionProviderType') || '').trim();
+    const visionRequiresApiKeyValue = String(formData.get('visionRequiresApiKey') || '').trim();
+    const ocrApiKey = String(formData.get('ocrApiKey') || '').trim();
+    const ocrBaseUrl = String(formData.get('ocrBaseUrl') || '').trim();
+    const ocrProviderType = String(formData.get('ocrProviderType') || '').trim();
+    const ocrRequiresApiKeyValue = String(formData.get('ocrRequiresApiKey') || '').trim();
     const learnerSessionId = String(formData.get('learnerSessionId') || '').trim();
     const learnerLookbackRaw = Number(formData.get('learnerLookbackDays'));
     const learnerLookbackDays = Number.isFinite(learnerLookbackRaw)
@@ -116,6 +124,14 @@ export async function POST(request: NextRequest) {
         ...(baseUrl ? { baseUrl } : {}),
         ...(providerType ? { providerType } : {}),
         ...(requiresApiKeyValue ? { requiresApiKey: requiresApiKeyValue === 'true' } : {}),
+        ...(visionApiKey ? { visionApiKey } : {}),
+        ...(visionBaseUrl ? { visionBaseUrl } : {}),
+        ...(visionProviderType ? { visionProviderType } : {}),
+        ...(visionRequiresApiKeyValue ? { visionRequiresApiKey: visionRequiresApiKeyValue === 'true' } : {}),
+        ...(ocrApiKey ? { ocrApiKey } : {}),
+        ...(ocrBaseUrl ? { ocrBaseUrl } : {}),
+        ...(ocrProviderType ? { ocrProviderType } : {}),
+        ...(ocrRequiresApiKeyValue ? { ocrRequiresApiKey: ocrRequiresApiKeyValue === 'true' } : {}),
         ...(userId ? { userId } : {}),
         ...(learnerSessionId ? { learnerSessionId } : {}),
         ...(typeof learnerLookbackDays === 'number' ? { learnerLookbackDays } : {}),

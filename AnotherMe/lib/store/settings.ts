@@ -32,7 +32,9 @@ export interface SettingsState {
   // Model selection
   providerId: ProviderId;
   modelId: string;
+  visionProviderId: ProviderId;
   visionModelId: string;
+  ocrProviderId: ProviderId;
   ocrModelId: string;
 
   // Provider configurations (unified JSON storage)
@@ -164,7 +166,11 @@ export interface SettingsState {
   // Actions
   setProvider: (providerId: ProviderId) => void;
   setModel: (providerId: ProviderId, modelId: string) => void;
+  setVisionProvider: (providerId: ProviderId) => void;
+  setVisionModel: (providerId: ProviderId, modelId: string) => void;
   setVisionModelId: (modelId: string) => void;
+  setOcrProvider: (providerId: ProviderId) => void;
+  setOcrModel: (providerId: ProviderId, modelId: string) => void;
   setOcrModelId: (modelId: string) => void;
   setProviderConfig: (providerId: ProviderId, config: Partial<ProvidersConfig[ProviderId]>) => void;
   setProvidersConfig: (config: ProvidersConfig) => void;
@@ -396,6 +402,18 @@ function ensureValidProviderSelections(state: Partial<SettingsState>): void {
   if (!hasProviderId(ASR_PROVIDERS, state.asrProviderId)) {
     state.asrProviderId = defaultAudioConfig.asrProviderId;
   }
+
+  if (!hasProviderId(PROVIDERS, state.providerId)) {
+    state.providerId = 'openai' as ProviderId;
+  }
+
+  if (!hasProviderId(PROVIDERS, state.visionProviderId)) {
+    state.visionProviderId = state.providerId || ('openai' as ProviderId);
+  }
+
+  if (!hasProviderId(PROVIDERS, state.ocrProviderId)) {
+    state.ocrProviderId = state.visionProviderId || state.providerId || ('openai' as ProviderId);
+  }
 }
 
 /**
@@ -548,7 +566,9 @@ export const useSettingsStore = create<SettingsState>()(
         // Initial state (use migrated data if available)
         providerId: migratedData?.providerId || 'openai',
         modelId: migratedData?.modelId || '',
+        visionProviderId: migratedData?.providerId || 'openai',
         visionModelId: '',
+        ocrProviderId: migratedData?.providerId || 'openai',
         ocrModelId: '',
         providersConfig: migratedData?.providersConfig || getDefaultProvidersConfig(),
         ttsModel: migratedData?.ttsModel || 'openai-tts',
@@ -596,7 +616,11 @@ export const useSettingsStore = create<SettingsState>()(
         // Actions
         setProvider: (providerId) => set({ providerId }),
         setModel: (providerId, modelId) => set({ providerId, modelId }),
+        setVisionProvider: (providerId) => set({ visionProviderId: providerId }),
+        setVisionModel: (providerId, modelId) => set({ visionProviderId: providerId, visionModelId: modelId }),
         setVisionModelId: (modelId) => set({ visionModelId: modelId }),
+        setOcrProvider: (providerId) => set({ ocrProviderId: providerId }),
+        setOcrModel: (providerId, modelId) => set({ ocrProviderId: providerId, ocrModelId: modelId }),
         setOcrModelId: (modelId) => set({ ocrModelId: modelId }),
 
         setProviderConfig: (providerId, config) =>
@@ -1338,6 +1362,20 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if ((state as Record<string, unknown>).autoAgentCount === undefined) {
           (state as Record<string, unknown>).autoAgentCount = 3;
+        }
+
+        if ((state as Record<string, unknown>).visionProviderId === undefined) {
+          (state as Record<string, unknown>).visionProviderId = state.providerId || 'openai';
+        }
+        if ((state as Record<string, unknown>).ocrProviderId === undefined) {
+          (state as Record<string, unknown>).ocrProviderId =
+            (state as Record<string, unknown>).visionProviderId || state.providerId || 'openai';
+        }
+        if ((state as Record<string, unknown>).visionModelId === undefined) {
+          (state as Record<string, unknown>).visionModelId = '';
+        }
+        if ((state as Record<string, unknown>).ocrModelId === undefined) {
+          (state as Record<string, unknown>).ocrModelId = '';
         }
 
         // Migrate Web Search: old flat fields → new provider-based config

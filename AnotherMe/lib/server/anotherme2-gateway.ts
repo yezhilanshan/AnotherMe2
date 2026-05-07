@@ -310,6 +310,14 @@ export async function createAnotherMe2ProblemVideoJob(params: {
   baseUrl?: string;
   providerType?: string;
   requiresApiKey?: boolean;
+  visionApiKey?: string;
+  visionBaseUrl?: string;
+  visionProviderType?: string;
+  visionRequiresApiKey?: boolean;
+  ocrApiKey?: string;
+  ocrBaseUrl?: string;
+  ocrProviderType?: string;
+  ocrRequiresApiKey?: boolean;
   outputProfile?: '1080p';
   userId?: string;
   learnerSessionId?: string;
@@ -331,7 +339,13 @@ export async function createAnotherMe2ProblemVideoJob(params: {
     params.baseUrl?.trim() ||
     params.providerType?.trim() ||
     params.visionModel?.trim() ||
-    params.ocrModel?.trim()
+    params.ocrModel?.trim() ||
+    params.visionApiKey?.trim() ||
+    params.visionBaseUrl?.trim() ||
+    params.visionProviderType?.trim() ||
+    params.ocrApiKey?.trim() ||
+    params.ocrBaseUrl?.trim() ||
+    params.ocrProviderType?.trim()
   ) {
     payload.llm_config = {
       ...(params.model?.trim() ? { model: params.model.trim() } : {}),
@@ -341,6 +355,14 @@ export async function createAnotherMe2ProblemVideoJob(params: {
       ...(params.baseUrl?.trim() ? { base_url: params.baseUrl.trim() } : {}),
       ...(params.providerType?.trim() ? { provider_type: params.providerType.trim() } : {}),
       ...(typeof params.requiresApiKey === 'boolean' ? { requires_api_key: params.requiresApiKey } : {}),
+      ...(params.visionApiKey?.trim() ? { vision_api_key: params.visionApiKey.trim() } : {}),
+      ...(params.visionBaseUrl?.trim() ? { vision_base_url: params.visionBaseUrl.trim() } : {}),
+      ...(params.visionProviderType?.trim() ? { vision_provider_type: params.visionProviderType.trim() } : {}),
+      ...(typeof params.visionRequiresApiKey === 'boolean' ? { vision_requires_api_key: params.visionRequiresApiKey } : {}),
+      ...(params.ocrApiKey?.trim() ? { ocr_api_key: params.ocrApiKey.trim() } : {}),
+      ...(params.ocrBaseUrl?.trim() ? { ocr_base_url: params.ocrBaseUrl.trim() } : {}),
+      ...(params.ocrProviderType?.trim() ? { ocr_provider_type: params.ocrProviderType.trim() } : {}),
+      ...(typeof params.ocrRequiresApiKey === 'boolean' ? { ocr_requires_api_key: params.ocrRequiresApiKey } : {}),
     };
   }
   if (params.userId?.trim()) {

@@ -189,13 +189,15 @@ export default function SettingsPage() {
 
   const providerId = useSettingsStore((s) => s.providerId);
   const modelId = useSettingsStore((s) => s.modelId);
+  const visionProviderId = useSettingsStore((s) => s.visionProviderId);
   const visionModelId = useSettingsStore((s) => s.visionModelId);
+  const ocrProviderId = useSettingsStore((s) => s.ocrProviderId);
   const ocrModelId = useSettingsStore((s) => s.ocrModelId);
   const providersConfig = useSettingsStore((s) => s.providersConfig);
   const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
   const setModel = useSettingsStore((s) => s.setModel);
-  const setVisionModelId = useSettingsStore((s) => s.setVisionModelId);
-  const setOcrModelId = useSettingsStore((s) => s.setOcrModelId);
+  const setVisionModel = useSettingsStore((s) => s.setVisionModel);
+  const setOcrModel = useSettingsStore((s) => s.setOcrModel);
   const fetchServerProviders = useSettingsStore((s) => s.fetchServerProviders);
 
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
@@ -229,11 +231,17 @@ export default function SettingsPage() {
   );
 
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
+  const [selectedVisionProviderId, setSelectedVisionProviderId] = useState<ProviderId>(visionProviderId || providerId);
+  const [selectedOcrProviderId, setSelectedOcrProviderId] = useState<ProviderId>(ocrProviderId || providerId);
   const [modelIdDraft, setModelIdDraft] = useState('');
   const [visionModelIdDraft, setVisionModelIdDraft] = useState('');
   const [ocrModelIdDraft, setOcrModelIdDraft] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [baseUrlDraft, setBaseUrlDraft] = useState('');
+  const [visionApiKeyDraft, setVisionApiKeyDraft] = useState('');
+  const [visionBaseUrlDraft, setVisionBaseUrlDraft] = useState('');
+  const [ocrApiKeyDraft, setOcrApiKeyDraft] = useState('');
+  const [ocrBaseUrlDraft, setOcrBaseUrlDraft] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -263,29 +271,57 @@ export default function SettingsPage() {
     if (!providerIds.includes(selectedProviderId) && providerIds.length > 0) {
       setSelectedProviderId(providerIds[0]);
     }
-  }, [providerIds, selectedProviderId]);
+    if (!providerIds.includes(selectedVisionProviderId) && providerIds.length > 0) {
+      setSelectedVisionProviderId(providerIds[0]);
+    }
+    if (!providerIds.includes(selectedOcrProviderId) && providerIds.length > 0) {
+      setSelectedOcrProviderId(providerIds[0]);
+    }
+  }, [providerIds, selectedOcrProviderId, selectedProviderId, selectedVisionProviderId]);
 
   useEffect(() => {
     const selected = providersConfig[selectedProviderId];
     const fallbackModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
-    const fallbackVisionModelId = resolveDefaultVisionModel(
-      selectedProviderId,
-      selected?.baseUrl || selected?.defaultBaseUrl || '',
-      selected?.models || [],
-      fallbackModelId,
-    );
-    const fallbackOcrModelId = resolveDefaultOcrModel(
-      selectedProviderId,
-      selected?.baseUrl || selected?.defaultBaseUrl || '',
-      fallbackVisionModelId,
-    );
     setApiKeyDraft(selected?.apiKey || '');
     setBaseUrlDraft(selected?.baseUrl || '');
     setModelIdDraft(selectedProviderId === providerId && modelId ? modelId : fallbackModelId);
-    setVisionModelIdDraft(selectedProviderId === providerId && visionModelId ? visionModelId : fallbackVisionModelId);
-    setOcrModelIdDraft(selectedProviderId === providerId && ocrModelId ? ocrModelId : fallbackOcrModelId);
     setTestResult(null);
-  }, [modelId, ocrModelId, providerId, selectedProviderId, providersConfig, visionModelId]);
+  }, [modelId, providerId, selectedProviderId, providersConfig]);
+
+  useEffect(() => {
+    const selected = providersConfig[selectedVisionProviderId];
+    const fallbackTextModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    const fallbackVisionModelId = resolveDefaultVisionModel(
+      selectedVisionProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      selected?.models || [],
+      fallbackTextModelId,
+    );
+    setVisionApiKeyDraft(selected?.apiKey || '');
+    setVisionBaseUrlDraft(selected?.baseUrl || '');
+    setVisionModelIdDraft(
+      selectedVisionProviderId === visionProviderId && visionModelId ? visionModelId : fallbackVisionModelId,
+    );
+  }, [providersConfig, selectedVisionProviderId, visionModelId, visionProviderId]);
+
+  useEffect(() => {
+    const selected = providersConfig[selectedOcrProviderId];
+    const fallbackTextModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    const fallbackVisionModelId = resolveDefaultVisionModel(
+      selectedOcrProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      selected?.models || [],
+      fallbackTextModelId,
+    );
+    const fallbackOcrModelId = resolveDefaultOcrModel(
+      selectedOcrProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      fallbackVisionModelId,
+    );
+    setOcrApiKeyDraft(selected?.apiKey || '');
+    setOcrBaseUrlDraft(selected?.baseUrl || '');
+    setOcrModelIdDraft(selectedOcrProviderId === ocrProviderId && ocrModelId ? ocrModelId : fallbackOcrModelId);
+  }, [ocrModelId, ocrProviderId, providersConfig, selectedOcrProviderId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -358,6 +394,10 @@ export default function SettingsPage() {
 
   const selectedProvider = providersConfig[selectedProviderId];
   const selectedModels = selectedProvider?.models || [];
+  const selectedVisionProvider = providersConfig[selectedVisionProviderId];
+  const selectedVisionModels = selectedVisionProvider?.models || [];
+  const selectedOcrProvider = providersConfig[selectedOcrProviderId];
+  const selectedOcrModels = selectedOcrProvider?.models || [];
 
   const handleSaveProfile = () => {
     setNickname(profileDraft.nickname.trim());
@@ -376,6 +416,10 @@ export default function SettingsPage() {
     if (!selectedProvider) return;
     const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
     const targetProvider = providersConfig[inferredProviderId] || selectedProvider;
+    const inferredVisionProviderId = inferProviderIdFromConnection(selectedVisionProviderId, visionBaseUrlDraft);
+    const visionProvider = providersConfig[inferredVisionProviderId] || providersConfig[selectedVisionProviderId];
+    const inferredOcrProviderId = inferProviderIdFromConnection(selectedOcrProviderId, ocrBaseUrlDraft);
+    const ocrProvider = providersConfig[inferredOcrProviderId] || providersConfig[selectedOcrProviderId];
     const targetModelIds = new Set([
       ...(targetProvider.models?.map((model) => model.id) || []),
       ...(targetProvider.serverModels || []),
@@ -391,26 +435,36 @@ export default function SettingsPage() {
       targetProvider.models?.[0]?.id ||
       targetProvider.serverModels?.[0] ||
       '';
+    const targetVisionModelId =
+      visionModelIdDraft.trim() ||
+      resolveDefaultVisionModel(
+        inferredVisionProviderId,
+        visionBaseUrlDraft,
+        visionProvider?.models || [],
+        visionProvider?.models?.[0]?.id || visionProvider?.serverModels?.[0] || targetModelId,
+      );
+    const targetOcrModelId =
+      ocrModelIdDraft.trim() ||
+      resolveDefaultOcrModel(inferredOcrProviderId, ocrBaseUrlDraft, targetVisionModelId);
 
     setProviderConfig(inferredProviderId, {
       apiKey: apiKeyDraft.trim(),
       baseUrl: baseUrlDraft.trim(),
     });
+    setProviderConfig(inferredVisionProviderId, {
+      apiKey: visionApiKeyDraft.trim(),
+      baseUrl: visionBaseUrlDraft.trim(),
+    });
+    setProviderConfig(inferredOcrProviderId, {
+      apiKey: ocrApiKeyDraft.trim(),
+      baseUrl: ocrBaseUrlDraft.trim(),
+    });
     setSelectedProviderId(inferredProviderId);
+    setSelectedVisionProviderId(inferredVisionProviderId);
+    setSelectedOcrProviderId(inferredOcrProviderId);
     setModel(inferredProviderId, targetModelId);
-    setVisionModelId(
-      visionModelIdDraft.trim() ||
-        resolveDefaultVisionModel(inferredProviderId, baseUrlDraft, targetProvider.models || [], targetModelId),
-    );
-    setOcrModelId(
-      ocrModelIdDraft.trim() ||
-        resolveDefaultOcrModel(
-          inferredProviderId,
-          baseUrlDraft,
-          visionModelIdDraft.trim() ||
-            resolveDefaultVisionModel(inferredProviderId, baseUrlDraft, targetProvider.models || [], targetModelId),
-        ),
-    );
+    setVisionModel(inferredVisionProviderId, targetVisionModelId);
+    setOcrModel(inferredOcrProviderId, targetOcrModelId);
     setAiSaved(true);
     window.setTimeout(() => setAiSaved(false), 1500);
   };
@@ -985,42 +1039,128 @@ export default function SettingsPage() {
                           </datalist>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                              <Eye className="h-4 w-4 text-gray-400" />
-                              视觉模型
-                            </label>
-                            <input
-                              type="text"
-                              list={`models-${selectedProviderId}`}
-                              value={visionModelIdDraft}
-                              onChange={(e) => setVisionModelIdDraft(e.target.value)}
-                              placeholder="qwen3-vl-plus"
-                              className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              用于拍题图片理解和几何信息识别。
-                            </p>
+                        <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-4">
+                          <div className="flex items-center gap-2">
+                            <Eye className="h-4 w-4 text-violet-500" />
+                            <h4 className="text-sm font-semibold text-foreground">视觉识别配置</h4>
                           </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">提供商</label>
+                              <select
+                                value={selectedVisionProviderId}
+                                onChange={(e) => setSelectedVisionProviderId(e.target.value as ProviderId)}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              >
+                                {providerIds.map((id) => (
+                                  <option key={id} value={id}>
+                                    {providersConfig[id]?.name || id}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">视觉模型</label>
+                              <input
+                                type="text"
+                                list={`models-vision-${selectedVisionProviderId}`}
+                                value={visionModelIdDraft}
+                                onChange={(e) => setVisionModelIdDraft(e.target.value)}
+                                placeholder={selectedVisionModels.find((model) => model.capabilities?.vision)?.id || 'qwen3-vl-plus'}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                              <datalist id={`models-vision-${selectedVisionProviderId}`}>
+                                {selectedVisionModels.map((model) => (
+                                  <option key={model.id} value={model.id}>
+                                    {model.name || model.id}
+                                  </option>
+                                ))}
+                              </datalist>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">视觉 API Key</label>
+                              <input
+                                type={showApiKey ? 'text' : 'password'}
+                                value={visionApiKeyDraft}
+                                onChange={(e) => setVisionApiKeyDraft(e.target.value)}
+                                placeholder="未填写时使用该提供商已有配置"
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">视觉 Base URL</label>
+                              <input
+                                type="url"
+                                value={visionBaseUrlDraft}
+                                onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
+                                placeholder={selectedVisionProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">用于拍题图片理解和几何信息识别。</p>
+                        </div>
 
-                          <div className="space-y-2">
-                            <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-gray-400" />
-                              OCR 模型
-                            </label>
-                            <input
-                              type="text"
-                              list={`models-${selectedProviderId}`}
-                              value={ocrModelIdDraft}
-                              onChange={(e) => setOcrModelIdDraft(e.target.value)}
-                              placeholder="qwen-vl-ocr-latest"
-                              className="w-full px-4 py-3 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              用于题目文字识别，可与视觉模型分开配置。
-                            </p>
+                        <div className="rounded-xl border border-border bg-muted/30 p-4 space-y-4">
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-violet-500" />
+                            <h4 className="text-sm font-semibold text-foreground">OCR 配置</h4>
                           </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">提供商</label>
+                              <select
+                                value={selectedOcrProviderId}
+                                onChange={(e) => setSelectedOcrProviderId(e.target.value as ProviderId)}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              >
+                                {providerIds.map((id) => (
+                                  <option key={id} value={id}>
+                                    {providersConfig[id]?.name || id}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">OCR 模型</label>
+                              <input
+                                type="text"
+                                list={`models-ocr-${selectedOcrProviderId}`}
+                                value={ocrModelIdDraft}
+                                onChange={(e) => setOcrModelIdDraft(e.target.value)}
+                                placeholder={isQwenConnection(selectedOcrProviderId, ocrBaseUrlDraft) ? 'qwen-vl-ocr-latest' : selectedOcrModels[0]?.id || '请输入 OCR 模型 ID'}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                              <datalist id={`models-ocr-${selectedOcrProviderId}`}>
+                                {selectedOcrModels.map((model) => (
+                                  <option key={model.id} value={model.id}>
+                                    {model.name || model.id}
+                                  </option>
+                                ))}
+                              </datalist>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">OCR API Key</label>
+                              <input
+                                type={showApiKey ? 'text' : 'password'}
+                                value={ocrApiKeyDraft}
+                                onChange={(e) => setOcrApiKeyDraft(e.target.value)}
+                                placeholder="未填写时使用该提供商已有配置"
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium text-foreground">OCR Base URL</label>
+                              <input
+                                type="url"
+                                value={ocrBaseUrlDraft}
+                                onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
+                                placeholder={selectedOcrProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
+                                className="w-full px-4 py-3 bg-background border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">用于题目文字识别，可与视觉模型使用不同提供商。</p>
                         </div>
                       </div>
 

@@ -1187,6 +1187,14 @@ export default function AITutorPage() {
             ocrModel: modelConfig.ocrModelString || undefined,
             providerType: modelConfig.providerType || undefined,
             requiresApiKey: modelConfig.requiresApiKey,
+            visionApiKey: modelConfig.visionApiKey || undefined,
+            visionBaseUrl: modelConfig.visionBaseUrl || undefined,
+            visionProviderType: modelConfig.visionProviderType || undefined,
+            visionRequiresApiKey: modelConfig.visionRequiresApiKey,
+            ocrApiKey: modelConfig.ocrApiKey || undefined,
+            ocrBaseUrl: modelConfig.ocrBaseUrl || undefined,
+            ocrProviderType: modelConfig.ocrProviderType || undefined,
+            ocrRequiresApiKey: modelConfig.ocrRequiresApiKey,
           }
         : {
             messages: toRequestMessages(snapshotMessages.slice(0, -1)),

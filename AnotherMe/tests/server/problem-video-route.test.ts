@@ -58,8 +58,12 @@ describe('problem-video routes', () => {
     formData.append('model', 'qwen:qwen3.5-flash');
     formData.append('visionModel', 'qwen:qwen3-vl-plus');
     formData.append('ocrModel', 'qwen:qwen-vl-ocr-latest');
-    formData.append('apiKey', 'dashscope-key');
-    formData.append('baseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+    formData.append('apiKey', 'openai-key');
+    formData.append('baseUrl', 'https://api.openai.com/v1');
+    formData.append('visionApiKey', 'dashscope-vision-key');
+    formData.append('visionBaseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+    formData.append('ocrApiKey', 'dashscope-ocr-key');
+    formData.append('ocrBaseUrl', 'https://dashscope.aliyuncs.com/compatible-mode/v1');
 
     const response = await POST(
       new NextRequest('http://localhost/api/problem-video', {
@@ -82,8 +86,12 @@ describe('problem-video routes', () => {
       model: 'qwen:qwen3.5-flash',
       vision_model: 'qwen:qwen3-vl-plus',
       ocr_model: 'qwen:qwen-vl-ocr-latest',
-      api_key: 'dashscope-key',
-      base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      api_key: 'openai-key',
+      base_url: 'https://api.openai.com/v1',
+      vision_api_key: 'dashscope-vision-key',
+      vision_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      ocr_api_key: 'dashscope-ocr-key',
+      ocr_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     });
   });
 

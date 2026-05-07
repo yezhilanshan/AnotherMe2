@@ -857,6 +857,26 @@ export default function PhotoToVideoPage() {
         formData.append('providerType', modelConfig.providerType);
       }
       formData.append('requiresApiKey', modelConfig.requiresApiKey ? 'true' : 'false');
+      if (modelConfig.visionApiKey) {
+        formData.append('visionApiKey', modelConfig.visionApiKey);
+      }
+      if (modelConfig.visionBaseUrl) {
+        formData.append('visionBaseUrl', modelConfig.visionBaseUrl);
+      }
+      if (modelConfig.visionProviderType) {
+        formData.append('visionProviderType', modelConfig.visionProviderType);
+      }
+      formData.append('visionRequiresApiKey', modelConfig.visionRequiresApiKey ? 'true' : 'false');
+      if (modelConfig.ocrApiKey) {
+        formData.append('ocrApiKey', modelConfig.ocrApiKey);
+      }
+      if (modelConfig.ocrBaseUrl) {
+        formData.append('ocrBaseUrl', modelConfig.ocrBaseUrl);
+      }
+      if (modelConfig.ocrProviderType) {
+        formData.append('ocrProviderType', modelConfig.ocrProviderType);
+      }
+      formData.append('ocrRequiresApiKey', modelConfig.ocrRequiresApiKey ? 'true' : 'false');
 
       const createResp = await fetch('/api/problem-video', {
         method: 'POST',
