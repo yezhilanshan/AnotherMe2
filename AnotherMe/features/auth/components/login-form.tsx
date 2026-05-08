@@ -13,8 +13,8 @@ interface AuthResponse {
 export function LoginForm() {
   const router = useRouter();
   const { refresh } = useAuth();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('admin@example.com');
+  const [password, setPassword] = useState('yzx@12345678');
   const [errorText, setErrorText] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -59,7 +59,7 @@ export function LoginForm() {
           onChange={(event) => setEmail(event.target.value)}
           required
           className="w-full h-11 px-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
-          placeholder="you@example.com"
+          placeholder="admin@example.com"
         />
       </div>
 
@@ -72,7 +72,7 @@ export function LoginForm() {
           required
           minLength={8}
           className="w-full h-11 px-3 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
-          placeholder="至少 8 位"
+          placeholder="yzx@12345678"
         />
       </div>
 
