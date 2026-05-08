@@ -45,6 +45,22 @@ class VisionAgent(BaseAgent):
         self.debug_exceptions = bool(config.get("debug_exceptions", False))
         self.geometry_fact_compiler = GeometryFactCompiler()
         self.coordinate_scene_compiler = CoordinateSceneCompiler()
+        self._init_paddleocr(config)
+
+    def _init_paddleocr(self, config: Dict[str, Any]) -> None:
+        self.paddleocr_engine = None
+        ocr_engine = str(config.get("ocr_engine", "llm")).strip().lower()
+        if ocr_engine == "paddleocr":
+            try:
+                from paddleocr import PaddleOCR
+
+                self.paddleocr_engine = PaddleOCR(
+                    use_angle_cls=True,
+                    lang="ch",
+                    show_log=False,
+                )
+            except Exception as exc:
+                self._record_debug_issue("paddleocr_init", exc)
 
     def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
         project = state["project"]
@@ -2231,6 +2247,14 @@ Return exactly:
         return str(raw or "").replace("′", "'").replace("’", "'").replace("`", "'")
 
     def _extract_problem_text_fallback(self, image_path: str) -> str:
+        if self.paddleocr_engine is not None:
+            try:
+                result = self._run_paddleocr(image_path)
+                self._write_debug_text("vision_problem_text_fallback.txt", result)
+                return result
+            except Exception as exc:
+                self._record_debug_issue("paddleocr_extract", exc)
+
         prompt = (
             "Read the image carefully and transcribe the full OCR text of the math problem. "
             "You must include all visible text in order: title/number, problem statement, known conditions, "
@@ -2240,6 +2264,22 @@ Return exactly:
         result = self.analyze_image(image_path, prompt, model_role="ocr")
         self._write_debug_text("vision_problem_text_fallback.txt", result)
         return str(result or "").strip()
+
+    def _run_paddleocr(self, image_path: str) -> str:
+        if self.paddleocr_engine is None:
+            return ""
+        raw_result = self.paddleocr_engine.ocr(image_path, cls=True)
+        lines: List[str] = []
+        if isinstance(raw_result, list):
+            for page in raw_result:
+                if not isinstance(page, list):
+                    continue
+                for item in page:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        text = str(item[1] if len(item) == 2 else item[1][0] if isinstance(item[1], (list, tuple)) else "").strip()
+                        if text:
+                            lines.append(text)
+        return "\n".join(lines)
 
     def _extract_geometry_facts_fallback(
         self,

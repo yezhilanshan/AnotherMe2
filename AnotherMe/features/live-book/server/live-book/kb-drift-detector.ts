@@ -1,5 +1,5 @@
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 import type {
   LiveBookChapter,
@@ -73,6 +73,7 @@ async function checkPageWithLLM(
   page: LiveBookPage,
   chapter: LiveBookChapter,
   options?: KBDriftCheckOptions,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<PageDriftReport | null> {
   if (options?.useLLM === false) return null;
 
@@ -104,7 +105,7 @@ ${isZh ? '输出格式' : 'Output format'}:
   "suggestedAction": "none|recompile|review"
 }`;
 
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -147,6 +148,7 @@ ${isZh ? '输出格式' : 'Output format'}:
 export async function detectKBDrift(
   book: LiveBookRecord,
   options?: KBDriftCheckOptions,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<KBDriftReport> {
   const checkedAt = Date.now();
   const pageReports: PageDriftReport[] = [];
@@ -236,7 +238,7 @@ export async function detectKBDrift(
 
     // Check 6: LLM-based content quality check
     if (options?.useLLM !== false && status === 'healthy') {
-      const llmReport = await checkPageWithLLM(book, page, chapter, options);
+      const llmReport = await checkPageWithLLM(book, page, chapter, options, modelConfig);
       if (llmReport && llmReport.status !== 'healthy') {
         status = llmReport.status;
         reasons.push(...llmReport.reasons);
@@ -318,7 +320,10 @@ export async function detectKBDrift(
 }
 
 // Quick check function for health endpoint
-export async function quickDriftCheck(book: LiveBookRecord): Promise<{
+export async function quickDriftCheck(
+  book: LiveBookRecord,
+  modelConfig?: LiveBookModelConfig,
+): Promise<{
   ok: boolean;
   stalePageIds: string[];
   driftedPageIds: string[];
@@ -329,7 +334,7 @@ export async function quickDriftCheck(book: LiveBookRecord): Promise<{
     checkSources: true,
     checkKB: false,
     useLLM: false,
-  });
+  }, modelConfig);
 
   return {
     ok: report.overallStatus === 'healthy',

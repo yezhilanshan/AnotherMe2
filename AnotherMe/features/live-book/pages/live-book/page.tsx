@@ -39,12 +39,25 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import {
   createInitialProgressState,
   liveBookProgressReducer,
 } from '@/lib/live-book/progress-reducer';
 import { LiveBookProgressTimeline, type ProgressCounters } from '@/features/live-book/components/live-book/live-book-progress-timeline';
 import { LiveBookSourcePicker, type LiveBookSourceInput } from './live-book-source-picker';
+
+function getLiveBookHeaders(): HeadersInit {
+  const config = getCurrentModelConfig();
+  return {
+    'Content-Type': 'application/json',
+    'x-model': config.modelString || '',
+    'x-api-key': config.apiKey || '',
+    'x-base-url': config.baseUrl || '',
+    'x-provider-type': config.providerType || '',
+    'x-requires-api-key': String(config.requiresApiKey ?? false),
+  };
+}
 
 type LiveBookStatus = 'draft' | 'spine_ready' | 'compiling' | 'ready' | 'failed';
 type BlockType =
@@ -823,7 +836,7 @@ export default function LiveBookPage() {
       const payload = await parseApi<{ book: LiveBookRecord }>(
         await fetch('/api/live-book/create', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getLiveBookHeaders(),
           body: JSON.stringify({
             topic: form.topic,
             language: form.language,
@@ -850,7 +863,7 @@ export default function LiveBookPage() {
       const proposalPayload = await parseApi<{ book: LiveBookRecord }>(
         await fetch('/api/live-book/confirm-proposal', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getLiveBookHeaders(),
           body: JSON.stringify({ bookId: detail.id }),
         }),
       );
@@ -873,7 +886,7 @@ export default function LiveBookPage() {
       const payload = await parseApi<{ book: LiveBookRecord }>(
         await fetch('/api/live-book/confirm-spine', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getLiveBookHeaders(),
           body: JSON.stringify({ bookId: detail.id }),
         }),
       );
@@ -903,7 +916,7 @@ export default function LiveBookPage() {
     const payload = await parseApi<{ book: LiveBookRecord }>(
       await fetch(`/api/live-book/books/${encodeURIComponent(detail.id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getLiveBookHeaders(),
         body: JSON.stringify({ chapterOrder: swapped.map((item) => item.id) }),
       }),
     );
@@ -918,7 +931,7 @@ export default function LiveBookPage() {
     const payload = await parseApi<{ job: LiveBookJob }>(
       await fetch('/api/live-book/compile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getLiveBookHeaders(),
         body: JSON.stringify({
           bookId: detail.id,
           ...(selectedPage ? { priorityPageId: selectedPage.id } : {}),
@@ -938,7 +951,7 @@ export default function LiveBookPage() {
       const payload = await parseApi<{ book: LiveBookRecord }>(
         await fetch('/api/live-book/compile-page', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getLiveBookHeaders(),
           body: JSON.stringify({ bookId: detail.id, pageId }),
         }),
       );
@@ -977,7 +990,7 @@ export default function LiveBookPage() {
         const payload = await parseApi<{ book: LiveBookRecord }>(
           await fetch('/api/live-book/regenerate-block', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getLiveBookHeaders(),
             body: JSON.stringify({
               bookId: detail.id,
               pageId: args.pageId,
@@ -992,7 +1005,7 @@ export default function LiveBookPage() {
         const payload = await parseApi<{ book: LiveBookRecord }>(
           await fetch(`/api/live-book/books/${encodeURIComponent(detail.id)}/blocks`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getLiveBookHeaders(),
             body: JSON.stringify({
               action,
               pageId: args.pageId,
@@ -1020,7 +1033,7 @@ export default function LiveBookPage() {
     const payload = await parseApi<{ book: LiveBookRecord }>(
       await fetch(`/api/live-book/books/${encodeURIComponent(detail.id)}/quiz-attempt`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getLiveBookHeaders(),
         body: JSON.stringify({
           pageId: selectedPage.id,
           blockId: block.id,
@@ -1050,7 +1063,7 @@ export default function LiveBookPage() {
         `/api/live-book/books/${encodeURIComponent(detail.id)}/chat/stream`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getLiveBookHeaders(),
           body: JSON.stringify({
             pageId: selectedPage.id,
             message: userText,

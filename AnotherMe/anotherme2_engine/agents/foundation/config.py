@@ -97,19 +97,19 @@ GROK_DEFAULT_BASE_URL = "https://api.x.ai/v1"
 # Default models for each provider
 PROVIDER_MODELS = {
     "openai": {
-        "text": "gpt-4o",
-        "vision": "gpt-4o",
-        "ocr": "gpt-4o",
+        "text": "gpt-5.2",
+        "vision": "gpt-5.2",
+        "ocr": "gpt-5.2",
     },
     "anthropic": {
-        "text": "claude-3-5-sonnet-20241022",
-        "vision": "claude-3-5-sonnet-20241022",
-        "ocr": "claude-3-5-sonnet-20241022",
+        "text": "claude-opus-4-6",
+        "vision": "claude-opus-4-6",
+        "ocr": "claude-opus-4-6",
     },
     "gemini": {
-        "text": "gemini-2.0-flash",
-        "vision": "gemini-2.0-flash",
-        "ocr": "gemini-2.0-flash",
+        "text": "gemini-3.1-pro-preview",
+        "vision": "gemini-3.1-pro-preview",
+        "ocr": "gemini-3.1-pro-preview",
     },
     "deepseek": {
         "text": "deepseek-chat",
@@ -122,22 +122,22 @@ PROVIDER_MODELS = {
         "ocr": "qwen-vl-ocr-latest",
     },
     "kimi": {
-        "text": "kimi-k2-5",
-        "vision": "kimi-k2-5",
-        "ocr": "kimi-k2-5",
+        "text": "kimi-k2.5",
+        "vision": "kimi-k2.5",
+        "ocr": "kimi-k2.5",
     },
     "minimax": {
-        "text": "MiniMax-Text-01",
-        "vision": "MiniMax-Text-01",
-        "ocr": "MiniMax-Text-01",
+        "text": "MiniMax-M2.7",
+        "vision": "MiniMax-M2.7",
+        "ocr": "MiniMax-M2.7",
     },
     "glm": {
-        "text": "glm-4-plus",
-        "vision": "glm-4v-plus",
-        "ocr": "glm-4v-plus",
+        "text": "glm-5",
+        "vision": "glm-4.6v",
+        "ocr": "glm-4.6v",
     },
     "siliconflow": {
-        "text": "deepseek-ai/DeepSeek-V3",
+        "text": "deepseek-ai/DeepSeek-V3.2",
         "vision": "Qwen/Qwen2-VL-72B-Instruct",
         "ocr": "Qwen/Qwen2-VL-72B-Instruct",
     },
@@ -147,9 +147,9 @@ PROVIDER_MODELS = {
         "ocr": "doubao-1.5-vision-pro-250328",
     },
     "grok": {
-        "text": "grok-3",
-        "vision": "grok-3",
-        "ocr": "grok-3",
+        "text": "grok-4.20-beta-0309-non-reasoning",
+        "vision": "grok-4.20-beta-0309-non-reasoning",
+        "ocr": "grok-4.20-beta-0309-non-reasoning",
     },
 }
 
@@ -158,7 +158,7 @@ FALLBACK_ARK_API_KEY = os.getenv("ARK_API_KEY", "")
 FALLBACK_ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 FALLBACK_TEXT_MODEL = "doubao-seed-2-0-pro-260215"
 FALLBACK_VISION_MODEL = "doubao-1.5-vision-pro-250328"
-FALLBACK_OCR_MODEL = FALLBACK_VISION_MODEL
+FALLBACK_OCR_MODEL = "doubao-1.5-vision-pro-250328"
 
 
 # Provider detection priority (first match wins)
@@ -354,10 +354,18 @@ def build_ocr_config_from_env(
     max_tokens: int = 4096,
 ) -> Dict[str, Any]:
     """Build OCR model config by auto-detecting provider from environment."""
+    ocr_engine = os.getenv("OCR_ENGINE", "llm").strip().lower()
+    if ocr_engine == "paddleocr":
+        return {
+            "ocr_engine": "paddleocr",
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
     provider = _detect_provider()
     if not provider:
         return build_ocr_model_config()
-    
+
     return {
         "api_key": _get_provider_api_key(provider),
         "base_url": _get_provider_base_url(provider),
@@ -388,6 +396,13 @@ def build_vision_model_config() -> Dict[str, Any]:
 
 
 def build_ocr_model_config() -> Dict[str, Any]:
+    ocr_engine = os.getenv("OCR_ENGINE", "llm").strip().lower()
+    if ocr_engine == "paddleocr":
+        return {
+            "ocr_engine": "paddleocr",
+            "temperature": 0.0,
+            "max_tokens": 4096,
+        }
     return {
         "api_key": _vision_api_key(),
         "base_url": _vision_base_url(),

@@ -10,7 +10,7 @@ import { generateLLMBridgeText } from './bridge-text-generator';
 import { selectEvidenceAnchors } from './source-registry';
 import { createLogger } from '@/lib/logger';
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 
 export type CompilerPageStatus = 'ready' | 'partial' | 'error';
 
@@ -23,6 +23,7 @@ export interface BlockGeneratorInput {
   transitionIn?: string;
   previousBlock?: LiveBookBlock;
   bridgeText?: string;
+  modelConfig?: LiveBookModelConfig;
 }
 
 export interface BlockGeneratorOutput {
@@ -223,7 +224,7 @@ async function generateLLMBlockOutput(
   if (!shouldUseLLMBlockGeneration()) return null;
 
   try {
-    const resolved = resolveModel({});
+    const resolved = resolveLiveBookModel(input.modelConfig);
     const result = await callLLM(
       {
         model: resolved.model,
@@ -1093,6 +1094,7 @@ export class LiveBookCompiler {
     page: LiveBookPage,
     chapter: LiveBookChapter,
     sectionPlan?: SectionPlan,
+    modelConfig?: LiveBookModelConfig,
   ): CompilePageResult {
     const explorationChunks = book.conceptGraphJson?.explorationChunks as
       | Array<Record<string, unknown>>
@@ -1104,6 +1106,7 @@ export class LiveBookCompiler {
       chapter,
       sourceRefs: normalizeSourceRefs({ book, page, chapter, sourceRefs: [], explorationChunks }),
       explorationChunks,
+      modelConfig,
     };
 
     const blockResults: CompiledBlockResult[] = [];
@@ -1257,6 +1260,7 @@ export class LiveBookCompiler {
     options?: {
       onBlockEvent?: BlockEventListener;
       concurrency?: number;
+      modelConfig?: LiveBookModelConfig;
     },
   ): Promise<CompilePageResult> {
     const explorationChunks = book.conceptGraphJson?.explorationChunks as
@@ -1269,6 +1273,7 @@ export class LiveBookCompiler {
       chapter,
       sourceRefs: normalizeSourceRefs({ book, page, chapter, sourceRefs: [], explorationChunks }),
       explorationChunks,
+      modelConfig: options?.modelConfig,
     };
 
     const blockResults: CompiledBlockResult[] = [];

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { confirmLiveBookProposal } from '@/lib/server/live-book-store';
+import { resolveLiveBookModelFromHeaders } from '@/lib/server/live-book-model-config';
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,7 +12,8 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: bookId');
     }
 
-    const book = await confirmLiveBookProposal(bookId);
+    const modelConfig = resolveLiveBookModelFromHeaders(req);
+    const book = await confirmLiveBookProposal(bookId, modelConfig);
     if (!book) {
       return apiError('FILE_NOT_FOUND', 404, 'Live book not found');
     }

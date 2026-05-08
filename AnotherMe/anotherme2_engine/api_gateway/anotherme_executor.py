@@ -55,6 +55,7 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     vision_base_url = str(raw.get("vision_base_url") or raw.get("visionBaseUrl") or "").strip()
     ocr_api_key = str(raw.get("ocr_api_key") or raw.get("ocrApiKey") or "").strip()
     ocr_base_url = str(raw.get("ocr_base_url") or raw.get("ocrBaseUrl") or "").strip()
+    ocr_engine = str(raw.get("ocr_engine") or raw.get("ocrEngine") or "").strip().lower()
     model = _strip_provider_prefix(str(raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
     vision_model = _strip_provider_prefix(str(raw.get("vision_model") or raw.get("visionModel") or ""))
     ocr_model = _strip_provider_prefix(str(raw.get("ocr_model") or raw.get("ocrModel") or ""))
@@ -71,6 +72,8 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
         result["ocr_api_key"] = ocr_api_key
     if ocr_base_url:
         result["ocr_base_url"] = ocr_base_url
+    if ocr_engine:
+        result["ocr_engine"] = ocr_engine
     if model:
         result["model"] = model
     if vision_model:
@@ -176,6 +179,7 @@ def _merge_runtime_configs(
     vision_base_url = str(override.get("vision_base_url") or "").strip()
     ocr_api_key = str(override.get("ocr_api_key") or "").strip()
     ocr_base_url = str(override.get("ocr_base_url") or "").strip()
+    ocr_engine = str(override.get("ocr_engine") or "").strip().lower()
     model = _strip_provider_prefix(str(override.get("model") or ""))
     vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
     ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
@@ -208,6 +212,8 @@ def _merge_runtime_configs(
         ocr_config["api_key"] = ocr_api_key
     if ocr_base_url:
         ocr_config["base_url"] = ocr_base_url
+    if ocr_engine:
+        ocr_config["ocr_engine"] = ocr_engine
     if vision_model:
         vision_config["model"] = vision_model
     if ocr_model:
@@ -217,7 +223,7 @@ def _merge_runtime_configs(
     vision_model_current = str(vision_config.get("model") or "").lower()
     vision_base_url_current = str(vision_config.get("base_url") or "").lower()
     detected_vision_provider = vision_provider or _detect_provider_from_url(vision_base_url_current)
-    
+
     if detected_vision_provider:
         # Check if current vision model is appropriate for the provider
         is_appropriate = False
@@ -227,7 +233,7 @@ def _merge_runtime_configs(
             is_appropriate = "vision" in vision_model_current or "vl" in vision_model_current
         elif detected_vision_provider in ["openai", "anthropic", "gemini"]:
             is_appropriate = _is_vision_capable_model(vision_model_current)
-        
+
         if not is_appropriate:
             vision_config["model"] = _get_default_vision_model(detected_vision_provider, vision_model_current)
 
@@ -235,8 +241,8 @@ def _merge_runtime_configs(
     ocr_model_current = str(ocr_config.get("model") or "").lower()
     ocr_base_url_current = str(ocr_config.get("base_url") or "").lower()
     detected_ocr_provider = ocr_provider or _detect_provider_from_url(ocr_base_url_current) or detected_vision_provider
-    
-    if detected_ocr_provider:
+
+    if detected_ocr_provider and ocr_engine != "paddleocr":
         is_ocr_appropriate = False
         if detected_ocr_provider == "qwen":
             is_ocr_appropriate = "qwen" in ocr_model_current and ("vl" in ocr_model_current or "ocr" in ocr_model_current)
@@ -244,7 +250,7 @@ def _merge_runtime_configs(
             is_ocr_appropriate = "vision" in ocr_model_current
         else:
             is_ocr_appropriate = _is_vision_capable_model(ocr_model_current)
-        
+
         if not is_ocr_appropriate:
             ocr_config["model"] = _get_default_ocr_model(detected_ocr_provider, ocr_model_current)
 

@@ -8,6 +8,9 @@ import { sectionArchitect } from './live-book/section-architect';
 import { createDeepDiveSubpage } from './live-book/deep-dive-engine';
 import { detectKBDrift, quickDriftCheck } from './live-book/kb-drift-detector';
 import { sourceInputToAnchors } from './live-book/source-registry';
+import type { LiveBookModelConfig } from '@/lib/server/live-book-model-config';
+import { resolveLiveBookModel } from '@/lib/server/live-book-model-config';
+import { callLLM } from '@/lib/ai/llm';
 
 const log = createLogger('LiveBookStore');
 
@@ -1153,6 +1156,7 @@ async function runCompileWorkflow(
   jobId: string,
   bookId: string,
   priorityPageId?: string,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<void> {
   const stagePlan: Array<{ stage: LiveBookJobStage; begin: number; end: number; message: string }> =
     [
@@ -1204,6 +1208,7 @@ async function runCompileWorkflow(
         const report = await sourceExplorer.explore({
           book: latestBook,
           topic: latestBook.topic,
+          modelConfig,
         });
         await saveLiveBookExploration({
           bookId,
@@ -1231,7 +1236,7 @@ async function runCompileWorkflow(
         const exploration = explorationRecords[0]?.report;
 
         if (exploration) {
-          const synthesized = await spineSynthesizer.synthesize(latestBook, exploration);
+          const synthesized = await spineSynthesizer.synthesize(latestBook, exploration, modelConfig);
           const chapters = synthesized.chapters
             .sort((a, b) => a.order - b.order)
             .map((chapter, index) => ({ ...chapter, order: index + 1 }));
@@ -1263,7 +1268,7 @@ async function runCompileWorkflow(
           await liveBookEngine.saveBook(synthesizedBook);
 
           // Build section plans using SectionArchitect
-          sectionPlans = await sectionArchitect.planSections(synthesizedBook, exploration);
+          sectionPlans = await sectionArchitect.planSections(synthesizedBook, exploration, modelConfig);
 
           await liveBookEngine.appendJobEvent(jobId, {
             type: 'progress',
@@ -1407,11 +1412,12 @@ async function enqueueBookCompile(
   jobId: string,
   bookId: string,
   priorityPageId?: string,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<void> {
   const existing = bookCompileQueues.get(bookId);
   const next = existing
-    ? existing.then(() => runCompileWorkflow(jobId, bookId, priorityPageId))
-    : runCompileWorkflow(jobId, bookId, priorityPageId);
+    ? existing.then(() => runCompileWorkflow(jobId, bookId, priorityPageId, modelConfig))
+    : runCompileWorkflow(jobId, bookId, priorityPageId, modelConfig);
   bookCompileQueues.set(bookId, next);
   await next;
 }
@@ -1423,6 +1429,7 @@ async function runBackgroundCompilation(
   pageIds: string[],
   sectionPlans: Map<string, import('./live-book/section-architect').SectionPlan>,
   priorityPageId?: string,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<void> {
   const handler = async (task: CompileTask) => {
     const book = await liveBookEngine.getBook(task.bookId);
@@ -1438,6 +1445,7 @@ async function runBackgroundCompilation(
 
     const compiled = await liveBookCompiler.compilePageAsync(book, page, chapter, sectionPlan, {
       concurrency: 1,
+      modelConfig,
     });
 
     const updatedBook: LiveBookRecord = {
@@ -1548,7 +1556,10 @@ export async function getLiveBook(bookId: string): Promise<LiveBookRecord | null
   return liveBookEngine.getBook(bookId);
 }
 
-export async function confirmLiveBookProposal(bookId: string): Promise<LiveBookRecord | null> {
+export async function confirmLiveBookProposal(
+  bookId: string,
+  modelConfig?: LiveBookModelConfig,
+): Promise<LiveBookRecord | null> {
   const book = await liveBookEngine.getBook(bookId);
   if (!book) return null;
 
@@ -1556,6 +1567,7 @@ export async function confirmLiveBookProposal(bookId: string): Promise<LiveBookR
   const exploration = await sourceExplorer.explore({
     book,
     topic: book.topic,
+    modelConfig,
   });
 
   // Store exploration chunks in conceptGraphJson for later use by compiler
@@ -1571,7 +1583,7 @@ export async function confirmLiveBookProposal(bookId: string): Promise<LiveBookR
   });
 
   // Step 2: Spine synthesis with Draft -> Critique -> Revise
-  const synthesized = await spineSynthesizer.synthesize(book, exploration);
+  const synthesized = await spineSynthesizer.synthesize(book, exploration, modelConfig);
   const chapters = synthesized.chapters
     .sort((a, b) => a.order - b.order)
     .map((item, index) => ({ ...item, order: index + 1 }));
@@ -1708,6 +1720,7 @@ export async function reorderLiveBookChapters(
 export async function startLiveBookCompile(
   bookId: string,
   priorityPageId?: string,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<LiveBookJobRecord | null> {
   const book = await liveBookEngine.getBook(bookId);
   if (!book) return null;
@@ -1717,7 +1730,7 @@ export async function startLiveBookCompile(
   if (active) return active;
 
   const job = await liveBookEngine.createJob(bookId);
-  void enqueueBookCompile(job.id, bookId, priorityPageId);
+  void enqueueBookCompile(job.id, bookId, priorityPageId, modelConfig);
   return job;
 }
 
@@ -1725,6 +1738,7 @@ export async function compileLiveBookPage(
   bookId: string,
   pageId: string,
   force = false,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<LiveBookRecord | null> {
   const book = await liveBookEngine.getBook(bookId);
   if (!book) return null;
@@ -1743,12 +1757,13 @@ export async function compileLiveBookPage(
   const exploration = explorationRecords[0]?.report;
   let sectionPlan: import('./live-book/section-architect').SectionPlan | undefined;
   if (exploration) {
-    const sectionPlans = await sectionArchitect.planSections(book, exploration);
+    const sectionPlans = await sectionArchitect.planSections(book, exploration, modelConfig);
     sectionPlan = sectionPlans.get(chapter.id);
   }
 
   const compiled = await liveBookCompiler.compilePageAsync(book, page, chapter, sectionPlan, {
     concurrency: 1,
+    modelConfig,
   });
   const next: LiveBookRecord = {
     ...book,
@@ -2021,6 +2036,7 @@ export async function submitLiveBookQuizAttempt(
 export async function chatWithLiveBookPage(
   bookId: string,
   payload: { pageId: string; message: string },
+  modelConfig?: LiveBookModelConfig,
 ): Promise<{ book: LiveBookRecord; reply: string } | null> {
   const book = await liveBookEngine.getBook(bookId);
   if (!book) return null;
@@ -2044,7 +2060,35 @@ export async function chatWithLiveBookPage(
   let pages = [...book.pages];
   const chapters = [...book.chapters];
   let quality = { ...book.quality };
-  let reply = `基于当前页面，我建议先抓住「${book.topic}」的核心判定条件，再验证每一步推理是否闭环。`;
+  const isZh = book.language === 'zh-CN';
+  let reply = '';
+
+  // Use LLM for general chat
+  try {
+    const model = resolveLiveBookModel(modelConfig).model;
+    const pageSummary = page.blocks.map((b) => `[${b.type}] ${b.title}: ${b.content.slice(0, 200)}`).join('\n');
+    const chapterContext = chapter ? `章节「${chapter.title}」目标：${chapter.goal}` : '';
+
+    const result = await callLLM(
+      {
+        model,
+        system: isZh
+          ? `你是一位专业的学习助手，正在帮助学生学习「${book.topic}」。请根据当前页面内容回答学生的问题，保持教学语气，简洁明了。`
+          : `You are a professional learning assistant helping students study "${book.topic}". Answer the student's question based on the current page content. Keep an instructional tone, be concise.`,
+        prompt: `${chapterContext}\n\n当前页面内容：\n${pageSummary}\n\n学生问题：${payload.message}`,
+        maxOutputTokens: 1024,
+        temperature: 0.4,
+      },
+      'live-book-chat',
+      { retries: 1, validate: (text) => text.trim().length > 5 },
+    );
+    reply = result.text.trim();
+  } catch (error) {
+    log.warn('Live-book chat LLM failed, using fallback reply', error);
+    reply = isZh
+      ? `关于「${payload.message}」，建议参考当前页面的核心内容进行思考。如需深入探讨，请继续追问。`
+      : `Regarding "${payload.message}", I suggest reviewing the core content on the current page. Feel free to ask follow-up questions for deeper exploration.`;
+  }
 
   if (needsDeepDive) {
     // Try creating a deep dive subpage first
@@ -2058,6 +2102,7 @@ export async function chatWithLiveBookPage(
         order: page.order,
       },
       triggerQuestion: payload.message,
+      modelConfig,
     });
 
     if (deepDiveResult) {
@@ -2118,8 +2163,9 @@ function splitReplyIntoChunks(reply: string): string[] {
 export async function chatWithLiveBookPageStream(
   bookId: string,
   payload: { pageId: string; message: string },
+  modelConfig?: LiveBookModelConfig,
 ): Promise<{ chunks: string[]; finalReply: string; book: LiveBookRecord } | null> {
-  const result = await chatWithLiveBookPage(bookId, payload);
+  const result = await chatWithLiveBookPage(bookId, payload, modelConfig);
   if (!result) return null;
   return {
     chunks: splitReplyIntoChunks(result.reply),

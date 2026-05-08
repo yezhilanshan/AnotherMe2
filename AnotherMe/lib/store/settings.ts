@@ -36,6 +36,7 @@ export interface SettingsState {
   visionModelId: string;
   ocrProviderId: ProviderId;
   ocrModelId: string;
+  ocrEngine: 'llm' | 'paddleocr';
 
   // Provider configurations (unified JSON storage)
   providersConfig: ProvidersConfig;
@@ -172,6 +173,7 @@ export interface SettingsState {
   setOcrProvider: (providerId: ProviderId) => void;
   setOcrModel: (providerId: ProviderId, modelId: string) => void;
   setOcrModelId: (modelId: string) => void;
+  setOcrEngine: (engine: 'llm' | 'paddleocr') => void;
   setProviderConfig: (providerId: ProviderId, config: Partial<ProvidersConfig[ProviderId]>) => void;
   setProvidersConfig: (config: ProvidersConfig) => void;
   setTtsModel: (model: string) => void;
@@ -570,6 +572,7 @@ export const useSettingsStore = create<SettingsState>()(
         visionModelId: '',
         ocrProviderId: migratedData?.providerId || 'openai',
         ocrModelId: '',
+        ocrEngine: 'llm',
         providersConfig: migratedData?.providersConfig || getDefaultProvidersConfig(),
         ttsModel: migratedData?.ttsModel || 'openai-tts',
         selectedAgentIds: migratedData?.selectedAgentIds || [...DEFAULT_SELECTED_AGENT_IDS],
@@ -622,6 +625,7 @@ export const useSettingsStore = create<SettingsState>()(
         setOcrProvider: (providerId) => set({ ocrProviderId: providerId }),
         setOcrModel: (providerId, modelId) => set({ ocrProviderId: providerId, ocrModelId: modelId }),
         setOcrModelId: (modelId) => set({ ocrModelId: modelId }),
+        setOcrEngine: (engine) => set({ ocrEngine: engine }),
 
         setProviderConfig: (providerId, config) =>
           set((state) => ({
@@ -1376,6 +1380,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if ((state as Record<string, unknown>).ocrModelId === undefined) {
           (state as Record<string, unknown>).ocrModelId = '';
+        }
+        if ((state as Record<string, unknown>).ocrEngine === undefined) {
+          (state as Record<string, unknown>).ocrEngine = 'llm';
         }
 
         // Migrate Web Search: old flat fields → new provider-based config

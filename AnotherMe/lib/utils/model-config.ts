@@ -44,10 +44,6 @@ function stripProviderPrefix(modelId: string) {
   return model?.trim() || value;
 }
 
-function isQwenLike(providerId: ProviderId, baseUrl?: string) {
-  return providerId === 'qwen' || /dashscope|aliyun|aliyuncs/i.test(baseUrl || '');
-}
-
 function resolveTaskModel(params: {
   configuredModelId?: string;
   providerId: ProviderId;
@@ -58,10 +54,6 @@ function resolveTaskModel(params: {
 }) {
   const configuredModelId = stripProviderPrefix(params.configuredModelId || '');
   if (configuredModelId) return configuredModelId;
-
-  if (isQwenLike(params.providerId, params.baseUrl)) {
-    return params.kind === 'ocr' ? 'qwen-vl-ocr-latest' : 'qwen3-vl-plus';
-  }
 
   const visionModel = params.models.find((model) => model.capabilities?.vision)?.id;
   return visionModel || params.fallbackModelId;

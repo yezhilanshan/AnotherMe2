@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { chatWithLiveBookPage } from '@/lib/server/live-book-store';
+import { resolveLiveBookModelFromHeaders } from '@/lib/server/live-book-model-config';
 
 interface Params {
   params: Promise<{ bookId: string }>;
@@ -21,7 +22,8 @@ export async function POST(req: NextRequest, context: Params) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required fields: pageId/message');
     }
 
-    const result = await chatWithLiveBookPage(bookId, { pageId, message });
+    const modelConfig = resolveLiveBookModelFromHeaders(req);
+    const result = await chatWithLiveBookPage(bookId, { pageId, message }, modelConfig);
     if (!result) {
       return apiError('FILE_NOT_FOUND', 404, 'Live book or page not found');
     }

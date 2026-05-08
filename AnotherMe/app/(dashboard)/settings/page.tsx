@@ -193,11 +193,13 @@ export default function SettingsPage() {
   const visionModelId = useSettingsStore((s) => s.visionModelId);
   const ocrProviderId = useSettingsStore((s) => s.ocrProviderId);
   const ocrModelId = useSettingsStore((s) => s.ocrModelId);
+  const ocrEngine = useSettingsStore((s) => s.ocrEngine);
   const providersConfig = useSettingsStore((s) => s.providersConfig);
   const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
   const setModel = useSettingsStore((s) => s.setModel);
   const setVisionModel = useSettingsStore((s) => s.setVisionModel);
   const setOcrModel = useSettingsStore((s) => s.setOcrModel);
+  const setOcrEngine = useSettingsStore((s) => s.setOcrEngine);
   const fetchServerProviders = useSettingsStore((s) => s.fetchServerProviders);
 
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
@@ -472,6 +474,7 @@ export default function SettingsPage() {
     setModel(inferredProviderId, targetModelId);
     setVisionModel(inferredVisionProviderId, targetVisionModelId);
     setOcrModel(inferredOcrProviderId, targetOcrModelId);
+    setOcrEngine(ocrEngine);
     setAiSaved(true);
     window.setTimeout(() => setAiSaved(false), 1500);
   };
@@ -1200,7 +1203,18 @@ export default function SettingsPage() {
                                       <FileText className="h-3 w-3 text-violet-500" />
                                       OCR 识别配置
                                     </h4>
-                                    {/* OCR Provider & Model */}
+                                    {/* OCR Engine Selector */}
+                                    <select
+                                      value={ocrEngine}
+                                      onChange={(e) => setOcrEngine(e.target.value as 'llm' | 'paddleocr')}
+                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm w-full"
+                                    >
+                                      <option value="llm">LLM OCR (云端)</option>
+                                      <option value="paddleocr">PaddleOCR (本地)</option>
+                                    </select>
+                                    {/* OCR Provider & Model - Only show for LLM OCR */}
+                                    {ocrEngine === 'llm' && (
+                                      <>
                                     <div className="grid grid-cols-2 gap-2">
                                       <select
                                         value={selectedOcrProviderId}
@@ -1248,6 +1262,13 @@ export default function SettingsPage() {
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       />
                                     </div>
+                                      </>
+                                    )}
+                                    {ocrEngine === 'paddleocr' && (
+                                      <div className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
+                                        PaddleOCR 是本地 OCR 引擎，无需配置 API Key。请确保服务器已安装并启动 PaddleOCR 服务。
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </motion.div>

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { compileLiveBookPage } from '@/lib/server/live-book-store';
+import { resolveLiveBookModelFromHeaders } from '@/lib/server/live-book-model-config';
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,7 +18,8 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: bookId/pageId');
     }
 
-    const book = await compileLiveBookPage(bookId, pageId, Boolean(body.force));
+    const modelConfig = resolveLiveBookModelFromHeaders(req);
+    const book = await compileLiveBookPage(bookId, pageId, Boolean(body.force), modelConfig);
     if (!book) {
       return apiError('FILE_NOT_FOUND', 404, 'Live book or page not found');
     }

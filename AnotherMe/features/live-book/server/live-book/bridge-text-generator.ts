@@ -1,5 +1,5 @@
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 import type { LiveBookBlock, LiveBookChapter, LiveBookRecord } from '@/lib/server/live-book-store';
 
@@ -49,9 +49,12 @@ ${isZh ? '任务' : 'Task'}: ${isZh ? '请写一句简短（30-60字）的过渡
 ${isZh ? '请只输出过渡语本身，不要加引号或其他格式。' : 'Output only the transition text itself, without quotes or formatting.'}`;
 }
 
-export async function generateLLMBridgeText(input: BridgeTextInput): Promise<string | null> {
+export async function generateLLMBridgeText(
+  input: BridgeTextInput,
+  modelConfig?: LiveBookModelConfig,
+): Promise<string | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,

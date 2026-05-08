@@ -4,7 +4,7 @@ import type {
   LiveBookRecord,
 } from '@/lib/server/live-book-store';
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SpineSynthesizer');
@@ -313,9 +313,13 @@ function safeJsonParse<T>(text: string): T | null {
   }
 }
 
-async function callLLMSpineDraft(topic: string, exploration: LiveBookExplorationReport): Promise<LLMSpineDraft | null> {
+async function callLLMSpineDraft(
+  topic: string,
+  exploration: LiveBookExplorationReport,
+  modelConfig?: LiveBookModelConfig,
+): Promise<LLMSpineDraft | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -334,9 +338,13 @@ async function callLLMSpineDraft(topic: string, exploration: LiveBookExploration
   }
 }
 
-async function callLLMCritique(draft: LLMSpineDraft, topic: string): Promise<{ issues: string[]; suggestions: string[]; verdict?: string } | null> {
+async function callLLMCritique(
+  draft: LLMSpineDraft,
+  topic: string,
+  modelConfig?: LiveBookModelConfig,
+): Promise<{ issues: string[]; suggestions: string[]; verdict?: string } | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -359,9 +367,10 @@ async function callLLMRevise(
   draft: LLMSpineDraft,
   critique: { issues: string[]; suggestions: string[] },
   topic: string,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<LLMSpineDraft | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -708,24 +717,28 @@ function buildChapterMap(
 // ---------------------------------------------------------------------------
 
 export class SpineSynthesizer {
-  async synthesize(book: LiveBookRecord, exploration: LiveBookExplorationReport): Promise<SynthesizedSpine> {
+  async synthesize(
+    book: LiveBookRecord,
+    exploration: LiveBookExplorationReport,
+    modelConfig?: LiveBookModelConfig,
+  ): Promise<SynthesizedSpine> {
     const topic = (book.topic || '').trim() || '未命名主题';
 
     // Attempt 1: LLM-first draft
-    const draft = await callLLMSpineDraft(topic, exploration);
+    const draft = await callLLMSpineDraft(topic, exploration, modelConfig);
 
     if (draft && draft.chapters && draft.chapters.length > 0) {
       // Validate and fix
       const { draft: fixedDraft, issues: validationIssues } = validateAndFixDraft(draft);
 
       // Attempt critique (optional)
-      const critique = await callLLMCritique(fixedDraft, topic);
+      const critique = await callLLMCritique(fixedDraft, topic, modelConfig);
       const critiqueIssues = critique?.issues || [];
 
       // Attempt revise if critique indicates issues
       let revisedDraft = fixedDraft;
       if (critique && critique.issues && critique.issues.length > 0 && critique.verdict !== 'ok') {
-        const revised = await callLLMRevise(fixedDraft, critique, topic);
+        const revised = await callLLMRevise(fixedDraft, critique, topic, modelConfig);
         if (revised && revised.chapters && revised.chapters.length > 0) {
           const { draft: validatedRevised } = validateAndFixDraft(revised);
           revisedDraft = validatedRevised;

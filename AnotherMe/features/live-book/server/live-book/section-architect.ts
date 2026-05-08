@@ -5,7 +5,7 @@ import type {
   LiveBookRecord,
 } from '@/lib/server/live-book-store';
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SectionArchitect');
@@ -189,9 +189,10 @@ async function callLLMSectionPlans(
   book: LiveBookRecord,
   chapters: LiveBookChapter[],
   exploration: LiveBookExplorationReport,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<SectionPlan[] | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -244,12 +245,13 @@ export class SectionArchitect {
   async planSections(
     book: LiveBookRecord,
     exploration: LiveBookExplorationReport,
+    modelConfig?: LiveBookModelConfig,
   ): Promise<Map<string, SectionPlan>> {
     const chapters = book.chapters;
     if (chapters.length === 0) return new Map();
 
     // Try LLM first
-    const llmPlans = await callLLMSectionPlans(book, chapters, exploration);
+    const llmPlans = await callLLMSectionPlans(book, chapters, exploration, modelConfig);
 
     const result = new Map<string, SectionPlan>();
 

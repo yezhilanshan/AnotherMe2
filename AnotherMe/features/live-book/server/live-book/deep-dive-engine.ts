@@ -1,5 +1,5 @@
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 import type {
   LiveBookBlock,
@@ -18,6 +18,7 @@ export interface DeepDiveSubpageInput {
   triggerQuestion: string;
   triggerBlockId?: string;
   depth?: number; // 0 = first level, 1 = second level, etc.
+  modelConfig?: LiveBookModelConfig;
 }
 
 export interface DeepDiveSubpageResult {
@@ -166,11 +167,11 @@ function generateDeepDiveBlocks(plan: LLMDeepDivePlan, book: LiveBookRecord, par
 
 export async function createDeepDiveSubpage(input: DeepDiveSubpageInput): Promise<DeepDiveSubpageResult | null> {
   try {
-    const { book, parentPage, parentChapter, triggerQuestion, depth = 0 } = input;
+    const { book, parentPage, parentChapter, triggerQuestion, depth = 0, modelConfig } = input;
     const isZh = book.language === 'zh-CN';
 
     // Call LLM to plan the deep dive subpage
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,

@@ -7,7 +7,7 @@ import type {
   LiveBookSourceSnapshot,
 } from '@/lib/server/live-book-store';
 import { callLLM } from '@/lib/ai/llm';
-import { resolveModel } from '@/lib/server/resolve-model';
+import { resolveLiveBookModel, type LiveBookModelConfig } from '@/lib/server/live-book-model-config';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SourceExplorer');
@@ -15,6 +15,7 @@ const log = createLogger('SourceExplorer');
 interface ExploreInput {
   book: LiveBookRecord;
   topic: string;
+  modelConfig?: LiveBookModelConfig;
 }
 
 function takeTop<T>(items: T[], limit: number): T[] {
@@ -480,9 +481,10 @@ async function callLLMQueryDesign(
   topic: string,
   proposal: LiveBookRecord['proposal'],
   sources: LiveBookSourceInput[],
+  modelConfig?: LiveBookModelConfig,
 ): Promise<string[] | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -553,9 +555,10 @@ ${chunksText}
 async function callLLMSynthesis(
   topic: string,
   chunks: Array<Record<string, unknown>>,
+  modelConfig?: LiveBookModelConfig,
 ): Promise<LLMExplorationSynthesis | null> {
   try {
-    const model = resolveModel({}).model;
+    const model = resolveLiveBookModel(modelConfig).model;
     const result = await callLLM(
       {
         model,
@@ -727,7 +730,7 @@ export class SourceExplorer {
     const inputSources = extractInputSources(input.book);
 
     // Step 1: LLM Query Design
-    const designedQueries = await callLLMQueryDesign(topic, input.book.proposal, inputSources);
+    const designedQueries = await callLLMQueryDesign(topic, input.book.proposal, inputSources, input.modelConfig);
 
     // Step 2: Build all queries (designed + structured + default)
     const sourceQueries = buildStructuredQueries(topic, inputSources).slice(0, 12);
@@ -790,7 +793,7 @@ export class SourceExplorer {
     const finalChunks = dedupeEvidenceChunks(baseChunks);
 
     // Step 6: LLM Synthesis
-    const synthesis = await callLLMSynthesis(topic, finalChunks);
+    const synthesis = await callLLMSynthesis(topic, finalChunks, input.modelConfig);
 
     const finalSummary =
       synthesis?.summary ||
