@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
+import { generateText } from 'ai';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { resolveModel } from '@/lib/server/resolve-model';
 
 const log = createLogger('Verify OCR Provider');
 
@@ -49,32 +51,43 @@ async function verifyStandardProvider(
   model: string
 ): Promise<{ ok: boolean; message: string }> {
   try {
-    // For standard providers, we use the existing verify-model endpoint logic
-    const resp = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || ''}/api/verify-model`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey,
-        baseUrl,
-        model,
+    // Directly resolve model and send a test message (avoids server-side fetch to relative URL)
+    let languageModel;
+    try {
+      const result = resolveModel({
+        modelString: model,
+        apiKey: apiKey || '',
+        baseUrl: baseUrl || undefined,
         providerType: 'openai',
         requiresApiKey: true,
-      }),
-    });
-
-    const payload = await resp.json() as { success?: boolean; error?: string; message?: string };
-
-    if (!resp.ok || !payload.success) {
-      return { ok: false, message: payload.error || payload.message || '连接测试失败' };
+      });
+      languageModel = result.model;
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : '模型解析失败',
+      };
     }
 
-    return { ok: true, message: '连接成功' };
+    const { text } = await generateText({
+      model: languageModel,
+      prompt: 'Say "OK" if you can hear me.',
+    });
+
+    if (text.trim()) {
+      return { ok: true, message: '连接成功' };
+    }
+    return { ok: false, message: '模型返回空响应' };
   } catch (error) {
     log.error(`OCR provider verification failed [provider="${providerId}"]:`, error);
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : '连接测试失败',
-    };
+    const msg = error instanceof Error ? error.message : '连接测试失败';
+    if (msg.includes('401') || msg.includes('Unauthorized')) {
+      return { ok: false, message: 'API key 无效或已过期' };
+    }
+    if (msg.includes('ENOTFOUND') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT')) {
+      return { ok: false, message: '无法连接到 API 服务器，请检查 Base URL' };
+    }
+    return { ok: false, message: msg };
   }
 }
 
