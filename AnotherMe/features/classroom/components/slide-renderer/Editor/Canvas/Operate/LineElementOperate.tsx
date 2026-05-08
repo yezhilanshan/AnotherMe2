@@ -8,7 +8,7 @@ interface LineElementOperateProps {
   readonly elementInfo: PPTLineElement;
   readonly handlerVisible: boolean;
   readonly dragLineElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTLineElement,
     command: OperateLineHandlers,
   ) => void;
@@ -92,6 +92,10 @@ export function LineElementOperate({
               style={point.style}
               className="operate-resize-handler"
               onMouseDown={(e) => {
+                e.stopPropagation();
+                dragLineElement(e, elementInfo, point.handler);
+              }}
+              onTouchStart={(e) => {
                 e.stopPropagation();
                 dragLineElement(e, elementInfo, point.handler);
               }}

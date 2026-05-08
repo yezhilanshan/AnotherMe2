@@ -17,9 +17,9 @@ type PPTElement = PPTVideoElement | PPTLatexElement | PPTAudioElement | PPTChart
 interface CommonElementOperateProps {
   readonly elementInfo: PPTElement;
   readonly handlerVisible: boolean;
-  readonly rotateElement: (e: React.MouseEvent, element: PPTElement) => void;
+  readonly rotateElement: (e: React.MouseEvent | React.TouchEvent, element: PPTElement) => void;
   readonly scaleElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTElement,
     command: OperateResizeHandlers,
   ) => void;
@@ -71,6 +71,10 @@ export function CommonElementOperate({
                 e.stopPropagation();
                 scaleElement(e, elementInfo, point.direction);
               }}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                scaleElement(e, elementInfo, point.direction);
+              }}
             />
           ))}
           {!cannotRotate && (
@@ -78,6 +82,10 @@ export function CommonElementOperate({
               className="operate-rotate-handler"
               style={{ left: scaleWidth / 2 + 'px' }}
               onMouseDown={(e) => {
+                e.stopPropagation();
+                rotateElement(e, elementInfo);
+              }}
+              onTouchStart={(e) => {
                 e.stopPropagation();
                 rotateElement(e, elementInfo);
               }}

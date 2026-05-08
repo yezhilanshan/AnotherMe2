@@ -780,6 +780,7 @@ export default function AITutorPage() {
   const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
+  const [tappedMessageId, setTappedMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1392,9 +1393,9 @@ export default function AITutorPage() {
   }
 
   return (
-    <div className="fixed inset-0 left-64 flex bg-[#faf9f7] dark:bg-[#171411] overflow-hidden z-20">
+    <div className="fixed inset-0 md:left-64 flex bg-[#faf9f7] dark:bg-[#171411] overflow-hidden z-20">
       {/* 会话列表侧边栏 */}
-      <aside className="bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 flex flex-col h-full overflow-hidden w-60 shrink-0">
+      <aside className="hidden md:flex bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 md:flex-col h-full overflow-hidden w-60 shrink-0">
         <div className="p-4 border-b border-gray-200/60 dark:border-gray-800/60">
           <button
             type="button"
@@ -1436,7 +1437,7 @@ export default function AITutorPage() {
                     e.stopPropagation();
                     handleDeleteSession(session.id);
                   }}
-                  className="shrink-0 p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-0"
+                  className="shrink-0 p-2 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-0"
                   title="删除会话"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -1540,7 +1541,7 @@ export default function AITutorPage() {
                 if (isEmptyAssistant) return null;
 
                 return (
-                  <div key={msg.id} className={cn('group/message flex gap-3 animate-thinking-enter', msg.role === 'user' && 'flex-row-reverse')} style={{ animationDelay: `${index * 50}ms` }}>
+                  <div key={msg.id} className={cn('group/message flex gap-3 animate-thinking-enter', msg.role === 'user' && 'flex-row-reverse')} style={{ animationDelay: `${index * 50}ms` }} onClick={() => setTappedMessageId(tappedMessageId === msg.id ? null : msg.id)}>
                     <div className="shrink-0">
                       {msg.role === 'user' ? (
                         <div className="h-8 w-8 rounded-full bg-[#2d2d2d] dark:bg-[#f1dfc5] flex items-center justify-center text-white dark:text-[#1a1612] text-xs font-semibold shadow-sm">
@@ -1626,7 +1627,7 @@ export default function AITutorPage() {
                           msg.content
                         )}
                       </div>
-                    <div className={cn('flex gap-1 mt-2 opacity-0 group-hover/message:opacity-100 transition-opacity duration-200', msg.role === 'user' ? 'justify-end' : 'justify-start')}>
+                    <div className={cn('flex gap-1 mt-2 transition-opacity duration-200 md:opacity-0 md:group-hover/message:opacity-100', tappedMessageId === msg.id ? 'opacity-100' : 'opacity-0 md:opacity-0', msg.role === 'user' ? 'justify-end' : 'justify-start')} onClick={(e) => e.stopPropagation()}>
                       {msg.role === 'user' ? (
                         <>
                           <button
@@ -1728,7 +1729,7 @@ export default function AITutorPage() {
         </div>
 
         {/* Composer - Fixed height, no overflow */}
-        <div className="px-4 pb-3 pt-2 shrink-0 border-t border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
+        <div className="px-4 pb-3 pt-2 pb-safe shrink-0 border-t border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
           {errorText ? <p className="text-xs text-red-600 dark:text-red-400 mb-1.5 text-center">{errorText}</p> : null}
 
           <div className="w-full mx-auto px-4 lg:px-10">
@@ -1886,7 +1887,7 @@ export default function AITutorPage() {
                       type="button"
                       onClick={() => void handleSend(input)}
                       disabled={!input.trim() || isTyping}
-                      className="flex items-center justify-center w-9 h-9 rounded-full bg-[#2d2d2d] dark:bg-[#f1dfc5] text-white dark:text-[#1a1612] shadow-lg transition-all hover:bg-black dark:hover:bg-[#e8d5b8] hover:shadow-xl hover:scale-105 disabled:opacity-30 disabled:shadow-none disabled:cursor-not-allowed disabled:hover:scale-100"
+                      className="flex items-center justify-center w-11 h-11 rounded-full bg-[#2d2d2d] dark:bg-[#f1dfc5] text-white dark:text-[#1a1612] shadow-lg transition-all hover:bg-black dark:hover:bg-[#e8d5b8] hover:shadow-xl hover:scale-105 disabled:opacity-30 disabled:shadow-none disabled:cursor-not-allowed disabled:hover:scale-100"
                       aria-label="发送"
                     >
                       <ArrowUp className="w-5 h-5" />

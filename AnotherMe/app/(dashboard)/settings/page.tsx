@@ -591,6 +591,8 @@ export default function SettingsPage() {
             apiKey: ocrApiKeyDraft.trim() || apiKeyDraft.trim(),
             baseUrl: ocrBaseUrlDraft.trim() || baseUrlDraft.trim(),
             model: ocrModelIdDraft.trim() || ocrProvider.models?.[0]?.id,
+            providerType: ocrProvider.type,
+            requiresApiKey: ocrProvider.requiresApiKey,
           }),
         });
         const payload = (await resp.json()) as { success?: boolean; error?: string; message?: string };
@@ -688,7 +690,7 @@ export default function SettingsPage() {
         </motion.div>
       ) : null}
 
-      <div className="bg-card rounded-xl shadow-xl shadow-border/50 dark:shadow-slate-950/50 overflow-hidden border border-border flex flex-col md:flex-row min-h-[700px]">
+      <div className="bg-card rounded-xl shadow-xl shadow-border/50 dark:shadow-slate-950/50 overflow-hidden border border-border flex flex-col md:flex-row min-h-0 md:min-h-[700px]">
         {/* Sidebar */}
         <div className="w-full md:w-80 bg-gradient-to-b from-gray-50/80 to-gray-100/50 dark:from-slate-950 dark:to-slate-900 p-6 space-y-2 shrink-0 border-b md:border-b-0 md:border-r border-border">
           <div className="mb-6 px-2">
@@ -1235,6 +1237,13 @@ export default function SettingsPage() {
                                         placeholder="OCR 模型"
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       />
+                                      <datalist id={`models-ocr-${selectedOcrProviderId}`}>
+                                        {selectedOcrModels.map((model) => (
+                                          <option key={model.id} value={model.id}>
+                                            {model.name || model.id}
+                                          </option>
+                                        ))}
+                                      </datalist>
                                     </div>
                                     {/* OCR API Key & Base URL */}
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">

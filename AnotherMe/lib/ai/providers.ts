@@ -58,86 +58,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     icon: '/logos/openai.svg',
     models: [
       {
-        id: 'gpt-5.2',
-        name: 'GPT-5.2',
-        contextWindow: 400000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: false,
-          },
-        },
-      },
-      {
-        id: 'gpt-5.1',
-        name: 'GPT-5.1',
-        contextWindow: 400000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: false,
-          },
-        },
-      },
-      {
-        id: 'gpt-5',
-        name: 'GPT-5',
-        contextWindow: 400000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
-        id: 'gpt-5-mini',
-        name: 'GPT-5-mini',
-        contextWindow: 128000,
-        outputWindow: 4096,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
-        id: 'gpt-5-nano',
-        name: 'GPT-5-nano',
-        contextWindow: 128000,
-        outputWindow: 4096,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
         id: 'gpt-4o',
         name: 'GPT-4o',
         contextWindow: 128000,
@@ -147,13 +67,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
       {
         id: 'gpt-4o-mini',
         name: 'GPT-4o-mini',
-        contextWindow: 128000,
-        outputWindow: 4096,
-        capabilities: { streaming: true, tools: true, vision: true },
-      },
-      {
-        id: 'gpt-4-turbo',
-        name: 'GPT-4-turbo',
         contextWindow: 128000,
         outputWindow: 4096,
         capabilities: { streaming: true, tools: true, vision: true },
@@ -235,42 +148,10 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     icon: '/logos/claude.svg',
     models: [
       {
-        id: 'claude-opus-4-6',
-        name: 'Claude Opus 4.6',
-        contextWindow: 200000,
-        outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: false,
-          },
-        },
-      },
-      {
         id: 'claude-sonnet-4-6',
         name: 'Claude Sonnet 4.6',
         contextWindow: 200000,
         outputWindow: 128000,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: false,
-          },
-        },
-      },
-      {
-        id: 'claude-sonnet-4-5',
-        name: 'Claude Sonnet 4.5',
-        contextWindow: 200000,
-        outputWindow: 64000,
         capabilities: {
           streaming: true,
           tools: true,
@@ -310,38 +191,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     icon: '/logos/gemini.svg',
     models: [
       {
-        id: 'gemini-3.1-pro-preview',
-        name: 'Gemini 3.1 Pro Preview',
-        contextWindow: 1048576,
-        outputWindow: 65536,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
-        id: 'gemini-3-flash-preview',
-        name: 'Gemini 3 Flash Preview',
-        contextWindow: 1048576,
-        outputWindow: 65536,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: false,
-            budgetAdjustable: true,
-            defaultEnabled: true,
-          },
-        },
-      },
-      {
         id: 'gemini-2.5-flash',
         name: 'Gemini 2.5 Flash',
         contextWindow: 1048576,
@@ -354,22 +203,6 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
             toggleable: true,
             budgetAdjustable: true,
             defaultEnabled: true,
-          },
-        },
-      },
-      {
-        id: 'gemini-2.5-flash-lite',
-        name: 'Gemini 2.5 Flash Lite',
-        contextWindow: 1048576,
-        outputWindow: 65536,
-        capabilities: {
-          streaming: true,
-          tools: true,
-          vision: true,
-          thinking: {
-            toggleable: true,
-            budgetAdjustable: true,
-            defaultEnabled: false,
           },
         },
       },
@@ -443,14 +276,14 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'GLM-4.6V',
         contextWindow: 128000,
         outputWindow: 32000,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'glm-4.6v-flash',
         name: 'GLM-4.6V-Flash',
         contextWindow: 128000,
         outputWindow: 32000,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       // GLM-4.5 Series - Cost-effective models
       {
@@ -590,7 +423,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: true,
+          vision: false,
           thinking: {
             toggleable: true,
             budgetAdjustable: false,
@@ -776,7 +609,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Qwen3-VL-32B-Instruct',
         contextWindow: 256000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       // MiniMax Series
       {
@@ -807,7 +640,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'GLM-4.1V-9B-Thinking',
         contextWindow: 64000,
         outputWindow: 8192,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
     ],
   },
@@ -825,28 +658,28 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Doubao Seed 2.0 Pro',
         contextWindow: 128000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'doubao-seed-2-0-lite-260215',
         name: 'Doubao Seed 2.0 Lite',
         contextWindow: 128000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'doubao-seed-2-0-mini-260215',
         name: 'Doubao Seed 2.0 Mini',
         contextWindow: 128000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'doubao-seed-1-8-251228',
         name: 'Doubao Seed 1.8',
         contextWindow: 128000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
     ],
   },
@@ -867,7 +700,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: true,
+          vision: false,
           thinking: {
             toggleable: false,
             budgetAdjustable: false,
@@ -880,7 +713,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Grok 4.20',
         contextWindow: 2000000,
         outputWindow: 131072,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'grok-code-fast-1',
@@ -897,7 +730,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: true,
+          vision: false,
           thinking: {
             toggleable: false,
             budgetAdjustable: false,
@@ -910,7 +743,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Grok 4 Fast',
         contextWindow: 2000000,
         outputWindow: 131072,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'grok-4-1-fast-reasoning',
@@ -920,7 +753,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: true,
+          vision: false,
           thinking: {
             toggleable: false,
             budgetAdjustable: false,
@@ -933,14 +766,14 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Grok 4.1 Fast',
         contextWindow: 2000000,
         outputWindow: 131072,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'grok-4-0709',
         name: 'Grok 4',
         contextWindow: 256000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: true },
+        capabilities: { streaming: true, tools: true, vision: false },
       },
       {
         id: 'grok-3',

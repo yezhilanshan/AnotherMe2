@@ -10,9 +10,9 @@ import { BorderLine } from './BorderLine';
 interface TextElementOperateProps {
   readonly elementInfo: PPTTextElement;
   readonly handlerVisible: boolean;
-  readonly rotateElement: (e: React.MouseEvent, element: PPTTextElement) => void;
+  readonly rotateElement: (e: React.MouseEvent | React.TouchEvent, element: PPTTextElement) => void;
   readonly scaleElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTTextElement,
     command: OperateResizeHandlers,
   ) => void;
@@ -65,12 +65,20 @@ export function TextElementOperate({
                 e.stopPropagation();
                 scaleElement(e, elementInfo, point.direction);
               }}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                scaleElement(e, elementInfo, point.direction);
+              }}
             />
           ))}
           <RotateHandler
             className="operate-rotate-handler"
             style={{ left: scaleWidth / 2 + 'px' }}
             onMouseDown={(e) => {
+              e.stopPropagation();
+              rotateElement(e, elementInfo);
+            }}
+            onTouchStart={(e) => {
               e.stopPropagation();
               rotateElement(e, elementInfo);
             }}

@@ -27,24 +27,24 @@ interface OperateProps {
   readonly isActiveGroupElement: boolean;
   readonly isMultiSelect: boolean;
   readonly rotateElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: Exclude<
       PPTElement,
       PPTChartElement | PPTLineElement | PPTVideoElement | PPTAudioElement
     >,
   ) => void;
   readonly scaleElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: Exclude<PPTElement, PPTLineElement>,
     command: OperateResizeHandlers,
   ) => void;
   readonly dragLineElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTLineElement,
     command: OperateLineHandlers,
   ) => void;
   readonly moveShapeKeypoint: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTShapeElement,
     index: number,
   ) => void;

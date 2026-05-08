@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils/cn';
@@ -40,15 +40,35 @@ const navItems: Array<{
   { name: '数据统计', href: '/statistics', icon: BarChart2 },
 ];
 
+const SWIPE_THRESHOLD = 80;
+
 export function MobileDrawer() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const { logout } = useAuth();
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  }, []);
+
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+      const deltaY = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+      if (deltaX > SWIPE_THRESHOLD && deltaY < 100) {
+        setOpen(false);
+      }
+    },
+    [],
+  );
 
   return (
     <>
       {/* Mobile Top Bar */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 bg-[#F3F2EE] dark:bg-slate-950 border-b border-gray-200/50 dark:border-slate-800 flex items-center justify-between px-4">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 pt-safe bg-[#F3F2EE] dark:bg-slate-950 border-b border-gray-200/50 dark:border-slate-800 flex items-center justify-between px-4">
         <div className="flex items-center gap-2 text-gray-900 dark:text-gray-100">
           <div className="h-7 w-7 bg-black dark:bg-white rounded-lg flex items-center justify-center text-white dark:text-slate-900">
             <GraduationCap className="h-4 w-4" />
@@ -57,7 +77,7 @@ export function MobileDrawer() {
         </div>
         <button
           onClick={() => setOpen(true)}
-          className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-800 transition-colors"
+          className="p-3 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-800 transition-colors"
           aria-label="打开菜单"
         >
           <Menu className="h-5 w-5 text-gray-900 dark:text-gray-100" />
@@ -75,16 +95,18 @@ export function MobileDrawer() {
       {/* Drawer Panel */}
       <div
         className={cn(
-          'md:hidden fixed top-0 right-0 bottom-0 z-50 w-[280px] bg-white dark:bg-slate-950 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col',
+          'md:hidden fixed top-0 right-0 bottom-0 z-50 w-[280px] bg-white dark:bg-slate-950 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col pt-safe',
           open ? 'translate-x-0' : 'translate-x-full'
         )}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
       >
         {/* Drawer Header */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200/50 dark:border-slate-800">
           <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">菜单</span>
           <button
             onClick={() => setOpen(false)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+            className="p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
             aria-label="关闭菜单"
           >
             <X className="h-5 w-5 text-gray-900 dark:text-gray-100" />
@@ -101,7 +123,7 @@ export function MobileDrawer() {
                 href={item.href}
                 onClick={() => setOpen(false)}
                 className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200',
+                  'flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-200 min-h-[44px]',
                   isActive
                     ? 'bg-black dark:bg-white text-white dark:text-slate-900 font-medium'
                     : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900'
@@ -109,7 +131,7 @@ export function MobileDrawer() {
               >
                 <item.icon
                   className={cn(
-                    'h-5 w-5',
+                    'h-5 w-5 shrink-0',
                     isActive
                       ? 'text-white dark:text-slate-900'
                       : 'text-gray-400 dark:text-slate-500'
@@ -125,7 +147,7 @@ export function MobileDrawer() {
               href="/settings"
               onClick={() => setOpen(false)}
               className={cn(
-                'flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200',
+                'flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-200 min-h-[44px]',
                 pathname === '/settings'
                   ? 'bg-black dark:bg-white text-white dark:text-slate-900 font-medium'
                   : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900'
@@ -133,7 +155,7 @@ export function MobileDrawer() {
             >
               <Settings
                 className={cn(
-                  'h-5 w-5',
+                  'h-5 w-5 shrink-0',
                   pathname === '/settings'
                     ? 'text-white dark:text-slate-900'
                     : 'text-gray-400 dark:text-slate-500'
@@ -147,9 +169,9 @@ export function MobileDrawer() {
                 setOpen(false);
                 logout();
               }}
-              className="flex items-center gap-3 px-3 py-2.5 w-full text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900 transition-colors text-sm rounded-xl"
+              className="flex items-center gap-3 px-3 py-3 w-full text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900 transition-colors text-sm rounded-xl min-h-[44px]"
             >
-              <LogOut className="h-5 w-5 text-gray-400 dark:text-slate-500" />
+              <LogOut className="h-5 w-5 shrink-0 text-gray-400 dark:text-slate-500" />
               <span>退出登录</span>
             </button>
           </div>

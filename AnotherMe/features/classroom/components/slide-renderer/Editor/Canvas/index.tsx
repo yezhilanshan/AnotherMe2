@@ -14,6 +14,8 @@ import { useDragLineElement } from './hooks/useDragLineElement';
 import { useMoveShapeKeypoint } from './hooks/useMoveShapeKeypoint';
 import { useInsertFromCreateSelection } from './hooks/useInsertFromCreateSelection';
 import { useDrop } from './hooks/useDrop';
+import { useTouchGestures } from './hooks/useTouchGestures';
+import { MobileContextMenu } from './components/MobileContextMenu';
 import { AlignmentLine } from './AlignmentLine';
 import { MouseSelection } from './MouseSelection';
 import { ViewportBackground } from './ViewportBackground';
@@ -28,7 +30,9 @@ import type { PPTElement } from '@/lib/types/slides';
 import type { AlignmentLineProps } from '@/lib/types/edit';
 import type { ContextmenuItem } from './EditableElement';
 import type { SlideContent } from '@/lib/types/stage';
+import type { MobileMenuGroup } from './components/MobileContextMenu';
 import { useCanvasOperations } from '@/lib/hooks/use-canvas-operations';
+import { ElementAlignCommands, ElementOrderCommands } from '@/lib/types/edit';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -87,6 +91,11 @@ export function Canvas(_props: CanvasProps) {
 
   const [alignmentLines, setAlignmentLines] = useState<AlignmentLineProps[]>([]);
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);
+  const [mobileContextMenuVisible, setMobileContextMenuVisible] = useState(false);
+  const [mobileContextMenuPosition, setMobileContextMenuPosition] = useState<{
+    x: number;
+    y: number;
+  }>({ x: 0, y: 0 });
 
   // Local element list for drag/scale/rotate operations
   const elementListRef = useRef<PPTElement[]>(elements || []);
@@ -134,6 +143,122 @@ export function Canvas(_props: CanvasProps) {
   // Create element from selection
   const { insertElementFromCreateSelection } = useInsertFromCreateSelection(viewportRef);
 
+  // Touch gesture recognition
+  const { gestureState, handleTouchStart, handleTouchMove, handleTouchEnd } =
+    useTouchGestures();
+
+  // Canvas operations (shared between context menus and mobile menu)
+  const {
+    copyElement,
+    pasteElement,
+    cutElement,
+    deleteElement,
+    deleteAllElements,
+    lockElement,
+    unlockElement,
+    selectAllElements,
+    alignElementToCanvas,
+    orderElement,
+  } = useCanvasOperations();
+
+  // Get the active element for context menu operations
+  const activeElement = elementList.find(
+    (el) => activeElementIdList.includes(el.id) && !el.lock,
+  );
+
+  // Mobile context menu groups
+  const mobileContextMenuGroups: MobileMenuGroup[] = activeElement
+    ? [
+        {
+          items: [
+            { text: 'Copy', icon: '⎘', handler: copyElement },
+            { text: 'Paste', icon: '⎙', handler: pasteElement },
+            { text: 'Cut', icon: '⎛', handler: cutElement },
+          ],
+        },
+        {
+          title: 'Align',
+          items: [
+            {
+              text: 'Center',
+              handler: () => alignElementToCanvas(ElementAlignCommands.CENTER),
+            },
+            {
+              text: 'Left',
+              handler: () => alignElementToCanvas(ElementAlignCommands.LEFT),
+            },
+            {
+              text: 'Right',
+              handler: () => alignElementToCanvas(ElementAlignCommands.RIGHT),
+            },
+            {
+              text: 'Top',
+              handler: () => alignElementToCanvas(ElementAlignCommands.TOP),
+            },
+            {
+              text: 'Bottom',
+              handler: () => alignElementToCanvas(ElementAlignCommands.BOTTOM),
+            },
+          ],
+        },
+        {
+          title: 'Layer',
+          items: [
+            {
+              text: 'Bring to Front',
+              icon: '↑↑',
+              handler: () => activeElement && orderElement(activeElement, ElementOrderCommands.TOP),
+            },
+            {
+              text: 'Bring Forward',
+              icon: '↑',
+              handler: () => activeElement && orderElement(activeElement, ElementOrderCommands.UP),
+            },
+            {
+              text: 'Send Backward',
+              icon: '↓',
+              handler: () => activeElement && orderElement(activeElement, ElementOrderCommands.DOWN),
+            },
+            {
+              text: 'Send to Back',
+              icon: '↓↓',
+              handler: () => activeElement && orderElement(activeElement, ElementOrderCommands.BOTTOM),
+            },
+          ],
+        },
+        {
+          items: [
+            {
+              text: activeElement.lock ? 'Unlock' : 'Lock',
+              icon: activeElement.lock ? '\u{1F513}' : '\u{1F512}',
+              handler: () =>
+                activeElement.lock
+                  ? unlockElement(activeElement)
+                  : lockElement(),
+            },
+            {
+              text: 'Select All',
+              icon: '✔',
+              handler: selectAllElements,
+            },
+            {
+              text: 'Delete',
+              icon: '✖',
+              danger: true,
+              handler: deleteElement,
+            },
+          ],
+        },
+      ]
+    : [
+        {
+          items: [
+            { text: 'Paste', icon: '⎙', handler: pasteElement },
+            { text: 'Select All', icon: '✔', handler: selectAllElements },
+          ],
+        },
+      ];
+
   // Click on blank canvas area: clear active elements
   const handleClickBlankArea = (e: React.MouseEvent) => {
     // Check if the click target is a context menu element (menu content in Portal)
@@ -158,6 +283,34 @@ export function Canvas(_props: CanvasProps) {
     }
   };
 
+  // Touch event handlers for mobile
+  const handleCanvasTouchStart = (e: React.TouchEvent) => {
+    handleTouchStart(
+      e,
+      // Long press callback
+      () => {
+        const touch = e.touches[0];
+        if (touch) {
+          setMobileContextMenuPosition({ x: touch.clientX, y: touch.clientY });
+          setMobileContextMenuVisible(true);
+        }
+      },
+    );
+  };
+
+  const handleCanvasTouchMove = (e: React.TouchEvent) => {
+    handleTouchMove(e);
+  };
+
+  const handleCanvasTouchEnd = (e: React.TouchEvent) => {
+    handleTouchEnd(e, (point) => {
+      // Single tap on blank area: clear selection
+      if (activeElementIdList.length) {
+        setActiveElementIdList([]);
+      }
+    });
+  };
+
   // Double-click blank area to insert text
   const handleDblClick = (_e: React.MouseEvent) => {
     if (activeElementIdList.length || creatingElement || creatingCustomShape) return;
@@ -170,8 +323,6 @@ export function Canvas(_props: CanvasProps) {
   const openLinkDialog = () => {
     setLinkDialogVisible(true);
   };
-
-  const { pasteElement, selectAllElements, deleteAllElements } = useCanvasOperations();
 
   const contextmenus = (): ContextmenuItem[] => {
     return [
@@ -231,6 +382,10 @@ export function Canvas(_props: CanvasProps) {
           ref={canvasRef}
           onMouseDown={handleClickBlankArea}
           onDoubleClick={handleDblClick}
+          onTouchStart={handleCanvasTouchStart}
+          onTouchMove={handleCanvasTouchMove}
+          onTouchEnd={handleCanvasTouchEnd}
+          style={{ touchAction: 'none' }}
         >
           {/* Element creation selection */}
           {creatingElement && (
@@ -349,6 +504,13 @@ export function Canvas(_props: CanvasProps) {
 
           {/* TODO: Add LinkDialog modal */}
           {linkDialogVisible && <div>LinkDialog placeholder</div>}
+
+          {/* Mobile context menu (long-press) */}
+          <MobileContextMenu
+            visible={mobileContextMenuVisible}
+            groups={mobileContextMenuGroups}
+            onClose={() => setMobileContextMenuVisible(false)}
+          />
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

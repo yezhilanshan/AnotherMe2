@@ -48,7 +48,9 @@ async function verifyStandardProvider(
   providerId: string,
   apiKey: string,
   baseUrl: string,
-  model: string
+  model: string,
+  providerType?: string,
+  requiresApiKey?: boolean,
 ): Promise<{ ok: boolean; message: string }> {
   try {
     // Directly resolve model and send a test message (avoids server-side fetch to relative URL)
@@ -58,8 +60,8 @@ async function verifyStandardProvider(
         modelString: model,
         apiKey: apiKey || '',
         baseUrl: baseUrl || undefined,
-        providerType: 'openai',
-        requiresApiKey: true,
+        providerType: providerType || 'openai',
+        requiresApiKey: requiresApiKey ?? true,
       });
       languageModel = result.model;
     } catch (error) {
@@ -71,7 +73,7 @@ async function verifyStandardProvider(
 
     const { text } = await generateText({
       model: languageModel,
-      prompt: 'Say "OK" if you can hear me.',
+      messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
     });
 
     if (text.trim()) {
@@ -94,7 +96,7 @@ async function verifyStandardProvider(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { providerId, apiKey, baseUrl, model } = body;
+    const { providerId, apiKey, baseUrl, model, providerType, requiresApiKey } = body;
 
     if (!providerId) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Provider ID is required');
@@ -115,7 +117,7 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Model name is required');
     }
 
-    const result = await verifyStandardProvider(providerId, apiKey || '', baseUrl || '', model);
+    const result = await verifyStandardProvider(providerId, apiKey || '', baseUrl || '', model, providerType, requiresApiKey);
     if (result.ok) {
       return apiSuccess({ message: result.message });
     } else {

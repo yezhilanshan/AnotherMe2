@@ -23,11 +23,11 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-6">
-        <Link href="/notifications" className="text-gray-900 dark:text-gray-100 hover:text-black dark:hover:text-white transition-colors relative">
+        <Link href="/notifications" className="p-2 text-gray-900 dark:text-gray-100 hover:text-black dark:hover:text-white transition-colors relative rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
           <Bell className="h-5 w-5" />
         </Link>
-        
-        <Link href="/calendar" className="text-gray-900 dark:text-gray-100 hover:text-black dark:hover:text-white transition-colors relative">
+
+        <Link href="/calendar" className="p-2 text-gray-900 dark:text-gray-100 hover:text-black dark:hover:text-white transition-colors relative rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800">
           <Calendar className="h-5 w-5" />
           <span className="absolute -bottom-1 -right-1 h-3 w-3 bg-black text-white text-[8px] font-bold flex items-center justify-center rounded-sm">
             8

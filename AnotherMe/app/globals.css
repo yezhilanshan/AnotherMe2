@@ -880,3 +880,63 @@
   margin-bottom: 0.4rem;
   font-weight: 700;
 }
+
+/* Safe area insets for notched/punch-hole devices */
+:root {
+  --sat: env(safe-area-inset-top);
+  --sar: env(safe-area-inset-right);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+
+.pr-safe {
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Touch optimization for coarse pointers (mobile) */
+@media (pointer: coarse) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  [role='button'],
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+}
+
+/* Smooth scrolling for touch devices */
+.scroll-touch {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Hide hover-only tooltips on touch devices */
+@media (pointer: coarse) {
+  [data-slot='tooltip-content'] {
+    display: none !important;
+  }
+}
+
+/* Ensure message action buttons are accessible on touch */
+@media (pointer: coarse) {
+  .group\/message [data-slot='tooltip'] {
+    pointer-events: auto;
+  }
+}

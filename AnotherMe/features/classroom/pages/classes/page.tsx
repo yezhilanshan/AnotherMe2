@@ -102,7 +102,7 @@ export default function ClassesPage() {
           </div>
           <Link
             href="/create-class"
-            className="flex items-center gap-2 px-4 py-2 bg-black text-white text-xs font-bold hover:bg-gray-800 transition-colors uppercase tracking-wide"
+            className="flex items-center gap-2 px-4 py-2 bg-black text-white text-xs font-bold hover:bg-gray-800 transition-colors uppercase tracking-wide min-h-[44px]"
           >
             <Plus className="h-4 w-4" /> 新建课程
           </Link>

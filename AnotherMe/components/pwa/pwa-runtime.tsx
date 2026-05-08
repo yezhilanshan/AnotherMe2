@@ -167,7 +167,7 @@ export function PwaRuntime() {
   }
 
   return (
-    <div className="fixed inset-x-3 bottom-3 z-50 mx-auto flex max-w-md flex-col gap-2">
+    <div className="fixed inset-x-3 bottom-3 pb-safe z-50 mx-auto flex max-w-md flex-col gap-2">
       {updateWaiting && (
         <div className="rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
           <div className="flex items-center justify-between gap-3">

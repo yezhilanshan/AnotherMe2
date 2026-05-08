@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     try {
       const result = await generateText({
         model: languageModel,
-        prompt: 'Say "OK" if you can hear me.',
+        messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
       });
       text = result.text;
     } catch (genError) {

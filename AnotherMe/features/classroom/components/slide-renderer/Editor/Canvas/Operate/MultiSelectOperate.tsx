@@ -10,7 +10,7 @@ import { BorderLine } from './BorderLine';
 interface MultiSelectOperateProps {
   readonly elementList: PPTElement[];
   readonly scaleMultiElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     range: MultiSelectRange,
     command: OperateResizeHandlers,
   ) => void;
@@ -72,6 +72,10 @@ export function MultiSelectOperate({ elementList, scaleMultiElement }: MultiSele
             type={point.direction}
             style={point.style}
             onMouseDown={(e) => {
+              e.stopPropagation();
+              scaleMultiElement(e, range, point.direction);
+            }}
+            onTouchStart={(e) => {
               e.stopPropagation();
               scaleMultiElement(e, range, point.direction);
             }}

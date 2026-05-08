@@ -24,16 +24,20 @@ export function useMouseSelection(
 
   // Update mouse selection range
   const updateMouseSelection = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent | React.TouchEvent) => {
       if (!viewportRef.current) return;
+
+      const native = e.nativeEvent;
+      const isTouchEvent = native instanceof TouchEvent;
+      if (isTouchEvent && !native.changedTouches?.length) return;
 
       let isMouseDown = true;
       const viewportRect = viewportRef.current.getBoundingClientRect();
 
       const minSelectionRange = 5;
 
-      const startPageX = e.pageX;
-      const startPageY = e.pageY;
+      const startPageX = isTouchEvent ? native.changedTouches[0].pageX : (e as React.MouseEvent).pageX;
+      const startPageY = isTouchEvent ? native.changedTouches[0].pageY : (e as React.MouseEvent).pageY;
 
       const left = (startPageX - viewportRect.x) / canvasScale;
       const top = (startPageY - viewportRect.y) / canvasScale;
@@ -48,11 +52,11 @@ export function useMouseSelection(
       setMouseSelectionVisible(false);
       setMouseSelectionQuadrant(4);
 
-      const handleMouseMove = (e: MouseEvent) => {
+      const handleMouseMove = (e: MouseEvent | TouchEvent) => {
         if (!isMouseDown) return;
 
-        const currentPageX = e.pageX;
-        const currentPageY = e.pageY;
+        const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
+        const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
 
         const offsetWidth = (currentPageX - startPageX) / canvasScale;
         const offsetHeight = (currentPageY - startPageY) / canvasScale;
@@ -81,6 +85,8 @@ export function useMouseSelection(
       };
 
       const handleMouseUp = () => {
+        document.ontouchmove = null;
+        document.ontouchend = null;
         document.onmousemove = null;
         document.onmouseup = null;
         isMouseDown = false;
@@ -177,8 +183,13 @@ export function useMouseSelection(
         setMouseSelectionVisible(false);
       };
 
-      document.onmousemove = handleMouseMove;
-      document.onmouseup = handleMouseUp;
+      if (isTouchEvent) {
+        document.ontouchmove = handleMouseMove;
+        document.ontouchend = handleMouseUp;
+      } else {
+        document.onmousemove = handleMouseMove;
+        document.onmouseup = handleMouseUp;
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally excludes mouseSelection state to avoid infinite re-creation
     [

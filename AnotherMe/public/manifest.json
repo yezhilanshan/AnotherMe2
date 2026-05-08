@@ -6,7 +6,7 @@
   "scope": "/",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
+  "background_color": "#f3ede5",
   "theme_color": "#6366f1",
   "orientation": "portrait-primary",
   "icons": [
@@ -21,6 +21,20 @@
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "AI 导师",
+      "short_name": "AI 导师",
+      "url": "/ai-tutor",
+      "description": "与 AI 导师对话学习"
+    },
+    {
+      "name": "课堂",
+      "short_name": "课堂",
+      "url": "/classes",
+      "description": "查看我的课堂"
     }
   ],
   "categories": ["education", "productivity"],

@@ -28,13 +28,17 @@ export function useDragLineElement(
 
   // Drag line endpoint
   const dragLineElement = useCallback(
-    (e: React.MouseEvent, element: PPTLineElement, command: OperateLineHandlers) => {
+    (e: React.MouseEvent | React.TouchEvent, element: PPTLineElement, command: OperateLineHandlers) => {
+      const native = e.nativeEvent;
+      const isTouchEvent = native instanceof TouchEvent;
+      if (isTouchEvent && !native.changedTouches?.length) return;
+
       let isMouseDown = true;
 
       const sorptionRange = 8;
 
-      const startPageX = e.pageX;
-      const startPageY = e.pageY;
+      const startPageX = isTouchEvent ? native.changedTouches[0].pageX : (e as React.MouseEvent).pageX;
+      const startPageY = isTouchEvent ? native.changedTouches[0].pageY : (e as React.MouseEvent).pageY;
 
       const adsorptionPoints: AdsorptionPoint[] = [];
 
@@ -75,11 +79,11 @@ export function useDragLineElement(
         );
       }
 
-      const handleMouseMove = (e: MouseEvent) => {
+      const handleMouseMove = (e: MouseEvent | TouchEvent) => {
         if (!isMouseDown) return;
 
-        const currentPageX = e.pageX;
-        const currentPageY = e.pageY;
+        const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
+        const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
 
         const moveX = (currentPageX - startPageX) / canvasScale;
         const moveY = (currentPageY - startPageY) / canvasScale;
@@ -240,13 +244,16 @@ export function useDragLineElement(
         setElementList(newElements);
       };
 
-      const handleMouseUp = (e: MouseEvent) => {
+      const handleMouseUp = (e: MouseEvent | TouchEvent) => {
         isMouseDown = false;
+
+        document.ontouchmove = null;
+        document.ontouchend = null;
         document.onmousemove = null;
         document.onmouseup = null;
 
-        const currentPageX = e.pageX;
-        const currentPageY = e.pageY;
+        const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
+        const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
 
         if (startPageX === currentPageX && startPageY === currentPageY) return;
 
@@ -254,8 +261,13 @@ export function useDragLineElement(
         addHistorySnapshot();
       };
 
-      document.onmousemove = handleMouseMove;
-      document.onmouseup = handleMouseUp;
+      if (isTouchEvent) {
+        document.ontouchmove = handleMouseMove;
+        document.ontouchend = handleMouseUp;
+      } else {
+        document.onmousemove = handleMouseMove;
+        document.onmouseup = handleMouseUp;
+      }
     },
     [
       elementListRef,

@@ -6,7 +6,8 @@ interface ResizeHandlerProps {
   readonly rotate?: number;
   readonly style?: React.CSSProperties;
   readonly className?: string;
-  readonly onMouseDown?: (e: React.MouseEvent) => void;
+  readonly onMouseDown?: (e: React.MouseEvent | React.TouchEvent) => void;
+  readonly onTouchStart?: (e: React.TouchEvent) => void;
 }
 
 export function ResizeHandler({
@@ -15,6 +16,7 @@ export function ResizeHandler({
   style,
   className,
   onMouseDown,
+  onTouchStart,
 }: ResizeHandlerProps) {
   const rotateClassName = useMemo(() => {
     const prefix = 'rotate-';
@@ -78,9 +80,17 @@ export function ResizeHandler({
 
   return (
     <div
-      className={`resize-handler absolute w-[10px] h-[10px] left-0 top-0 m-[-5px_0_0_-5px] border border-primary bg-white rounded-[1px] ${cursorClass} ${className || ''}`}
-      style={style}
+      className={`resize-handler absolute w-[10px] h-[10px] left-0 top-0 m-[-5px_0_0_-5px] border border-primary bg-white rounded-[1px] touch-none ${cursorClass} ${className || ''}`}
+      style={{
+        minWidth: '44px',
+        minHeight: '44px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        ...style,
+      }}
       onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
     />
   );
 }

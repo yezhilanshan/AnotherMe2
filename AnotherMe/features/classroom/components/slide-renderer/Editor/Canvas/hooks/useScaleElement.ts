@@ -572,7 +572,10 @@ export function useScaleElement(
 
   // Scale multiple selected elements
   const scaleMultiElement = useCallback(
-    (e: React.MouseEvent, range: MultiSelectRange, command: OperateResizeHandlers) => {
+    (e: React.MouseEvent | React.TouchEvent, range: MultiSelectRange, command: OperateResizeHandlers) => {
+      const native = e.nativeEvent;
+      const isTouchEvent = native instanceof TouchEvent;
+      if (isTouchEvent && !native.changedTouches?.length) return;
       let isMouseDown = true;
 
       const { minX, maxX, minY, maxY } = range;
@@ -580,16 +583,16 @@ export function useScaleElement(
       const operateHeight = maxY - minY;
       const aspectRatio = operateWidth / operateHeight;
 
-      const startPageX = e.pageX;
-      const startPageY = e.pageY;
+      const startPageX = isTouchEvent ? native.changedTouches[0].pageX : (e as React.MouseEvent).pageX;
+      const startPageY = isTouchEvent ? native.changedTouches[0].pageY : (e as React.MouseEvent).pageY;
 
       const originElementList: PPTElement[] = JSON.parse(JSON.stringify(elementListRef.current));
 
-      const handleMouseMove = (e: MouseEvent) => {
+      const handleMouseMove = (e: MouseEvent | TouchEvent) => {
         if (!isMouseDown) return;
 
-        const currentPageX = e.pageX;
-        const currentPageY = e.pageY;
+        const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
+        const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
 
         const x = (currentPageX - startPageX) / canvasScale;
         let y = (currentPageY - startPageY) / canvasScale;
@@ -668,19 +671,30 @@ export function useScaleElement(
         setElementList(newElements);
       };
 
-      const handleMouseUp = (e: MouseEvent) => {
+      const handleMouseUp = (e: MouseEvent | TouchEvent) => {
         isMouseDown = false;
+
+        document.ontouchmove = null;
+        document.ontouchend = null;
         document.onmousemove = null;
         document.onmouseup = null;
 
-        if (startPageX === e.pageX && startPageY === e.pageY) return;
+        const currentPageX = e instanceof MouseEvent ? e.pageX : e.changedTouches[0].pageX;
+        const currentPageY = e instanceof MouseEvent ? e.pageY : e.changedTouches[0].pageY;
+
+        if (startPageX === currentPageX && startPageY === currentPageY) return;
 
         updateSlide({ elements: elementListRef.current });
         addHistorySnapshot();
       };
 
-      document.onmousemove = handleMouseMove;
-      document.onmouseup = handleMouseUp;
+      if (isTouchEvent) {
+        document.ontouchmove = handleMouseMove;
+        document.ontouchend = handleMouseUp;
+      } else {
+        document.onmousemove = handleMouseMove;
+        document.onmouseup = handleMouseUp;
+      }
     },
     [
       elementListRef,

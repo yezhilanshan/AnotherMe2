@@ -37,10 +37,9 @@ export const OCR_PROVIDERS: Record<string, OCRProviderConfig> = {
     models: [
       { id: 'gpt-4o', name: 'GPT-4o' },
       { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-      { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-      { id: 'qwen-vl-ocr', name: 'Qwen VL OCR' },
-      { id: 'doubao-vision', name: 'Doubao Vision' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'qwen-vl-ocr-latest', name: 'Qwen VL OCR' },
     ],
     defaultModelId: 'gpt-4o-mini',
     supportedLanguages: ['zh', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'pt', 'ru', 'ar'],

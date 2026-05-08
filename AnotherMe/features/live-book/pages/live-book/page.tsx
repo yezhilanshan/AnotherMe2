@@ -1497,7 +1497,7 @@ export default function LiveBookPage() {
       <header
         className={cn(
           'border-b border-gray-200 bg-white/90 backdrop-blur transition-all duration-300 ease-out shrink-0',
-          headerCollapsed ? 'px-6 py-2.5' : 'px-8 py-6',
+          headerCollapsed ? 'px-4 md:px-6 py-2.5' : 'px-4 md:px-8 py-4 md:py-6',
         )}
       >
         <div className="mx-auto flex w-full max-w-[78ch] items-start justify-between gap-5">
@@ -1748,7 +1748,7 @@ export default function LiveBookPage() {
     return (
       <div className="relative flex-1 overflow-hidden bg-[#f8fafb]">
         <div className="h-full overflow-y-auto" ref={setReaderScrollContainer}>
-          <div className="mx-auto max-w-[78ch] px-6 py-8">
+          <div className="mx-auto max-w-[78ch] px-4 md:px-6 py-6 md:py-8">
             {currentChapter && !headerCollapsed && (
               <div className="mb-6 border-l-2 border-gray-900 bg-white px-5 py-4 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1789,7 +1789,7 @@ export default function LiveBookPage() {
                       )}
                     />
                     {/* Hover action bar */}
-                    <div className="pointer-events-none absolute -top-3 right-3 z-10 flex translate-y-1 items-center gap-0.5 rounded-lg border border-gray-200 bg-white px-1 py-0.5 text-gray-500 opacity-0 shadow-sm transition group-hover:translate-y-0 group-hover:opacity-100">
+                    <div className="pointer-events-none absolute -top-3 right-3 z-10 flex translate-y-1 items-center gap-0.5 rounded-lg border border-gray-200 bg-white px-1 py-0.5 text-gray-500 opacity-0 shadow-sm transition group-hover:translate-y-0 group-hover:opacity-100 max-md:translate-y-0 max-md:opacity-100">
                       <button
                         onClick={() =>
                           void handleOperateBlock('move', {
@@ -2120,7 +2120,7 @@ export default function LiveBookPage() {
       return (
         <button
           onClick={() => setChatOpen(true)}
-          className="absolute bottom-5 right-5 inline-flex items-center gap-2 rounded-full bg-gray-900 px-5 py-2.5 text-sm font-medium text-white shadow-xl hover:bg-gray-800 hover:shadow-2xl hover:scale-105 transition-all z-20"
+          className="absolute bottom-5 right-5 inline-flex items-center gap-2 rounded-full bg-gray-900 px-5 py-3 min-h-[44px] text-sm font-medium text-white shadow-xl hover:bg-gray-800 hover:shadow-2xl hover:scale-105 transition-all z-20"
         >
           <MessageSquare className="h-4 w-4" />
           页内问答
@@ -2134,7 +2134,7 @@ export default function LiveBookPage() {
     }
 
     return (
-      <aside className="flex h-full w-[360px] shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl">
+      <aside className="flex h-full w-full md:w-[360px] shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl">
         <header className="flex items-center justify-between border-b border-gray-100 px-4 py-3 bg-gray-50/50">
           <div className="flex items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-900">
@@ -2296,23 +2296,23 @@ export default function LiveBookPage() {
     return (
       <div className="space-y-8">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold text-gray-900 tracking-tight">活书引擎</h1>
             <p className="mt-1 text-sm text-gray-500">生成、浏览和学习你的 AI 互动书籍</p>
           </div>
           <div className="flex items-center gap-3">
-            <div className="relative">
+            <div className="relative flex-1 md:flex-none">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
                 placeholder="搜索书籍..."
-                className="h-9 w-48 rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition-all focus:border-gray-400 focus:ring-2 focus:ring-gray-100"
+                className="h-9 w-full md:w-48 rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none transition-all focus:border-gray-400 focus:ring-2 focus:ring-gray-100"
               />
             </div>
             <button
               onClick={() => setView('creator')}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-4 py-2 min-h-[44px] text-sm font-medium text-white hover:bg-gray-800 transition-colors"
             >
               <Plus className="h-4 w-4" />
               新建活书

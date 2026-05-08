@@ -10,9 +10,9 @@ import { BorderLine } from './BorderLine';
 interface TableElementOperateProps {
   readonly elementInfo: PPTTableElement;
   readonly handlerVisible: boolean;
-  readonly rotateElement: (e: React.MouseEvent, element: PPTTableElement) => void;
+  readonly rotateElement: (e: React.MouseEvent | React.TouchEvent, element: PPTTableElement) => void;
   readonly scaleElement: (
-    e: React.MouseEvent,
+    e: React.MouseEvent | React.TouchEvent,
     element: PPTTableElement,
     command: OperateResizeHandlers,
   ) => void;
@@ -62,12 +62,20 @@ export function TableElementOperate({
                 e.stopPropagation();
                 scaleElement(e, elementInfo, point.direction);
               }}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                scaleElement(e, elementInfo, point.direction);
+              }}
             />
           ))}
           <RotateHandler
             className="operate-rotate-handler"
             style={{ left: scaleWidth / 2 + 'px' }}
             onMouseDown={(e) => {
+              e.stopPropagation();
+              rotateElement(e, elementInfo);
+            }}
+            onTouchStart={(e) => {
               e.stopPropagation();
               rotateElement(e, elementInfo);
             }}

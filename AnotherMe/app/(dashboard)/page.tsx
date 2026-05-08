@@ -453,7 +453,7 @@ export default function LearningPlanPage() {
 
           <Link
             href={startLearningHref}
-            className="mt-4 w-full py-2.5 bg-[#111827] hover:bg-black text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+            className="mt-4 w-full py-2.5 min-h-[44px] bg-[#111827] hover:bg-black text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <BookOpen className="h-4 w-4" />
             开始今日学习
