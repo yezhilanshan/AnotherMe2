@@ -219,12 +219,13 @@ def _merge_runtime_configs(
     if ocr_model:
         ocr_config["model"] = ocr_model
 
-    # Validate and fix vision/ocr models based on provider
+    # Validate and fix vision/ocr models based on provider.
+    # Skip validation when the user explicitly provided the model — trust their choice.
     vision_model_current = str(vision_config.get("model") or "").lower()
     vision_base_url_current = str(vision_config.get("base_url") or "").lower()
     detected_vision_provider = vision_provider or _detect_provider_from_url(vision_base_url_current)
 
-    if detected_vision_provider:
+    if detected_vision_provider and not vision_model:
         # Check if current vision model is appropriate for the provider
         is_appropriate = False
         if detected_vision_provider == "qwen":
@@ -242,7 +243,7 @@ def _merge_runtime_configs(
     ocr_base_url_current = str(ocr_config.get("base_url") or "").lower()
     detected_ocr_provider = ocr_provider or _detect_provider_from_url(ocr_base_url_current) or detected_vision_provider
 
-    if detected_ocr_provider and ocr_engine != "paddleocr":
+    if detected_ocr_provider and ocr_engine != "paddleocr" and not ocr_model:
         is_ocr_appropriate = False
         if detected_ocr_provider == "qwen":
             is_ocr_appropriate = "qwen" in ocr_model_current and ("vl" in ocr_model_current or "ocr" in ocr_model_current)
@@ -306,6 +307,15 @@ def _generation_subprocess_entry(
                     cfg["api_key"] = cleaned_config["api_key"]
                 if cleaned_config.get("base_url"):
                     cfg["base_url"] = cleaned_config["base_url"]
+            # Apply vision/OCR specific overrides (take precedence over text fallback)
+            if cleaned_config.get("vision_api_key"):
+                vision_config["api_key"] = cleaned_config["vision_api_key"]
+            if cleaned_config.get("vision_base_url"):
+                vision_config["base_url"] = cleaned_config["vision_base_url"]
+            if cleaned_config.get("ocr_api_key"):
+                ocr_config["api_key"] = cleaned_config["ocr_api_key"]
+            if cleaned_config.get("ocr_base_url"):
+                ocr_config["base_url"] = cleaned_config["ocr_base_url"]
             if cleaned_config.get("model"):
                 llm_config["model"] = cleaned_config["model"]
             if cleaned_config.get("vision_model"):

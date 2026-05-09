@@ -115,6 +115,11 @@ export function getCurrentModelConfig() {
   const visionModelString = safeVisionModelId ? `${safeVisionProviderId}:${safeVisionModelId}` : '';
   const ocrModelString = safeOcrModelId ? `${safeOcrProviderId}:${safeOcrModelId}` : '';
 
+  // Fall back to text provider's credentials when vision/OCR configs lack them,
+  // so the Python engine always receives non-empty API keys.
+  const textApiKey = providerConfig?.apiKey || '';
+  const textBaseUrl = providerConfig?.baseUrl || '';
+
   return {
     providerId: safeProviderId,
     modelId: safeModelId,
@@ -125,18 +130,18 @@ export function getCurrentModelConfig() {
     modelString,
     visionModelString,
     ocrModelString,
-    apiKey: providerConfig?.apiKey || '',
+    apiKey: textApiKey,
     baseUrl: providerConfig?.baseUrl || '',
     providerType: providerConfig?.type,
     requiresApiKey: providerConfig?.requiresApiKey,
     isServerConfigured: providerConfig?.isServerConfigured,
-    visionApiKey: visionProviderConfig?.apiKey || '',
-    visionBaseUrl: visionProviderConfig?.baseUrl || '',
+    visionApiKey: visionProviderConfig?.apiKey || textApiKey,
+    visionBaseUrl: visionProviderConfig?.baseUrl || textBaseUrl || undefined,
     visionProviderType: visionProviderConfig?.type,
     visionRequiresApiKey: visionProviderConfig?.requiresApiKey,
     visionIsServerConfigured: visionProviderConfig?.isServerConfigured,
-    ocrApiKey: ocrProviderConfig?.apiKey || '',
-    ocrBaseUrl: ocrProviderConfig?.baseUrl || '',
+    ocrApiKey: ocrProviderConfig?.apiKey || textApiKey,
+    ocrBaseUrl: ocrProviderConfig?.baseUrl || textBaseUrl || undefined,
     ocrProviderType: ocrProviderConfig?.type,
     ocrRequiresApiKey: ocrProviderConfig?.requiresApiKey,
     ocrIsServerConfigured: ocrProviderConfig?.isServerConfigured,
