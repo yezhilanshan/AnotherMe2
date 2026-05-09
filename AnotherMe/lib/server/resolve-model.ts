@@ -45,11 +45,17 @@ export function resolveModel(params: {
   apiKey?: string;
   baseUrl?: string;
   providerType?: string;
+  providerId?: string;
   requiresApiKey?: boolean;
 }): ResolvedModel {
   const requestedModelString =
     params.modelString || process.env.DEFAULT_MODEL || getServerDefaultModelString() || 'gpt-4o-mini';
   const parsed = parseModelString(requestedModelString);
+  // Allow explicit providerId to override the parsed one (e.g. when auto-detecting
+  // the provider from the model name in OCR verification).
+  if (params.providerId) {
+    parsed.providerId = params.providerId as ProviderId;
+  }
   const defaultModel = process.env.DEFAULT_MODEL
     ? parseModelString(process.env.DEFAULT_MODEL)
     : null;

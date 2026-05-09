@@ -3,6 +3,7 @@ import { generateText } from 'ai';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { PROVIDERS } from '@/lib/ai/providers';
 
 const log = createLogger('Verify OCR Provider');
 
@@ -60,6 +61,7 @@ async function verifyStandardProvider(
         modelString: model,
         apiKey: apiKey || '',
         baseUrl: baseUrl || undefined,
+        providerId: providerId,
         providerType: providerType || 'openai',
         requiresApiKey: requiresApiKey ?? true,
       });
@@ -93,10 +95,31 @@ async function verifyStandardProvider(
   }
 }
 
+/**
+ * Detect the correct provider from the model name.
+ * When a user types a model like "qwen-vl-ocr-latest" but has a different
+ * provider selected (e.g., "openai"), this auto-detects the right provider.
+ */
+function detectProviderFromModel(
+  model: string,
+): { providerId: string; providerType: string; requiresApiKey: boolean } | null {
+  for (const [pid, config] of Object.entries(PROVIDERS)) {
+    if (config.models.some((m) => m.id === model)) {
+      return {
+        providerId: pid,
+        providerType: config.type,
+        requiresApiKey: config.requiresApiKey,
+      };
+    }
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { providerId, apiKey, baseUrl, model, providerType, requiresApiKey } = body;
+    const { apiKey, model } = body;
+    let { providerId, baseUrl, providerType, requiresApiKey } = body;
 
     if (!providerId) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Provider ID is required');
@@ -115,6 +138,19 @@ export async function POST(req: NextRequest) {
     // For other providers, use standard verification
     if (!model) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Model name is required');
+    }
+
+    // Auto-detect provider from model name when there's a mismatch
+    const detected = detectProviderFromModel(model);
+    if (detected && detected.providerId !== providerId) {
+      log.info(
+        `Auto-detected provider "${detected.providerId}" for model "${model}" (was "${providerId}")`,
+      );
+      providerId = detected.providerId;
+      providerType = detected.providerType;
+      requiresApiKey = detected.requiresApiKey;
+      // Clear stale base URL so resolveModel picks up the detected provider's default
+      baseUrl = '';
     }
 
     const result = await verifyStandardProvider(providerId, apiKey || '', baseUrl || '', model, providerType, requiresApiKey);
