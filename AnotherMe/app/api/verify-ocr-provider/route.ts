@@ -5,6 +5,12 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { PROVIDERS } from '@/lib/ai/providers';
 
+/**
+ * Models that don't support standard chat completions and need
+ * a lightweight connectivity check instead.
+ */
+const SPECIALIZED_OCR_MODELS = new Set(['qwen-vl-ocr-latest']);
+
 const log = createLogger('Verify OCR Provider');
 
 interface MinerUHealthResponse {
@@ -42,6 +48,52 @@ async function verifyMinerU(baseUrl: string): Promise<{ ok: boolean; message: st
       return { ok: false, message: `连接失败: ${error.message}` };
     }
     return { ok: false, message: '连接 MinerU 失败' };
+  }
+}
+
+/**
+ * Verify specialized OCR models (e.g. qwen-vl-ocr-latest) that don't support
+ * standard chat completions. Uses the /v1/models endpoint to check API key validity.
+ */
+async function verifySpecializedOcrModel(
+  providerId: string,
+  apiKey: string,
+  baseUrl: string,
+  _model: string,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    // Resolve the correct base URL for this provider
+    const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+    const endpoint = (baseUrl || provider?.defaultBaseUrl || '').replace(/\/$/, '');
+
+    if (!endpoint) {
+      return { ok: false, message: '无法确定 API 地址，请检查 Base URL' };
+    }
+
+    const modelsUrl = `${endpoint}/models`;
+    const response = await fetch(modelsUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.ok) {
+      return { ok: true, message: '连接成功' };
+    }
+
+    const errorText = await response.text().catch(() => '');
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, message: 'API key 无效或已过期' };
+    }
+    return { ok: false, message: `连接失败 (${response.status}): ${errorText.slice(0, 200)}` };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '连接测试失败';
+    if (msg.includes('ENOTFOUND') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT')) {
+      return { ok: false, message: '无法连接到 API 服务器，请检查 Base URL' };
+    }
+    return { ok: false, message: msg };
   }
 }
 
@@ -151,6 +203,16 @@ export async function POST(req: NextRequest) {
       requiresApiKey = detected.requiresApiKey;
       // Clear stale base URL so resolveModel picks up the detected provider's default
       baseUrl = '';
+    }
+
+    // Specialized OCR models don't support chat completions — use connectivity check
+    if (SPECIALIZED_OCR_MODELS.has(model)) {
+      const result = await verifySpecializedOcrModel(providerId, apiKey || '', baseUrl || '', model);
+      if (result.ok) {
+        return apiSuccess({ message: result.message });
+      } else {
+        return apiError('MODEL_VERIFICATION_FAILED', 400, result.message);
+      }
     }
 
     const result = await verifyStandardProvider(providerId, apiKey || '', baseUrl || '', model, providerType, requiresApiKey);
