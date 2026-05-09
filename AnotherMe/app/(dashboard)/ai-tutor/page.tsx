@@ -21,6 +21,7 @@ import {
   LayoutGrid,
   Lightbulb,
   Loader2,
+  Menu,
   MessageSquare,
   Microscope,
   Music,
@@ -36,6 +37,7 @@ import {
   Trash2,
   Video,
   Wrench,
+  X,
   Zap,
 } from 'lucide-react';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
@@ -152,12 +154,42 @@ const CAPABILITIES: CapabilityDef[] = [
 
 // 空状态建议卡片
 const SUGGESTION_CARDS = [
-  { icon: Calculator, title: '解题', description: '逐步解答数学问题', prompt: '帮我解这道数学题，请给出详细步骤' },
-  { icon: BookOpen, title: '概念讲解', description: '深入理解任何知识点', prompt: '用简单的话解释量子力学' },
-  { icon: Code2, title: '代码辅助', description: '生成和调试代码', prompt: '写一个 Python 函数来排序列表' },
-  { icon: Microscope, title: '深度研究', description: '多维度综合分析', prompt: '研究人工智能的最新发展' },
-  { icon: Sparkles, title: '可视化', description: '生成图表和示意图', prompt: '创建一个机器学习流程图' },
-  { icon: Lightbulb, title: '头脑风暴', description: '激发创意灵感', prompt: '为科学项目头脑风暴一些创意' },
+  {
+    icon: Calculator,
+    title: '解题',
+    description: '逐步解答数学问题',
+    prompt: '帮我解这道数学题，请给出详细步骤',
+  },
+  {
+    icon: BookOpen,
+    title: '概念讲解',
+    description: '深入理解任何知识点',
+    prompt: '用简单的话解释量子力学',
+  },
+  {
+    icon: Code2,
+    title: '代码辅助',
+    description: '生成和调试代码',
+    prompt: '写一个 Python 函数来排序列表',
+  },
+  {
+    icon: Microscope,
+    title: '深度研究',
+    description: '多维度综合分析',
+    prompt: '研究人工智能的最新发展',
+  },
+  {
+    icon: Sparkles,
+    title: '可视化',
+    description: '生成图表和示意图',
+    prompt: '创建一个机器学习流程图',
+  },
+  {
+    icon: Lightbulb,
+    title: '头脑风暴',
+    description: '激发创意灵感',
+    prompt: '为科学项目头脑风暴一些创意',
+  },
 ];
 
 // 快速提示
@@ -178,7 +210,10 @@ const CHAT_TOOLS: ToolDef[] = [
   { id: 'paper_search', label: '论文搜索', description: '搜索学术论文', icon: FileSearch },
 ];
 
-const TOOL_CONFIG_BY_CAPABILITY: Record<CapabilityId, { allowedTools: TutorToolName[]; defaultTools: TutorToolName[] }> = {
+const TOOL_CONFIG_BY_CAPABILITY: Record<
+  CapabilityId,
+  { allowedTools: TutorToolName[]; defaultTools: TutorToolName[] }
+> = {
   '': {
     allowedTools: ['brainstorm', 'rag', 'web_search', 'code_execution', 'reason', 'paper_search'],
     defaultTools: [],
@@ -298,7 +333,12 @@ function safeParseSessions(raw: string | null): TutorSession[] {
 function formatSessionTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function extractSvgPreview(content: string): string | null {
@@ -386,7 +426,9 @@ function getDefaultTools(capability: CapabilityId): TutorToolName[] {
   return [...TOOL_CONFIG_BY_CAPABILITY[capability].defaultTools];
 }
 
-function extractQuizPreviewQuestions(result: Record<string, unknown> | undefined): QuizPreviewQuestion[] {
+function extractQuizPreviewQuestions(
+  result: Record<string, unknown> | undefined,
+): QuizPreviewQuestion[] {
   const output = result?.output;
   if (!output || typeof output !== 'object') return [];
 
@@ -404,7 +446,9 @@ function extractQuizPreviewQuestions(result: Record<string, unknown> | undefined
       return {
         question: title,
         options: Array.isArray(question.options)
-          ? question.options.filter((option): option is string => typeof option === 'string' && option.trim().length > 0)
+          ? question.options.filter(
+              (option): option is string => typeof option === 'string' && option.trim().length > 0,
+            )
           : undefined,
         answer,
         explanation: typeof question.explanation === 'string' ? question.explanation : undefined,
@@ -414,34 +458,44 @@ function extractQuizPreviewQuestions(result: Record<string, unknown> | undefined
     .filter((item): item is QuizPreviewQuestion => Boolean(item));
 }
 
-function getCapabilityOutput(result: Record<string, unknown> | undefined): Record<string, unknown> | null {
+function getCapabilityOutput(
+  result: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
   const output = result?.output;
   return output && typeof output === 'object' ? (output as Record<string, unknown>) : null;
 }
 
-function extractVisualizePreview(result: Record<string, unknown> | undefined): VisualizePreviewData | null {
+function extractVisualizePreview(
+  result: Record<string, unknown> | undefined,
+): VisualizePreviewData | null {
   const output = getCapabilityOutput(result);
   if (!output) return null;
 
-  const format = typeof output.render_type === 'string'
-    ? output.render_type
-    : typeof output.format === 'string'
-      ? output.format
-      : 'svg';
+  const format =
+    typeof output.render_type === 'string'
+      ? output.render_type
+      : typeof output.format === 'string'
+        ? output.format
+        : 'svg';
   const preview = typeof output.preview === 'string' ? output.preview.trim() : '';
   const codeRaw = output.code;
-  const code = typeof codeRaw === 'string'
-    ? codeRaw.trim()
-    : codeRaw && typeof codeRaw === 'object' && typeof (codeRaw as Record<string, unknown>).content === 'string'
-      ? String((codeRaw as Record<string, unknown>).content).trim()
-      : '';
+  const code =
+    typeof codeRaw === 'string'
+      ? codeRaw.trim()
+      : codeRaw &&
+          typeof codeRaw === 'object' &&
+          typeof (codeRaw as Record<string, unknown>).content === 'string'
+        ? String((codeRaw as Record<string, unknown>).content).trim()
+        : '';
   const content = preview || code;
 
   if (!content) return null;
   return { format, content };
 }
 
-function extractMathAnimatorPreview(result: Record<string, unknown> | undefined): MathAnimatorPreviewData | null {
+function extractMathAnimatorPreview(
+  result: Record<string, unknown> | undefined,
+): MathAnimatorPreviewData | null {
   const output = getCapabilityOutput(result);
   if (!output) return null;
 
@@ -458,35 +512,54 @@ function extractMathAnimatorPreview(result: Record<string, unknown> | undefined)
             code: typeof frame.code === 'string' ? frame.code : undefined,
           };
         })
-        .filter((item): item is { frame: number; description: string; code?: string } => Boolean(item))
+        .filter((item): item is { frame: number; description: string; code?: string } =>
+          Boolean(item),
+        )
     : undefined;
 
   const artifacts = Array.isArray(output.artifacts)
     ? output.artifacts
-        .map((item): { type: 'video' | 'image'; url: string; filename?: string; label?: string } | null => {
-          if (!item || typeof item !== 'object') return null;
-          const artifact = item as Record<string, unknown>;
-          const type = artifact.type === 'image' ? 'image' : artifact.type === 'video' ? 'video' : null;
-          const url = typeof artifact.url === 'string' ? artifact.url : '';
-          if (!type || !url) return null;
-          return {
-            type,
-            url,
-            filename: typeof artifact.filename === 'string' ? artifact.filename : undefined,
-            label: typeof artifact.label === 'string' ? artifact.label : undefined,
-          };
-        })
-        .filter((item): item is { type: 'video' | 'image'; url: string; filename?: string; label?: string } => Boolean(item))
+        .map(
+          (
+            item,
+          ): { type: 'video' | 'image'; url: string; filename?: string; label?: string } | null => {
+            if (!item || typeof item !== 'object') return null;
+            const artifact = item as Record<string, unknown>;
+            const type =
+              artifact.type === 'image' ? 'image' : artifact.type === 'video' ? 'video' : null;
+            const url = typeof artifact.url === 'string' ? artifact.url : '';
+            if (!type || !url) return null;
+            return {
+              type,
+              url,
+              filename: typeof artifact.filename === 'string' ? artifact.filename : undefined,
+              label: typeof artifact.label === 'string' ? artifact.label : undefined,
+            };
+          },
+        )
+        .filter(
+          (
+            item,
+          ): item is { type: 'video' | 'image'; url: string; filename?: string; label?: string } =>
+            Boolean(item),
+        )
     : undefined;
 
   const codeRaw = output.code;
-  const codeContent = typeof codeRaw === 'object' && codeRaw && typeof (codeRaw as Record<string, unknown>).content === 'string'
-    ? String((codeRaw as Record<string, unknown>).content)
-    : undefined;
-  const render = output.render && typeof output.render === 'object' ? output.render as Record<string, unknown> : undefined;
-  const toolArtifacts = output.toolArtifacts && typeof output.toolArtifacts === 'object'
-    ? output.toolArtifacts as Record<string, unknown>
-    : undefined;
+  const codeContent =
+    typeof codeRaw === 'object' &&
+    codeRaw &&
+    typeof (codeRaw as Record<string, unknown>).content === 'string'
+      ? String((codeRaw as Record<string, unknown>).content)
+      : undefined;
+  const render =
+    output.render && typeof output.render === 'object'
+      ? (output.render as Record<string, unknown>)
+      : undefined;
+  const toolArtifacts =
+    output.toolArtifacts && typeof output.toolArtifacts === 'object'
+      ? (output.toolArtifacts as Record<string, unknown>)
+      : undefined;
 
   const preview: MathAnimatorPreviewData = {
     response: typeof output.response === 'string' ? output.response : undefined,
@@ -494,14 +567,21 @@ function extractMathAnimatorPreview(result: Record<string, unknown> | undefined)
     artifacts,
     storyboard,
     manimCode: typeof output.manimCode === 'string' ? output.manimCode : codeContent,
-    renderError: typeof render?.renderError === 'string'
-      ? render.renderError
-      : typeof toolArtifacts?.renderError === 'string'
-        ? toolArtifacts.renderError
-        : undefined,
+    renderError:
+      typeof render?.renderError === 'string'
+        ? render.renderError
+        : typeof toolArtifacts?.renderError === 'string'
+          ? toolArtifacts.renderError
+          : undefined,
   };
 
-  if (preview.outputUrl || preview.artifacts?.length || preview.storyboard?.length || preview.manimCode || preview.renderError) {
+  if (
+    preview.outputUrl ||
+    preview.artifacts?.length ||
+    preview.storyboard?.length ||
+    preview.manimCode ||
+    preview.renderError
+  ) {
     return preview;
   }
 
@@ -538,11 +618,17 @@ function VisualizeResultPreview({ result }: { result?: Record<string, unknown> }
 
   const normalizedFormat = preview.format.toLowerCase();
   const isSvg = normalizedFormat === 'svg' || preview.content.trim().startsWith('<svg');
-  const isHtml = normalizedFormat === 'html' || preview.content.trim().startsWith('<!doctype') || preview.content.trim().startsWith('<html');
+  const isHtml =
+    normalizedFormat === 'html' ||
+    preview.content.trim().startsWith('<!doctype') ||
+    preview.content.trim().startsWith('<html');
 
   if (isSvg) {
     const svg = preview.content.includes('</svg>')
-      ? preview.content.slice(preview.content.indexOf('<svg'), preview.content.lastIndexOf('</svg>') + 6)
+      ? preview.content.slice(
+          preview.content.indexOf('<svg'),
+          preview.content.lastIndexOf('</svg>') + 6,
+        )
       : preview.content;
 
     return (
@@ -588,7 +674,9 @@ function MathAnimatorPreview({ result }: { result?: Record<string, unknown> }) {
   const preview = extractMathAnimatorPreview(result);
   if (!preview) return null;
   const videos = [
-    ...(preview.outputUrl ? [{ type: 'video' as const, url: preview.outputUrl, label: 'Video Output' }] : []),
+    ...(preview.outputUrl
+      ? [{ type: 'video' as const, url: preview.outputUrl, label: 'Video Output' }]
+      : []),
     ...(preview.artifacts || []).filter((item) => item.type === 'video'),
   ];
   const images = (preview.artifacts || []).filter((item) => item.type === 'image');
@@ -598,8 +686,17 @@ function MathAnimatorPreview({ result }: { result?: Record<string, unknown> }) {
       {videos.length > 0 ? (
         <div className="space-y-2">
           {videos.map((video, index) => (
-            <div key={`${video.url}-${index}`} className="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-black">
-              <video controls playsInline preload="metadata" src={video.url} className="aspect-video max-h-[520px] w-full object-contain" />
+            <div
+              key={`${video.url}-${index}`}
+              className="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-black"
+            >
+              <video
+                controls
+                playsInline
+                preload="metadata"
+                src={video.url}
+                className="aspect-video max-h-[520px] w-full object-contain"
+              />
             </div>
           ))}
         </div>
@@ -608,8 +705,15 @@ function MathAnimatorPreview({ result }: { result?: Record<string, unknown> }) {
       {images.length > 0 ? (
         <div className="grid gap-2 sm:grid-cols-2">
           {images.map((image, index) => (
-            <div key={`${image.url}-${index}`} className="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#201c18]">
-              <img src={image.url} alt={image.label || image.filename || 'Math animation output'} className="max-h-[320px] w-full object-contain" />
+            <div
+              key={`${image.url}-${index}`}
+              className="overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#201c18]"
+            >
+              <img
+                src={image.url}
+                alt={image.label || image.filename || 'Math animation output'}
+                className="max-h-[320px] w-full object-contain"
+              />
             </div>
           ))}
         </div>
@@ -618,11 +722,16 @@ function MathAnimatorPreview({ result }: { result?: Record<string, unknown> }) {
       {preview.storyboard?.length ? (
         <div className="space-y-2">
           {preview.storyboard.map((frame, index) => (
-            <div key={`${frame.frame}-${index}`} className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#201c18] p-3">
+            <div
+              key={`${frame.frame}-${index}`}
+              className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#201c18] p-3"
+            >
               <div className="mb-1 text-[11px] font-semibold text-orange-700 dark:text-orange-400">
                 第{frame.frame || index + 1}帧
               </div>
-              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700 dark:text-gray-300">{frame.description}</p>
+              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700 dark:text-gray-300">
+                {frame.description}
+              </p>
               {frame.code ? (
                 <pre className="mt-2 max-h-[180px] overflow-auto rounded-lg bg-gray-950 p-2 text-[10px] text-gray-100">
                   {frame.code}
@@ -641,7 +750,9 @@ function MathAnimatorPreview({ result }: { result?: Record<string, unknown> }) {
 
       {preview.manimCode ? (
         <details className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#201c18] p-3">
-          <summary className="cursor-pointer text-[12px] font-semibold text-gray-700 dark:text-gray-300">Manim 代码</summary>
+          <summary className="cursor-pointer text-[12px] font-semibold text-gray-700 dark:text-gray-300">
+            Manim 代码
+          </summary>
           <pre className="mt-2 max-h-[260px] overflow-auto rounded-lg bg-gray-950 p-3 text-[10px] text-gray-100">
             {preview.manimCode}
           </pre>
@@ -697,7 +808,11 @@ function QuizPreview({ questions }: { questions: QuizPreviewQuestion[] }) {
 
           <div className="mt-3 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50 dark:bg-emerald-900/20 px-2.5 py-2 text-[12px] leading-relaxed text-emerald-800 dark:text-emerald-300">
             <div className="font-semibold">答案：{question.answer}</div>
-            {question.explanation ? <div className="mt-1 text-emerald-700 dark:text-emerald-400">{question.explanation}</div> : null}
+            {question.explanation ? (
+              <div className="mt-1 text-emerald-700 dark:text-emerald-400">
+                {question.explanation}
+              </div>
+            ) : null}
           </div>
         </details>
       ))}
@@ -706,11 +821,19 @@ function QuizPreview({ questions }: { questions: QuizPreviewQuestion[] }) {
 }
 
 // 思考过程可折叠组件
-function ReasoningBlock({ reasoning, isStreaming = false }: { reasoning: string; isStreaming?: boolean }) {
+function ReasoningBlock({
+  reasoning,
+  isStreaming = false,
+}: {
+  reasoning: string;
+  isStreaming?: boolean;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <div className={`mb-3 rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-900/20 overflow-hidden animate-thinking-enter ${isStreaming ? 'animate-border-glow' : ''}`}>
+    <div
+      className={`mb-3 rounded-xl border border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-900/20 overflow-hidden animate-thinking-enter ${isStreaming ? 'animate-border-glow' : ''}`}
+    >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-amber-100/50 dark:hover:bg-amber-900/30 transition-colors"
@@ -721,7 +844,9 @@ function ReasoningBlock({ reasoning, isStreaming = false }: { reasoning: string;
           ) : (
             <Sparkles className="w-4 h-4 text-amber-500" />
           )}
-          <span className={`text-sm font-medium ${isStreaming ? 'thinking-text-shimmer text-transparent' : 'text-amber-800 dark:text-amber-200'}`}>
+          <span
+            className={`text-sm font-medium ${isStreaming ? 'thinking-text-shimmer text-transparent' : 'text-amber-800 dark:text-amber-200'}`}
+          >
             {isStreaming ? '思考中' : '思考过程'}
           </span>
           {isStreaming && (
@@ -750,7 +875,9 @@ function ReasoningBlock({ reasoning, isStreaming = false }: { reasoning: string;
 }
 
 // 将内部 TutorToolTrace 转换为 ToolTracePanel 需要的格式
-function toToolExecutionTraces(traces?: TutorToolTrace[]): import('@/features/ai-tutor/components/chat/tool-trace-panel').ToolExecutionTrace[] {
+function toToolExecutionTraces(
+  traces?: TutorToolTrace[],
+): import('@/features/ai-tutor/components/chat/tool-trace-panel').ToolExecutionTrace[] {
   if (!traces) return [];
   return traces.map((t) => ({
     id: t.id,
@@ -781,6 +908,7 @@ export default function AITutorPage() {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
   const [tappedMessageId, setTappedMessageId] = useState<string | null>(null);
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -810,7 +938,7 @@ export default function AITutorPage() {
   useEffect(() => {
     document.documentElement.style.overflow = 'hidden';
     document.body.style.overflow = 'hidden';
-    
+
     return () => {
       document.documentElement.style.overflow = '';
       document.body.style.overflow = '';
@@ -822,7 +950,9 @@ export default function AITutorPage() {
       localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY),
     );
     if (savedSessions.length > 0) {
-      const sorted = [...savedSessions].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+      const sorted = [...savedSessions].sort(
+        (a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt),
+      );
       setSessions(sorted.slice(0, MAX_SESSIONS));
       setActiveSessionId(sorted[0].id);
       setHydrated(true);
@@ -945,7 +1075,13 @@ export default function AITutorPage() {
     setSessions((prev) =>
       prev.map((session) =>
         session.id === activeSession.id
-          ? { ...session, messages: [], autoTitle: true, title: '新会话', updatedAt: new Date().toISOString() }
+          ? {
+              ...session,
+              messages: [],
+              autoTitle: true,
+              title: '新会话',
+              updatedAt: new Date().toISOString(),
+            }
           : session,
       ),
     );
@@ -1068,9 +1204,10 @@ export default function AITutorPage() {
     let assistantContent = '';
     const deltaQueue: string[] = [];
     let hasStructuredResult = false;
-    const structuredOnlyCapability = activeCapability === 'math_animator'
-      || activeCapability === 'visualize'
-      || activeCapability === 'quiz_practice';
+    const structuredOnlyCapability =
+      activeCapability === 'math_animator' ||
+      activeCapability === 'visualize' ||
+      activeCapability === 'quiz_practice';
 
     const renderAssistant = () => {
       updateSessionMessages(targetSessionId, (prev) =>
@@ -1081,9 +1218,8 @@ export default function AITutorPage() {
     const appendToolEvent = (event: ChatApiEvent) => {
       const toolName = asTutorToolName(event.data?.toolName);
       if (!toolName) return;
-      const toolId = typeof event.data?.toolId === 'string'
-        ? event.data.toolId
-        : `${toolName}-${Date.now()}`;
+      const toolId =
+        typeof event.data?.toolId === 'string' ? event.data.toolId : `${toolName}-${Date.now()}`;
       const now = Date.now();
 
       updateSessionMessages(targetSessionId, (prev) =>
@@ -1199,7 +1335,13 @@ export default function AITutorPage() {
           }
         : {
             messages: toRequestMessages(snapshotMessages.slice(0, -1)),
-            storeState: { stage: null, scenes: [], currentSceneId: null, mode: 'autonomous', whiteboardOpen: false },
+            storeState: {
+              stage: null,
+              scenes: [],
+              currentSceneId: null,
+              mode: 'autonomous',
+              whiteboardOpen: false,
+            },
             config: {
               agentIds: [UNIFIED_MENTOR_PRESET.id],
               sessionType: 'qa',
@@ -1318,7 +1460,8 @@ export default function AITutorPage() {
               }
             }
             if (event.type === 'error') {
-              const message = typeof event.data?.message === 'string' ? event.data.message : 'AI 导师返回错误。';
+              const message =
+                typeof event.data?.message === 'string' ? event.data.message : 'AI 导师返回错误。';
               throw new Error(message);
             }
           }
@@ -1354,9 +1497,7 @@ export default function AITutorPage() {
         setErrorText(message);
         updateSessionMessages(targetSessionId, (prev) =>
           prev.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, content: `请求失败：${message}` }
-              : msg,
+            msg.id === assistantId ? { ...msg, content: `请求失败：${message}` } : msg,
           ),
         );
       }
@@ -1385,7 +1526,7 @@ export default function AITutorPage() {
 
   if (!hydrated || !activeSession) {
     return (
-      <div className="h-[calc(100vh-4rem)] flex items-center justify-center text-gray-500">
+      <div className="h-mobile-app flex items-center justify-center text-gray-500 md:h-[calc(100vh-4rem)]">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
         正在初始化 AI 导师...
       </div>
@@ -1393,7 +1534,7 @@ export default function AITutorPage() {
   }
 
   return (
-    <div className="fixed inset-0 md:left-64 flex bg-[#faf9f7] dark:bg-[#171411] overflow-hidden z-20">
+    <div className="fixed inset-0 z-20 flex overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64">
       {/* 会话列表侧边栏 */}
       <aside className="hidden md:flex bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 md:flex-col h-full overflow-hidden w-60 shrink-0">
         <div className="p-4 border-b border-gray-200/60 dark:border-gray-800/60">
@@ -1428,7 +1569,9 @@ export default function AITutorPage() {
                   className="flex-1 min-w-0 text-left disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <p className="font-medium truncate">{session.title}</p>
-                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">{formatSessionTime(session.updatedAt)}</p>
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
+                    {formatSessionTime(session.updatedAt)}
+                  </p>
                 </button>
                 <button
                   type="button"
@@ -1460,16 +1603,93 @@ export default function AITutorPage() {
         </div>
       </aside>
 
+      {mobileSessionsOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            aria-label="关闭会话列表遮罩"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setMobileSessionsOpen(false)}
+          />
+          <aside className="absolute inset-y-0 left-0 flex w-[min(86vw,320px)] flex-col overflow-hidden border-r border-gray-200/60 bg-[#f5f4f2] pt-safe shadow-2xl dark:border-gray-800/60 dark:bg-[#1c1814]">
+            <div className="flex items-center justify-between border-b border-gray-200/60 p-4 dark:border-gray-800/60">
+              <button
+                type="button"
+                disabled={isTyping}
+                onClick={() => {
+                  setMobileSessionsOpen(false);
+                  handleNewSession();
+                }}
+                className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm transition-all hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:bg-[#201c18] dark:text-gray-200 dark:hover:bg-[#2a241f]"
+              >
+                <Plus className="h-4 w-4" />
+                <span>新对话</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileSessionsOpen(false)}
+                className="ml-2 inline-flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 hover:bg-white dark:hover:bg-[#201c18]"
+                aria-label="关闭会话列表"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 scroll-touch">
+              {orderedSessions.map((session) => {
+                const active = session.id === activeSessionId;
+                return (
+                  <button
+                    key={session.id}
+                    type="button"
+                    disabled={isTyping}
+                    onClick={() => {
+                      setActiveSessionId(session.id);
+                      setMobileSessionsOpen(false);
+                    }}
+                    className={cn(
+                      'mb-1 flex min-h-[48px] w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50',
+                      active
+                        ? 'border border-gray-200/80 bg-white text-gray-900 shadow-sm dark:border-gray-800/80 dark:bg-[#201c18] dark:text-gray-100'
+                        : 'text-gray-600 hover:bg-white/60 dark:text-gray-400 dark:hover:bg-white/5',
+                    )}
+                  >
+                    <MessageSquare className="h-4 w-4 shrink-0 text-gray-400" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{session.title}</span>
+                      <span className="mt-0.5 block text-[11px] text-gray-400 dark:text-gray-500">
+                        {formatSessionTime(session.updatedAt)}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
+
       {/* Main Chat Area */}
       <section className="flex-1 flex flex-col min-w-0 bg-[#faf9f7] dark:bg-[#171411] h-full overflow-hidden">
         {/* Top header bar - Fixed height */}
-        <div className="h-14 flex items-center justify-between px-6 shrink-0 border-b border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
-          <span className="text-[14px] font-semibold text-gray-800 dark:text-gray-100 tracking-tight">聊天</span>
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200/60 bg-[#faf9f7] px-3 dark:border-gray-800/60 dark:bg-[#171411] md:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileSessionsOpen(true)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm md:hidden"
+              aria-label="打开会话列表"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+            <span className="truncate text-[14px] font-semibold tracking-tight text-gray-800 dark:text-gray-100">
+              聊天
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handleNewSession}
               disabled={isTyping}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 dark:text-gray-300 bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 rounded-lg hover:bg-gray-50 dark:hover:bg-[#2a241f] transition-colors shadow-sm disabled:opacity-50"
+              className="hidden items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-gray-600 shadow-sm transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-gray-800 dark:bg-[#201c18] dark:text-gray-300 dark:hover:bg-[#2a241f] sm:inline-flex"
             >
               <NotebookPen className="h-3.5 w-3.5" />
               保存到笔记本
@@ -1504,10 +1724,10 @@ export default function AITutorPage() {
             <button
               onClick={handleNewSession}
               disabled={isTyping}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-white bg-[#2d2d2d] dark:bg-[#f1dfc5] dark:text-[#1a1612] rounded-lg hover:bg-black dark:hover:bg-[#e8d5b8] transition-colors shadow-sm disabled:opacity-50"
+              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-[#2d2d2d] px-3 py-1.5 text-[12px] font-medium text-white shadow-sm transition-colors hover:bg-black disabled:opacity-50 dark:bg-[#f1dfc5] dark:text-[#1a1612] dark:hover:bg-[#e8d5b8]"
             >
               <Plus className="h-3.5 w-3.5" />
-              新对话
+              <span className="hidden sm:inline">新对话</span>
             </button>
           </div>
         </div>
@@ -1520,28 +1740,38 @@ export default function AITutorPage() {
         >
           {messages.length === 0 ? (
             /* Empty state - Centered, no scroll */
-            <div className="h-full flex flex-col items-center justify-center px-6 py-12">
+            <div className="flex h-full flex-col items-center justify-center px-4 py-12 md:px-6">
               <div className="text-center">
                 <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white mb-4 shadow-xl shadow-indigo-500/20">
                   <Sparkles className="w-8 h-8" />
                 </div>
-                <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+                <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-gray-100 sm:text-3xl">
                   我们先从哪里开始呢？
                 </h1>
-                <p className="text-gray-500 dark:text-gray-400">
-                  你的专属AI导师随时为你服务
-                </p>
+                <p className="text-gray-500 dark:text-gray-400">你的专属AI导师随时为你服务</p>
               </div>
             </div>
           ) : (
             <div className="w-full mx-auto py-6 px-4 lg:px-10 space-y-6">
               {messages.map((msg, index) => {
                 // 如果是 AI 消息且内容为空且正在输入，跳过渲染（思考动画会单独显示）
-                const isEmptyAssistant = msg.role === 'assistant' && !msg.content && isTyping && index === messages.length - 1;
+                const isEmptyAssistant =
+                  msg.role === 'assistant' &&
+                  !msg.content &&
+                  isTyping &&
+                  index === messages.length - 1;
                 if (isEmptyAssistant) return null;
 
                 return (
-                  <div key={msg.id} className={cn('group/message flex gap-3 animate-thinking-enter', msg.role === 'user' && 'flex-row-reverse')} style={{ animationDelay: `${index * 50}ms` }} onClick={() => setTappedMessageId(tappedMessageId === msg.id ? null : msg.id)}>
+                  <div
+                    key={msg.id}
+                    className={cn(
+                      'group/message flex gap-3 animate-thinking-enter',
+                      msg.role === 'user' && 'flex-row-reverse',
+                    )}
+                    style={{ animationDelay: `${index * 50}ms` }}
+                    onClick={() => setTappedMessageId(tappedMessageId === msg.id ? null : msg.id)}
+                  >
                     <div className="shrink-0">
                       {msg.role === 'user' ? (
                         <div className="h-8 w-8 rounded-full bg-[#2d2d2d] dark:bg-[#f1dfc5] flex items-center justify-center text-white dark:text-[#1a1612] text-xs font-semibold shadow-sm">
@@ -1553,7 +1783,12 @@ export default function AITutorPage() {
                         </div>
                       )}
                     </div>
-                    <div className={cn('flex-1 overflow-hidden', msg.role === 'user' ? 'text-right' : 'text-left')}>
+                    <div
+                      className={cn(
+                        'flex-1 overflow-hidden',
+                        msg.role === 'user' ? 'text-right' : 'text-left',
+                      )}
+                    >
                       <div
                         className={cn(
                           'inline-block px-4 py-3 rounded-2xl text-[14px] leading-relaxed max-w-full break-words',
@@ -1595,13 +1830,19 @@ export default function AITutorPage() {
                                 isStreaming={isTyping && index === messages.length - 1}
                               />
                             ) : null}
-                            {msg.capability !== 'math_animator' && msg.capability !== 'visualize' && msg.capability !== 'quiz_practice' ? (
-                              <ToolTracePanel traces={toToolExecutionTraces(msg.toolTraces)} isStreaming={isTyping && index === messages.length - 1} />
+                            {msg.capability !== 'math_animator' &&
+                            msg.capability !== 'visualize' &&
+                            msg.capability !== 'quiz_practice' ? (
+                              <ToolTracePanel
+                                traces={toToolExecutionTraces(msg.toolTraces)}
+                                isStreaming={isTyping && index === messages.length - 1}
+                              />
                             ) : null}
                             {(() => {
-                              const quizQuestions = msg.capability === 'quiz_practice'
-                                ? extractQuizPreviewQuestions(msg.capabilityResult)
-                                : [];
+                              const quizQuestions =
+                                msg.capability === 'quiz_practice'
+                                  ? extractQuizPreviewQuestions(msg.capabilityResult)
+                                  : [];
 
                               if (quizQuestions.length > 0) {
                                 return <QuizPreview questions={quizQuestions} />;
@@ -1627,78 +1868,96 @@ export default function AITutorPage() {
                           msg.content
                         )}
                       </div>
-                    <div className={cn('flex gap-1 mt-2 transition-opacity duration-200 md:opacity-0 md:group-hover/message:opacity-100', tappedMessageId === msg.id ? 'opacity-100' : 'opacity-0 md:opacity-0', msg.role === 'user' ? 'justify-end' : 'justify-start')} onClick={(e) => e.stopPropagation()}>
-                      {msg.role === 'user' ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleEditMessage(msg.id, msg.content)}
-                            disabled={isTyping}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
-                            title="编辑"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(msg.content)}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
-                            title="复制"
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(msg.content)}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
-                            title="复制"
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRetry(msg.id)}
-                            disabled={isTyping}
-                            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
-                            title="重试"
-                          >
-                            <RefreshCw className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleFeedback(msg.id, msg.feedback === 'up' ? null : 'up')}
-                            disabled={isTyping}
-                            className={cn(
-                              'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
-                              msg.feedback === 'up' ? 'text-orange-600' : 'text-gray-400 hover:text-orange-600',
-                            )}
-                            title="点赞"
-                          >
-                            <ThumbsUp className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleFeedback(msg.id, msg.feedback === 'down' ? null : 'down')}
-                            disabled={isTyping}
-                            className={cn(
-                              'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
-                              msg.feedback === 'down' ? 'text-orange-600' : 'text-gray-400 hover:text-orange-600',
-                            )}
-                            title="点踩"
-                          >
-                            <ThumbsDown className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      )}
+                      <div
+                        className={cn(
+                          'flex gap-1 mt-2 transition-opacity duration-200 md:opacity-0 md:group-hover/message:opacity-100',
+                          tappedMessageId === msg.id ? 'opacity-100' : 'opacity-0 md:opacity-0',
+                          msg.role === 'user' ? 'justify-end' : 'justify-start',
+                        )}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {msg.role === 'user' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleEditMessage(msg.id, msg.content)}
+                              disabled={isTyping}
+                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              title="编辑"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(msg.content)}
+                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              title="复制"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(msg.content)}
+                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              title="复制"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRetry(msg.id)}
+                              disabled={isTyping}
+                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              title="重试"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleFeedback(msg.id, msg.feedback === 'up' ? null : 'up')
+                              }
+                              disabled={isTyping}
+                              className={cn(
+                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                msg.feedback === 'up'
+                                  ? 'text-orange-600'
+                                  : 'text-gray-400 hover:text-orange-600',
+                              )}
+                              title="点赞"
+                            >
+                              <ThumbsUp className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleFeedback(msg.id, msg.feedback === 'down' ? null : 'down')
+                              }
+                              disabled={isTyping}
+                              className={cn(
+                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                msg.feedback === 'down'
+                                  ? 'text-orange-600'
+                                  : 'text-gray-400 hover:text-orange-600',
+                              )}
+                              title="点踩"
+                            >
+                              <ThumbsDown className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-            {isTyping && messages.length > 0 && messages[messages.length - 1]?.role === 'assistant' && !messages[messages.length - 1]?.content ? (
+                );
+              })}
+              {isTyping &&
+              messages.length > 0 &&
+              messages[messages.length - 1]?.role === 'assistant' &&
+              !messages[messages.length - 1]?.content ? (
                 <div className="flex gap-3 items-start animate-thinking-enter">
                   <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-sm shrink-0">
                     <Bot className="h-4 w-4" />
@@ -1730,12 +1989,14 @@ export default function AITutorPage() {
 
         {/* Composer - Fixed height, no overflow */}
         <div className="px-4 pb-3 pt-2 pb-safe shrink-0 border-t border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
-          {errorText ? <p className="text-xs text-red-600 dark:text-red-400 mb-1.5 text-center">{errorText}</p> : null}
+          {errorText ? (
+            <p className="text-xs text-red-600 dark:text-red-400 mb-1.5 text-center">{errorText}</p>
+          ) : null}
 
-          <div className="w-full mx-auto px-4 lg:px-10">
+          <div className="mx-auto w-full px-0 sm:px-4 lg:px-10">
             <div className="relative">
               {showCapabilityMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[280px] overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#201c18] shadow-lg">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   {CAPABILITIES.map((cap) => {
                     const Icon = cap.icon;
                     const isActive = cap.id === activeCapability;
@@ -1754,10 +2015,16 @@ export default function AITutorPage() {
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-[13px] font-semibold text-gray-800 dark:text-gray-100">{cap.label}</span>
-                            {isActive ? <span className="h-1.5 w-1.5 rounded-full bg-orange-400" /> : null}
+                            <span className="text-[13px] font-semibold text-gray-800 dark:text-gray-100">
+                              {cap.label}
+                            </span>
+                            {isActive ? (
+                              <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />
+                            ) : null}
                           </div>
-                          <p className="mt-0.5 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">{cap.description}</p>
+                          <p className="mt-0.5 text-[11px] leading-relaxed text-gray-400 dark:text-gray-500">
+                            {cap.description}
+                          </p>
                         </div>
                       </button>
                     );
@@ -1766,9 +2033,11 @@ export default function AITutorPage() {
               )}
 
               {showToolsMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[240px] overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#201c18] shadow-lg">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(240px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800">
-                    <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">工具</h3>
+                    <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+                      工具
+                    </h3>
                   </div>
 
                   <div className="py-1.5">
@@ -1792,11 +2061,18 @@ export default function AITutorPage() {
                               : 'text-gray-300 dark:text-gray-600 cursor-not-allowed',
                           )}
                         >
-                          <Icon className={cn('w-5 h-5', isAllowed ? 'text-gray-500' : 'text-gray-300 dark:text-gray-600')} />
+                          <Icon
+                            className={cn(
+                              'w-5 h-5',
+                              isAllowed ? 'text-gray-500' : 'text-gray-300 dark:text-gray-600',
+                            )}
+                          />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               <span className="text-[13px]">{tool.label}</span>
-                              {isSelected && isAllowed && <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />}
+                              {isSelected && isAllowed && (
+                                <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />
+                              )}
                             </div>
                             <div className="text-[11px] text-gray-400">{tool.description}</div>
                           </div>
@@ -1840,13 +2116,18 @@ export default function AITutorPage() {
                           'inline-flex items-center gap-1 py-1.5 px-2 text-[11px] font-medium transition-colors disabled:opacity-40 rounded-lg',
                           showCapabilityMenu
                             ? 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800',
                         )}
                         title="能力模式"
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
                         <span className="hidden sm:inline">{currentCap.label}</span>
-                        <ChevronDown className={cn('w-3 h-3 transition-transform', showCapabilityMenu && 'rotate-180')} />
+                        <ChevronDown
+                          className={cn(
+                            'w-3 h-3 transition-transform',
+                            showCapabilityMenu && 'rotate-180',
+                          )}
+                        />
                       </button>
 
                       {/* Tools button */}
@@ -1861,13 +2142,18 @@ export default function AITutorPage() {
                           'inline-flex items-center gap-1 py-1.5 px-2 text-[11px] font-medium transition-colors rounded-lg',
                           showToolsMenu
                             ? 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
-                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800',
                         )}
                         title="工具"
                       >
                         <Settings className="w-3.5 h-3.5" />
                         <span>工具</span>
-                        <ChevronDown className={cn('w-3 h-3 transition-transform', showToolsMenu && 'rotate-180')} />
+                        <ChevronDown
+                          className={cn(
+                            'w-3 h-3 transition-transform',
+                            showToolsMenu && 'rotate-180',
+                          )}
+                        />
                       </button>
 
                       {/* Reference button */}

@@ -23,6 +23,18 @@ class VisionTool:
         geometry_cfg = dict(llm_config or {})
         ocr_cfg = dict(ocr_llm_config or llm_config or {})
 
+        # Validate API key early — ChatOpenAI/OpenAI SDK will throw a confusing
+        # "Missing credentials … OPENAI_API_KEY" error if api_key is empty.
+        for role, cfg in [("vision", geometry_cfg), ("OCR", ocr_cfg)]:
+            api_key = cfg.get("api_key", "")
+            if not api_key:
+                model = cfg.get("model", "")
+                base_url = cfg.get("base_url", "")
+                raise ValueError(
+                    f"{role} model 的 API Key 为空（model={model}, base_url={base_url}）。"
+                    f"请在设置页面配置对应的 API Key，或在 .env.local 中设置 DASHSCOPE_API_KEY 环境变量。"
+                )
+
         self.geometry_llm = ChatOpenAI(
             api_key=geometry_cfg.get("api_key", ""),
             base_url=geometry_cfg.get("base_url", ""),

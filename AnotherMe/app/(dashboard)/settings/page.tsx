@@ -232,6 +232,15 @@ export default function SettingsPage() {
     [providersConfig],
   );
 
+  const visionProviderIds = useMemo(
+    () =>
+      providerIds.filter((id) => {
+        const cfg = providersConfig[id];
+        return cfg?.models?.some((m) => m.capabilities?.vision);
+      }),
+    [providerIds, providersConfig],
+  );
+
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
   const [selectedVisionProviderId, setSelectedVisionProviderId] = useState<ProviderId>(visionProviderId || providerId);
   const [selectedOcrProviderId, setSelectedOcrProviderId] = useState<ProviderId>(ocrProviderId || providerId);
@@ -280,13 +289,13 @@ export default function SettingsPage() {
     if (!providerIds.includes(selectedProviderId) && providerIds.length > 0) {
       setSelectedProviderId(providerIds[0]);
     }
-    if (!providerIds.includes(selectedVisionProviderId) && providerIds.length > 0) {
-      setSelectedVisionProviderId(providerIds[0]);
+    if (!visionProviderIds.includes(selectedVisionProviderId) && visionProviderIds.length > 0) {
+      setSelectedVisionProviderId(visionProviderIds[0]);
     }
-    if (!providerIds.includes(selectedOcrProviderId) && providerIds.length > 0) {
-      setSelectedOcrProviderId(providerIds[0]);
+    if (!visionProviderIds.includes(selectedOcrProviderId) && visionProviderIds.length > 0) {
+      setSelectedOcrProviderId(visionProviderIds[0]);
     }
-  }, [providerIds, selectedOcrProviderId, selectedProviderId, selectedVisionProviderId]);
+  }, [providerIds, visionProviderIds, selectedOcrProviderId, selectedProviderId, selectedVisionProviderId]);
 
   useEffect(() => {
     const selected = providersConfig[selectedProviderId];
@@ -662,15 +671,15 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 pb-12 px-4">
+    <div className="mx-auto max-w-6xl space-y-6 px-1 pb-12 sm:px-4 md:space-y-8">
       {/* Header */}
       <motion.div 
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center"
       >
         <div>
-          <h1 className="text-3xl font-bold text-foreground tracking-tight">设置</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">设置</h1>
           <p className="text-muted-foreground mt-1">管理您的账户偏好和系统配置</p>
         </div>
         <div className="hidden sm:flex items-center gap-2 px-4 py-2 bg-card rounded-full shadow-sm border border-border">
@@ -692,10 +701,11 @@ export default function SettingsPage() {
 
       <div className="bg-card rounded-xl shadow-xl shadow-border/50 dark:shadow-slate-950/50 overflow-hidden border border-border flex flex-col md:flex-row min-h-0 md:min-h-[700px]">
         {/* Sidebar */}
-        <div className="w-full md:w-80 bg-gradient-to-b from-gray-50/80 to-gray-100/50 dark:from-slate-950 dark:to-slate-900 p-6 space-y-2 shrink-0 border-b md:border-b-0 md:border-r border-border">
-          <div className="mb-6 px-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">设置分类</p>
+        <div className="w-full shrink-0 border-b border-border bg-gradient-to-b from-gray-50/80 to-gray-100/50 p-3 dark:from-slate-950 dark:to-slate-900 md:w-80 md:border-b-0 md:border-r md:p-6">
+          <div className="mb-2 px-2 md:mb-6">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground md:mb-4">设置分类</p>
           </div>
+          <div className="flex gap-2 overflow-x-auto pb-1 scroll-touch md:block md:space-y-2 md:overflow-visible md:pb-0">
           {(['profile', 'ai', 'notifications', 'appearance'] as const).map((section, index) => {
             const Icon = sectionIcons[section];
             const active = activeSection === section;
@@ -708,7 +718,7 @@ export default function SettingsPage() {
                 type="button"
                 onClick={() => setActiveSection(section)}
                 className={cn(
-                  'w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all duration-300 group',
+                  'flex min-w-[150px] items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-300 group md:w-full md:min-w-0 md:px-4 md:py-3.5',
                   active
                     ? 'bg-foreground text-background shadow-lg shadow-gray-900/25 dark:bg-white dark:text-slate-900 dark:shadow-white/10'
                     : 'text-gray-600 hover:bg-muted/50 dark:text-slate-400 dark:hover:bg-slate-800/50 hover:text-gray-900 dark:hover:text-slate-200'
@@ -722,10 +732,10 @@ export default function SettingsPage() {
                 )}>
                   <Icon className="h-4 w-4" />
                 </div>
-                <div className="flex-1 text-left">
+                <div className="min-w-0 flex-1 text-left">
                   <div className="font-semibold">{sectionLabels[section]}</div>
                   <div className={cn(
-                    'text-xs transition-all duration-300',
+                    'hidden text-xs transition-all duration-300 md:block',
                     active ? 'text-white/70 dark:text-slate-700' : 'text-gray-400 dark:text-slate-500'
                   )}>
                     {sectionDescriptions[section]}
@@ -738,9 +748,10 @@ export default function SettingsPage() {
               </motion.button>
             );
           })}
+          </div>
 
           {/* Quick Stats */}
-          <div className="mt-8 pt-6 border-t border-gray-200 dark:border-slate-800 px-2">
+          <div className="mt-4 hidden border-t border-gray-200 px-2 pt-6 dark:border-slate-800 md:block">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">系统状态</p>
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
@@ -771,7 +782,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Content */}
-        <div className="flex-1 p-8 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
           
             {activeSection === 'profile' ? (
               <motion.div
@@ -1157,7 +1168,7 @@ export default function SettingsPage() {
                                         onChange={(e) => setSelectedVisionProviderId(e.target.value as ProviderId)}
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       >
-                                        {providerIds.map((id) => (
+                                        {visionProviderIds.map((id) => (
                                           <option key={id} value={id}>
                                             {providersConfig[id]?.name || id}
                                           </option>
@@ -1223,7 +1234,7 @@ export default function SettingsPage() {
                                         onChange={(e) => setSelectedOcrProviderId(e.target.value as ProviderId)}
                                         className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
                                       >
-                                        {providerIds.map((id) => (
+                                        {visionProviderIds.map((id) => (
                                           <option key={id} value={id}>
                                             {providersConfig[id]?.name || id}
                                           </option>

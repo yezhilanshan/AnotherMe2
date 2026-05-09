@@ -44,7 +44,10 @@ import {
   createInitialProgressState,
   liveBookProgressReducer,
 } from '@/lib/live-book/progress-reducer';
-import { LiveBookProgressTimeline, type ProgressCounters } from '@/features/live-book/components/live-book/live-book-progress-timeline';
+import {
+  LiveBookProgressTimeline,
+  type ProgressCounters,
+} from '@/features/live-book/components/live-book/live-book-progress-timeline';
 import { LiveBookSourcePicker, type LiveBookSourceInput } from './live-book-source-picker';
 
 function getLiveBookHeaders(): HeadersInit {
@@ -621,6 +624,7 @@ export default function LiveBookPage() {
 
   const [headerCollapsed, setHeaderCollapsed] = useState(false);
   const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  const [mobileOutlineOpen, setMobileOutlineOpen] = useState(false);
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
   const [insertMenuOpen, setInsertMenuOpen] = useState(false);
   const [typeMenuBlockId, setTypeMenuBlockId] = useState<string | null>(null);
@@ -1271,7 +1275,7 @@ export default function LiveBookPage() {
     const pages = book?.pages || [];
 
     return (
-      <aside className="flex h-full w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
+      <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-gray-200 bg-white md:flex">
         {/* Sidebar Header */}
         <div className="border-b border-gray-100 p-4">
           <button
@@ -1403,13 +1407,22 @@ export default function LiveBookPage() {
                     style={{ width: `${Math.min(100, insights.progress.score)}%` }}
                   />
                 </div>
-                <span className="font-semibold text-gray-900 tabular-nums">{insights.progress.score}</span>
+                <span className="font-semibold text-gray-900 tabular-nums">
+                  {insights.progress.score}
+                </span>
               </div>
             </div>
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-gray-400">测验</span>
               <span className="font-semibold text-gray-900">
-                <span className={insights.progress.quizCorrect === insights.progress.quizTotal && insights.progress.quizTotal > 0 ? 'text-emerald-600' : ''}>
+                <span
+                  className={
+                    insights.progress.quizCorrect === insights.progress.quizTotal &&
+                    insights.progress.quizTotal > 0
+                      ? 'text-emerald-600'
+                      : ''
+                  }
+                >
                   {insights.progress.quizCorrect}
                 </span>
                 <span className="text-gray-400">/{insights.progress.quizTotal}</span>
@@ -1418,6 +1431,119 @@ export default function LiveBookPage() {
           </div>
         )}
       </aside>
+    );
+  }
+
+  function renderMobileOutlineSheet() {
+    if (view === 'list' || !mobileOutlineOpen) return null;
+
+    const book = detail;
+    const pages = book?.pages || [];
+
+    return (
+      <div className="fixed inset-0 z-50 md:hidden">
+        <button
+          type="button"
+          aria-label="关闭目录遮罩"
+          className="absolute inset-0 bg-black/40"
+          onClick={() => setMobileOutlineOpen(false)}
+        />
+        <aside className="absolute inset-x-0 bottom-0 flex max-h-[min(78vh,640px)] flex-col rounded-t-2xl border-t border-gray-200 bg-white pb-safe shadow-2xl">
+          <header className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-gray-900">
+                {book?.title || '页面导航'}
+              </p>
+              <p className="mt-0.5 text-xs text-gray-400">{pages.length} 页</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileOutlineOpen(false)}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl text-gray-500 hover:bg-gray-100"
+              aria-label="关闭目录"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </header>
+          <div className="flex-1 overflow-y-auto p-3 scroll-touch">
+            <div className="space-y-1">
+              {pages
+                .slice()
+                .sort((a, b) => a.order - b.order)
+                .map((page) => {
+                  const isActive = selectedPageId === page.id;
+                  return (
+                    <button
+                      key={page.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedPageId(page.id);
+                        setMobileOutlineOpen(false);
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left',
+                        isActive
+                          ? 'border-gray-900 bg-gray-50 text-gray-900'
+                          : 'border-transparent text-gray-700 hover:bg-gray-50',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs font-bold',
+                          isActive ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500',
+                        )}
+                      >
+                        {page.order}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {page.title}
+                      </span>
+                      <span
+                        className={cn(
+                          'h-2 w-2 shrink-0 rounded-full',
+                          page.status === 'ready'
+                            ? 'bg-emerald-400'
+                            : page.status === 'error'
+                              ? 'bg-red-400'
+                              : page.status === 'partial'
+                                ? 'bg-amber-400'
+                                : 'bg-gray-300',
+                        )}
+                      />
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        </aside>
+      </div>
+    );
+  }
+
+  function renderMobileReaderDock() {
+    if (view === 'list') return null;
+
+    return (
+      <div className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-center gap-2 border-t border-gray-200 bg-white/95 px-4 py-2 pb-safe shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur md:hidden">
+        <button
+          type="button"
+          onClick={() => setMobileOutlineOpen(true)}
+          className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm"
+        >
+          <ListChecks className="h-4 w-4" />
+          目录
+        </button>
+        {view === 'reader' && selectedPage && (
+          <button
+            type="button"
+            onClick={() => setChatOpen(true)}
+            className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-gray-900 px-3 text-sm font-medium text-white shadow-sm"
+          >
+            <MessageSquare className="h-4 w-4" />
+            问答
+          </button>
+        )}
+      </div>
     );
   }
 
@@ -1489,9 +1615,10 @@ export default function LiveBookPage() {
 
     const readyBlocks = selectedPage.blocks.filter((b) => b.status === 'ready').length;
     const errorBlocks = selectedPage.blocks.filter((b) => b.status === 'error' || b.error).length;
-    const blockProgress = selectedPage.blocks.length > 0
-      ? Math.round((readyBlocks / selectedPage.blocks.length) * 100)
-      : 0;
+    const blockProgress =
+      selectedPage.blocks.length > 0
+        ? Math.round((readyBlocks / selectedPage.blocks.length) * 100)
+        : 0;
 
     return (
       <header
@@ -1748,7 +1875,7 @@ export default function LiveBookPage() {
     return (
       <div className="relative flex-1 overflow-hidden bg-[#f8fafb]">
         <div className="h-full overflow-y-auto" ref={setReaderScrollContainer}>
-          <div className="mx-auto max-w-[78ch] px-4 md:px-6 py-6 md:py-8">
+          <div className="mx-auto max-w-[78ch] px-4 md:px-6 py-6 pb-24 md:py-8">
             {currentChapter && !headerCollapsed && (
               <div className="mb-6 border-l-2 border-gray-900 bg-white px-5 py-4 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1812,7 +1939,9 @@ export default function LiveBookPage() {
                             direction: 'down',
                           })
                         }
-                        disabled={operatingBlockId === block.id || index === selectedPage.blocks.length - 1}
+                        disabled={
+                          operatingBlockId === block.id || index === selectedPage.blocks.length - 1
+                        }
                         className="pointer-events-auto rounded p-1 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30"
                         title="下移"
                       >
@@ -1907,9 +2036,7 @@ export default function LiveBookPage() {
                                   : 'bg-gray-50 text-gray-400 border-gray-100',
                             )}
                           >
-                            {block.status === 'error' && (
-                              <AlertTriangle className="h-2.5 w-2.5" />
-                            )}
+                            {block.status === 'error' && <AlertTriangle className="h-2.5 w-2.5" />}
                             {blockTypeLabel(block.type)}
                           </span>
                         </div>
@@ -1951,9 +2078,7 @@ export default function LiveBookPage() {
                             <AlertTriangle className="h-4 w-4 text-rose-600" />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-rose-800">
-                              块生成失败
-                            </p>
+                            <p className="text-sm font-semibold text-rose-800">块生成失败</p>
                             <p className="mt-1 text-xs text-rose-600 leading-relaxed">
                               {block.error || '未提供错误详情'}
                             </p>
@@ -2081,7 +2206,7 @@ export default function LiveBookPage() {
                     插入块
                   </Button>
                   {insertMenuOpen && (
-                    <div className="absolute bottom-full left-1/2 mb-2 grid w-[min(520px,calc(100vw-160px))] -translate-x-1/2 grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-white p-2 shadow-xl sm:grid-cols-3">
+                    <div className="absolute bottom-full left-1/2 mb-2 grid w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-white p-2 shadow-xl sm:grid-cols-3">
                       {INSERTABLE_BLOCK_TYPES.map((type) => {
                         const Icon = BLOCK_TYPE_ICON[type] || FileText;
                         return (
@@ -2120,7 +2245,7 @@ export default function LiveBookPage() {
       return (
         <button
           onClick={() => setChatOpen(true)}
-          className="absolute bottom-5 right-5 inline-flex items-center gap-2 rounded-full bg-gray-900 px-5 py-3 min-h-[44px] text-sm font-medium text-white shadow-xl hover:bg-gray-800 hover:shadow-2xl hover:scale-105 transition-all z-20"
+          className="absolute bottom-5 right-5 hidden min-h-[44px] items-center gap-2 rounded-full bg-gray-900 px-5 py-3 text-sm font-medium text-white shadow-xl transition-all hover:scale-105 hover:bg-gray-800 hover:shadow-2xl md:inline-flex"
         >
           <MessageSquare className="h-4 w-4" />
           页内问答
@@ -2134,159 +2259,175 @@ export default function LiveBookPage() {
     }
 
     return (
-      <aside className="flex h-full w-full md:w-[360px] shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl">
-        <header className="flex items-center justify-between border-b border-gray-100 px-4 py-3 bg-gray-50/50">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-900">
-              <MessageSquare className="h-3.5 w-3.5 text-white" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-gray-900">页内问答</p>
-              <p className="text-[10px] text-gray-400">基于当前页面内容追问</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            {chatMessages.length > 0 && (
-              <button
-                onClick={() => {
-                  setChatMessages([]);
-                  setChatInput('');
-                }}
-                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
-                title="清空对话"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              onClick={() => setChatOpen(false)}
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {chatMessages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 mb-3">
-                <Bot className="h-6 w-6 text-gray-400" />
+      <>
+        <button
+          type="button"
+          aria-label="关闭页内问答遮罩"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setChatOpen(false)}
+        />
+        <aside className="flex h-full w-[360px] shrink-0 flex-col border-l border-gray-200 bg-white shadow-xl max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-14 max-md:z-50 max-md:h-auto max-md:w-full max-md:rounded-t-2xl max-md:pb-safe max-md:shadow-2xl">
+          <header className="flex items-center justify-between border-b border-gray-100 px-4 py-3 bg-gray-50/50">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-900">
+                <MessageSquare className="h-3.5 w-3.5 text-white" />
               </div>
-              <p className="text-sm font-medium text-gray-700">开始追问</p>
-              <p className="text-xs text-gray-400 mt-1 max-w-[200px] leading-relaxed">
-                针对当前页面内容提问，AI 会追加 deep_dive 或补偿块
-              </p>
-              <div className="mt-4 space-y-2 w-full">
-                {['这个概念的核心是什么？', '能给我一个具体的例子吗？', '这里和前面有什么联系？'].map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => {
-                      setChatInput(q);
-                    }}
-                    className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
-                  >
-                    {q}
-                  </button>
-                ))}
+              <div>
+                <p className="text-sm font-semibold text-gray-900">页内问答</p>
+                <p className="text-[10px] text-gray-400">基于当前页面内容追问</p>
               </div>
             </div>
-          ) : (
-            <>
-              {chatMessages.map((message, index) => (
-                <div
-                  key={`${message.role}-${index}`}
-                  className={cn(
-                    'flex gap-2.5',
-                    message.role === 'assistant' ? 'flex-row' : 'flex-row-reverse',
-                  )}
+            <div className="flex items-center gap-1">
+              {chatMessages.length > 0 && (
+                <button
+                  onClick={() => {
+                    setChatMessages([]);
+                    setChatInput('');
+                  }}
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                  title="清空对话"
                 >
-                  <div
-                    className={cn(
-                      'flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-                      message.role === 'assistant' ? 'bg-gray-900' : 'bg-gray-200',
-                    )}
-                  >
-                    {message.role === 'assistant' ? (
-                      <Bot className="h-3 w-3 text-white" />
-                    ) : (
-                      <MessageSquare className="h-3 w-3 text-gray-600" />
-                    )}
-                  </div>
-                  <div
-                    className={cn(
-                      'max-w-[calc(100%-40px)] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed',
-                      message.role === 'assistant'
-                        ? 'bg-gray-100 rounded-tl-sm text-gray-800'
-                        : 'bg-gray-900 rounded-tr-sm text-white',
-                    )}
-                  >
-                    <p className="whitespace-pre-wrap">{message.content}</p>
-                    {message.streaming && (
-                      <div className="mt-1.5 flex items-center gap-1">
-                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse delay-75" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse delay-150" />
-                      </div>
-                    )}
-                  </div>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label="关闭页内问答"
+                onClick={() => setChatOpen(false)}
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </header>
+
+          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+            {chatMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 mb-3">
+                  <Bot className="h-6 w-6 text-gray-400" />
                 </div>
-              ))}
-              {/* Quick follow-up suggestions after last assistant message */}
-              {!chatStreaming && chatMessages.length > 0 && chatMessages[chatMessages.length - 1]?.role === 'assistant' && (
-                <div className="flex flex-wrap gap-1.5 pl-9">
-                  {['再详细解释一下', '举个例子', '和前面内容有什么联系？'].map((q) => (
+                <p className="text-sm font-medium text-gray-700">开始追问</p>
+                <p className="text-xs text-gray-400 mt-1 max-w-[200px] leading-relaxed">
+                  针对当前页面内容提问，AI 会追加 deep_dive 或补偿块
+                </p>
+                <div className="mt-4 space-y-2 w-full">
+                  {[
+                    '这个概念的核心是什么？',
+                    '能给我一个具体的例子吗？',
+                    '这里和前面有什么联系？',
+                  ].map((q) => (
                     <button
                       key={q}
                       onClick={() => {
                         setChatInput(q);
                       }}
-                      className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+                      className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
                     >
                       {q}
                     </button>
                   ))}
                 </div>
-              )}
-            </>
-          )}
-        </div>
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handlePageChat();
-          }}
-          className="border-t border-gray-100 p-3 bg-white"
-        >
-          <div className="flex items-end gap-2">
-            <textarea
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder="例如：为什么这里要先判断条件？"
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void handlePageChat();
-                }
-              }}
-              className="flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs text-gray-900 outline-none transition-all focus:border-gray-400 focus:bg-white focus:ring-2 focus:ring-gray-100"
-            />
-            <button
-              type="submit"
-              disabled={chatStreaming || !chatInput.trim()}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gray-900 text-white disabled:opacity-40 hover:bg-gray-800 transition-all hover:scale-105"
-            >
-              {chatStreaming ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-            </button>
+              </div>
+            ) : (
+              <>
+                {chatMessages.map((message, index) => (
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={cn(
+                      'flex gap-2.5',
+                      message.role === 'assistant' ? 'flex-row' : 'flex-row-reverse',
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        'flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
+                        message.role === 'assistant' ? 'bg-gray-900' : 'bg-gray-200',
+                      )}
+                    >
+                      {message.role === 'assistant' ? (
+                        <Bot className="h-3 w-3 text-white" />
+                      ) : (
+                        <MessageSquare className="h-3 w-3 text-gray-600" />
+                      )}
+                    </div>
+                    <div
+                      className={cn(
+                        'max-w-[calc(100%-40px)] rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed',
+                        message.role === 'assistant'
+                          ? 'bg-gray-100 rounded-tl-sm text-gray-800'
+                          : 'bg-gray-900 rounded-tr-sm text-white',
+                      )}
+                    >
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                      {message.streaming && (
+                        <div className="mt-1.5 flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse delay-75" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-pulse delay-150" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {/* Quick follow-up suggestions after last assistant message */}
+                {!chatStreaming &&
+                  chatMessages.length > 0 &&
+                  chatMessages[chatMessages.length - 1]?.role === 'assistant' && (
+                    <div className="flex flex-wrap gap-1.5 pl-9">
+                      {['再详细解释一下', '举个例子', '和前面内容有什么联系？'].map((q) => (
+                        <button
+                          key={q}
+                          onClick={() => {
+                            setChatInput(q);
+                          }}
+                          className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+              </>
+            )}
           </div>
-        </form>
-      </aside>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void handlePageChat();
+            }}
+            className="border-t border-gray-100 p-3 bg-white"
+          >
+            <div className="flex items-end gap-2">
+              <textarea
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="例如：为什么这里要先判断条件？"
+                rows={2}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handlePageChat();
+                  }
+                }}
+                className="flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-xs text-gray-900 outline-none transition-all focus:border-gray-400 focus:bg-white focus:ring-2 focus:ring-gray-100"
+              />
+              <button
+                type="submit"
+                disabled={chatStreaming || !chatInput.trim()}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gray-900 text-white disabled:opacity-40 hover:bg-gray-800 transition-all hover:scale-105"
+              >
+                {chatStreaming ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </form>
+        </aside>
+      </>
     );
   }
 
@@ -2371,9 +2512,7 @@ export default function LiveBookPage() {
         <div>
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900 tracking-tight">
-                我的书库
-              </h2>
+              <h2 className="text-sm font-semibold text-gray-900 tracking-tight">我的书库</h2>
               <p className="text-xs text-gray-400 mt-0.5">{books.length} 本活书</p>
             </div>
             {loadingBooks && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
@@ -2505,8 +2644,9 @@ export default function LiveBookPage() {
 
   // Creator / Spine / Reader views with sidebar layout
   return (
-    <div className="flex h-[calc(100vh-4rem)] -m-8 bg-[#F3F2EE]">
+    <div className="flex h-[calc(100vh-4rem)] -m-8 bg-[#F3F2EE] max-md:h-mobile-app max-md:-m-4">
       {renderSidebar()}
+      {renderMobileOutlineSheet()}
 
       <main className="relative flex flex-1 overflow-hidden">
         {hasProgressActivity && (
@@ -2738,6 +2878,7 @@ export default function LiveBookPage() {
 
         {renderChatPanel()}
       </main>
+      {renderMobileReaderDock()}
     </div>
   );
 }

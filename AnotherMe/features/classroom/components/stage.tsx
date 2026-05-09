@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { ChatArea, type ChatAreaRef } from '@/features/ai-tutor/components/chat/chat-area';
 import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/registry/store';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
+import { useIsMobile } from '@/hooks/use-mobile';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -165,6 +166,9 @@ export function Stage({
   const engineRef = useRef<PlaybackEngine | null>(null);
   const audioPlayerRef = useRef(createAudioPlayer());
   const chatAreaRef = useRef<ChatAreaRef>(null);
+  const isMobile = useIsMobile();
+  const [mobileSceneDrawerOpen, setMobileSceneDrawerOpen] = useState(false);
+  const [mobileChatDrawerOpen, setMobileChatDrawerOpen] = useState(false);
   const lectureSessionIdRef = useRef<string | null>(null);
   const lectureActionCounterRef = useRef(0);
   const discussionAbortRef = useRef<AbortController | null>(null);
@@ -778,6 +782,22 @@ export function Stage({
     setWhiteboardOpen(!whiteboardOpen);
   };
 
+  const handleToggleSidebar = useCallback(() => {
+    if (isMobile) {
+      setMobileSceneDrawerOpen((current) => !current);
+      return;
+    }
+    setSidebarCollapsed(!sidebarCollapsed);
+  }, [isMobile, setSidebarCollapsed, sidebarCollapsed]);
+
+  const handleToggleChat = useCallback(() => {
+    if (isMobile) {
+      setMobileChatDrawerOpen((current) => !current);
+      return;
+    }
+    setChatAreaCollapsed(!chatAreaCollapsed);
+  }, [chatAreaCollapsed, isMobile, setChatAreaCollapsed]);
+
   const isPresentationShortcutTarget = useCallback((target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
 
@@ -850,12 +870,12 @@ export function Stage({
         case 's':
         case 'S':
           event.preventDefault();
-          setSidebarCollapsed(!sidebarCollapsed);
+          handleToggleSidebar();
           break;
         case 'c':
         case 'C':
           event.preventDefault();
-          setChatAreaCollapsed(!chatAreaCollapsed);
+          handleToggleChat();
           break;
         default:
           break;
@@ -870,15 +890,14 @@ export function Stage({
     handleNextScene,
     handlePlayPause,
     handlePreviousScene,
+    handleToggleChat,
+    handleToggleSidebar,
     isPresenting,
     isPresentationInteractionActive,
     isPresentationShortcutTarget,
     resetPresentationIdleTimer,
-    setChatAreaCollapsed,
-    setSidebarCollapsed,
     setTTSMuted,
     setTTSVolume,
-    sidebarCollapsed,
     togglePresentation,
     ttsMuted,
     ttsVolume,
@@ -927,6 +946,11 @@ export function Stage({
     const roundtableHeight = mode === 'playback' && !isPresenting ? 192 : 0;
     return `calc(100% - ${roundtableHeight}px)`;
   })();
+  const chatDisplayWidth =
+    isMobile && typeof window !== 'undefined'
+      ? Math.min(window.innerWidth, 430)
+      : chatAreaWidth;
+  const chatDisplayCollapsed = isMobile ? !mobileChatDrawerOpen : chatAreaCollapsed;
 
   return (
     <div
@@ -942,7 +966,29 @@ export function Stage({
         onCollapseChange={setSidebarCollapsed}
         onSceneSelect={gatedSceneSwitch}
         onRetryOutline={onRetryOutline}
+        className="hidden md:flex"
       />
+
+      {mobileSceneDrawerOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button
+            type="button"
+            aria-label="关闭场景列表遮罩"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setMobileSceneDrawerOpen(false)}
+          />
+          <SceneSidebar
+            collapsed={false}
+            onCollapseChange={() => setMobileSceneDrawerOpen(false)}
+            onSceneSelect={(sceneId) => {
+              setMobileSceneDrawerOpen(false);
+              gatedSceneSwitch(sceneId);
+            }}
+            onRetryOutline={onRetryOutline}
+            className="absolute inset-y-0 left-0 h-mobile-screen max-w-[86vw] pt-safe"
+          />
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
@@ -966,8 +1012,8 @@ export function Stage({
             whiteboardOpen={whiteboardOpen}
             sidebarCollapsed={sidebarCollapsed}
             chatCollapsed={chatAreaCollapsed}
-            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-            onToggleChat={() => setChatAreaCollapsed(!chatAreaCollapsed)}
+            onToggleSidebar={handleToggleSidebar}
+            onToggleChat={handleToggleChat}
             onPrevSlide={handlePreviousScene}
             onNextSlide={handleNextScene}
             onPlayPause={handlePlayPause}
@@ -1119,8 +1165,8 @@ export function Stage({
               whiteboardOpen={whiteboardOpen}
               sidebarCollapsed={sidebarCollapsed}
               chatCollapsed={chatAreaCollapsed}
-              onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-              onToggleChat={() => setChatAreaCollapsed(!chatAreaCollapsed)}
+              onToggleSidebar={handleToggleSidebar}
+              onToggleChat={handleToggleChat}
               onPrevSlide={handlePreviousScene}
               onNextSlide={handleNextScene}
               onWhiteboardClose={handleWhiteboardToggle}
@@ -1137,12 +1183,27 @@ export function Stage({
       </div>
 
       {/* Chat Area */}
+      {mobileChatDrawerOpen && (
+        <button
+          type="button"
+          aria-label="关闭聊天遮罩"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setMobileChatDrawerOpen(false)}
+        />
+      )}
       <ChatArea
         ref={chatAreaRef}
-        width={chatAreaWidth}
+        width={chatDisplayWidth}
         onWidthChange={setChatAreaWidth}
-        collapsed={chatAreaCollapsed}
-        onCollapseChange={setChatAreaCollapsed}
+        collapsed={chatDisplayCollapsed}
+        onCollapseChange={(collapsed) => {
+          if (isMobile) {
+            setMobileChatDrawerOpen(!collapsed);
+          } else {
+            setChatAreaCollapsed(collapsed);
+          }
+        }}
+        className="max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-mobile-screen max-md:max-w-full max-md:pt-safe"
         activeBubbleId={activeBubbleId}
         onActiveBubble={(id) => setActiveBubbleId(id)}
         currentSceneId={currentSceneId}

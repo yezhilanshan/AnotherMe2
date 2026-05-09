@@ -284,7 +284,7 @@ def _generation_subprocess_entry(
         from main import MathVideoGenerator
 
         cleaned_config = _clean_llm_config(llm_config_override)
-        
+
         # If override has api_key and base_url, use them; otherwise auto-detect from env
         if cleaned_config.get("api_key") and cleaned_config.get("base_url"):
             llm_config, vision_config, ocr_config = _merge_runtime_configs(
@@ -298,13 +298,36 @@ def _generation_subprocess_entry(
             llm_config = build_llm_config_from_env()
             vision_config = build_vision_config_from_env()
             ocr_config = build_ocr_config_from_env()
-            # Apply any partial overrides
+            # Apply partial overrides: api_key, base_url, and model names.
+            # Always apply api_key/base_url from frontend when present,
+            # even if base_url is missing (the env detection provides the base_url).
+            for cfg in (llm_config, vision_config, ocr_config):
+                if cleaned_config.get("api_key"):
+                    cfg["api_key"] = cleaned_config["api_key"]
+                if cleaned_config.get("base_url"):
+                    cfg["base_url"] = cleaned_config["base_url"]
             if cleaned_config.get("model"):
                 llm_config["model"] = cleaned_config["model"]
             if cleaned_config.get("vision_model"):
                 vision_config["model"] = cleaned_config["vision_model"]
             if cleaned_config.get("ocr_model"):
                 ocr_config["model"] = cleaned_config["ocr_model"]
+
+        # Validate that we have API keys before attempting generation
+        for role, cfg in [
+            ("文本模型", llm_config),
+            ("视觉模型", vision_config),
+            ("OCR模型", ocr_config),
+        ]:
+            api_key = cfg.get("api_key", "") if isinstance(cfg, dict) else ""
+            if not api_key:
+                model = cfg.get("model", "") if isinstance(cfg, dict) else ""
+                raise RuntimeError(
+                    f"{role}的 API Key 为空（model={model}）。"
+                    f"请在前端设置页面配置对应模型的 API Key，"
+                    f"或在 .env.local 中设置 DASHSCOPE_API_KEY 环境变量。"
+                )
+
         generator = MathVideoGenerator(
             llm_config=llm_config,
             vision_config=vision_config,

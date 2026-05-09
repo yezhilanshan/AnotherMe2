@@ -974,9 +974,9 @@ export default function PhotoToVideoPage() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900 tracking-wide uppercase">拍照答疑</h1>
+    <div className="mx-auto max-w-5xl space-y-5 pb-safe">
+      <div className="mb-4 md:mb-8">
+        <h1 className="text-xl font-bold uppercase tracking-wide text-gray-900 md:text-2xl">拍照答疑</h1>
       </div>
 
       <input
@@ -987,12 +987,12 @@ export default function PhotoToVideoPage() {
         onChange={handleUploadInputChange}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6">
         <button
           type="button"
           onClick={openCameraCapture}
           disabled={isGenerating || isOpeningCamera}
-          className="bg-[#4A6FA5] p-8 shadow-sm flex flex-col items-center justify-center text-center min-h-[300px] cursor-pointer hover:bg-[#3d5c8a] transition-colors group relative overflow-hidden"
+          className="group relative flex min-h-[180px] cursor-pointer flex-col items-center justify-center overflow-hidden bg-[#4A6FA5] p-5 text-center shadow-sm transition-colors hover:bg-[#3d5c8a] disabled:cursor-not-allowed disabled:opacity-70 md:min-h-[300px] md:p-8"
         >
           <div className="absolute inset-0 opacity-10">
             <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
@@ -1002,11 +1002,11 @@ export default function PhotoToVideoPage() {
               <rect width="100%" height="100%" fill="url(#grid)" />
             </svg>
           </div>
-          <div className="h-20 w-20 bg-white rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform relative z-10 shadow-lg">
+          <div className="relative z-10 mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-lg transition-transform group-hover:scale-110 md:mb-6 md:h-20 md:w-20">
             {isOpeningCamera ? (
-              <Loader2 className="h-10 w-10 text-gray-900 animate-spin" />
+              <Loader2 className="h-8 w-8 animate-spin text-gray-900 md:h-10 md:w-10" />
             ) : (
-              <Camera className="h-10 w-10 text-gray-900" />
+              <Camera className="h-8 w-8 text-gray-900 md:h-10 md:w-10" />
             )}
           </div>
           <h2 className="text-lg font-bold text-white uppercase tracking-wide relative z-10">拍照</h2>
@@ -1022,7 +1022,7 @@ export default function PhotoToVideoPage() {
           onDrop={handleUploadDrop}
           onDragOver={handleUploadDragOver}
           onDragLeave={handleUploadDragLeave}
-          className={`bg-white p-8 shadow-sm border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[300px] cursor-pointer transition-colors group ${
+          className={`group flex min-h-[180px] cursor-pointer flex-col items-center justify-center border-2 border-dashed bg-white p-5 text-center shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-70 md:min-h-[300px] md:p-8 ${
             isUploadDragActive
               ? 'border-[#4A6FA5] bg-[#eef4ff]'
               : 'border-gray-300 hover:bg-[#F4F3F0]'
@@ -1044,8 +1044,8 @@ export default function PhotoToVideoPage() {
             </div>
           ) : (
             <>
-              <div className="h-20 w-20 bg-black rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform shadow-lg">
-                <Upload className="h-10 w-10 text-white" />
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-black shadow-lg transition-transform group-hover:scale-110 md:mb-6 md:h-20 md:w-20">
+                <Upload className="h-8 w-8 text-white md:h-10 md:w-10" />
               </div>
               <h2 className="text-lg font-bold text-gray-900 uppercase tracking-wide">上传图片</h2>
               <p className="text-sm text-gray-500 mt-2">仅从本地已有图片中选择</p>
@@ -1055,7 +1055,7 @@ export default function PhotoToVideoPage() {
         </button>
       </div>
 
-      <div className="bg-white p-6 shadow-sm space-y-4">
+      <div className="space-y-4 bg-white p-4 shadow-sm md:p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">
           <div className="space-y-2">
             <label className="block text-xs font-bold text-gray-900 uppercase tracking-wide">学科</label>
@@ -1146,7 +1146,7 @@ export default function PhotoToVideoPage() {
           type="button"
           onClick={handleGenerate}
           disabled={!canGenerate}
-          className="inline-flex items-center gap-2 px-6 py-3 bg-[#E0573D] hover:bg-[#c94d35] text-white font-bold uppercase tracking-wide transition-all disabled:opacity-60 disabled:cursor-not-allowed text-sm"
+          className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 bg-[#E0573D] px-6 py-3 text-sm font-bold uppercase tracking-wide text-white transition-all hover:bg-[#c94d35] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
         >
           {isGenerating ? (
             <>
@@ -1163,8 +1163,8 @@ export default function PhotoToVideoPage() {
       </div>
 
       {isCameraModalOpen ? (
-        <div className="fixed inset-0 z-50 bg-black/65 flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl bg-white shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 p-0 sm:items-center sm:p-4">
+          <div className="w-full max-w-2xl bg-white pb-safe shadow-xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
               <h3 className="text-sm font-bold uppercase tracking-wide text-gray-900">摄像头拍照</h3>
               <button
@@ -1184,14 +1184,14 @@ export default function PhotoToVideoPage() {
                 <button
                   type="button"
                   onClick={closeCameraModal}
-                  className="px-4 py-2 text-sm font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800"
+                  className="min-h-[44px] px-4 py-2 text-sm font-semibold bg-gray-100 hover:bg-gray-200 text-gray-800"
                 >
                   取消
                 </button>
                 <button
                   type="button"
                   onClick={capturePhoto}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#E0573D] hover:bg-[#c94d35] text-white"
+                  className="inline-flex min-h-[44px] items-center gap-2 px-4 py-2 text-sm font-semibold bg-[#E0573D] hover:bg-[#c94d35] text-white"
                 >
                   <Camera className="h-4 w-4" />
                   拍照并使用
@@ -1202,21 +1202,21 @@ export default function PhotoToVideoPage() {
         </div>
       ) : null}
 
-      <div className="bg-white p-8 shadow-sm mt-8">
+      <div className="mt-6 bg-white p-4 shadow-sm md:mt-8 md:p-8">
         <div className="mb-6 flex items-center justify-between gap-3">
           <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">最近讲解记录</h2>
           <div ref={filterMenuRef} className="relative">
             <button
               type="button"
               onClick={() => setIsFilterMenuOpen((prev) => !prev)}
-              className="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wide bg-[#F4F3F0] text-gray-800 hover:bg-[#e7e6e1]"
+              className="inline-flex min-h-[40px] items-center gap-2 bg-[#F4F3F0] px-3 py-2 text-xs font-bold uppercase tracking-wide text-gray-800 hover:bg-[#e7e6e1]"
             >
               <Filter className="h-3.5 w-3.5" />
               筛选
               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isFilterMenuOpen ? 'rotate-180' : ''}`} />
             </button>
             {isFilterMenuOpen ? (
-              <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-gray-200 shadow-lg p-3 space-y-3">
+              <div className="absolute right-0 top-11 z-20 w-[min(16rem,calc(100vw-2rem))] space-y-3 border border-gray-200 bg-white p-3 shadow-lg">
                 <div>
                   <label className="block text-[10px] font-bold text-gray-600 uppercase tracking-wide mb-1">科目</label>
                   <div className="w-full px-2 py-2 text-xs bg-[#F4F3F0] text-gray-700">数学（固定）</div>
@@ -1244,8 +1244,8 @@ export default function PhotoToVideoPage() {
         ) : filteredRecentVideos.length === 0 ? (
           <p className="text-sm text-gray-500">当前筛选条件下暂无记录。</p>
         ) : (
-          <div className="max-h-[520px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="max-h-[520px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 md:pr-2">
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-3 md:gap-6">
               {filteredRecentVideos.map((video) => (
                 <Link
                   key={video.id}
