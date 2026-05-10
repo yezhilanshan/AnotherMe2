@@ -312,69 +312,6 @@ def build_llm_config_for_provider(
     return config
 
 
-def build_llm_config_from_env(
-    temperature: float = 0.1,
-    max_tokens: int = 4096,
-) -> Dict[str, Any]:
-    """Build LLM config by auto-detecting provider from environment."""
-    provider = _detect_provider()
-    if not provider:
-        # Fallback to legacy behavior
-        return build_default_llm_config()
-    
-    return {
-        "api_key": _get_provider_api_key(provider),
-        "base_url": _get_provider_base_url(provider),
-        "model": _get_model_for_provider(provider, "text"),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-
-def build_vision_config_from_env(
-    temperature: float = 0.05,
-    max_tokens: int = 4096,
-) -> Dict[str, Any]:
-    """Build vision model config by auto-detecting provider from environment."""
-    provider = _detect_provider()
-    if not provider:
-        return build_vision_model_config()
-    
-    return {
-        "api_key": _get_provider_api_key(provider),
-        "base_url": _get_provider_base_url(provider),
-        "model": _get_model_for_provider(provider, "vision"),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-
-def build_ocr_config_from_env(
-    temperature: float = 0.0,
-    max_tokens: int = 4096,
-) -> Dict[str, Any]:
-    """Build OCR model config by auto-detecting provider from environment."""
-    ocr_engine = os.getenv("OCR_ENGINE", "llm").strip().lower()
-    if ocr_engine == "paddleocr":
-        return {
-            "ocr_engine": "paddleocr",
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-    provider = _detect_provider()
-    if not provider:
-        return build_ocr_model_config()
-
-    return {
-        "api_key": _get_provider_api_key(provider),
-        "base_url": _get_provider_base_url(provider),
-        "model": _get_model_for_provider(provider, "ocr"),
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-
 def build_default_llm_config() -> Dict[str, Any]:
     return {
         "api_key": _text_api_key(),

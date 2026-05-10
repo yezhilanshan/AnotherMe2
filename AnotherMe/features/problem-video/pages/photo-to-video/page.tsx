@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 
 interface ProblemVideoJobCreateResponse {
   success: boolean;
@@ -814,6 +814,17 @@ export default function PhotoToVideoPage() {
   const handleGenerate = async () => {
     if (!selectedImage) {
       setErrorText('请先上传题目图片。');
+      return;
+    }
+
+    // Validate model configurations before proceeding
+    const validation = validateModelConfigForFeature('problem_video');
+    if (!validation.valid) {
+      const missingText = validation.missingRoles.join('、');
+      setErrorText(`请先在设置页面配置以下模型：${missingText}。每个角色需要同时配置 API Key 和 Base URL。`);
+      toast.error('模型配置不完整', {
+        description: `缺少：${missingText}`,
+      });
       return;
     }
 

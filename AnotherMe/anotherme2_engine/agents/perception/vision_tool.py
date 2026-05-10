@@ -23,22 +23,25 @@ class VisionTool:
         geometry_cfg = dict(llm_config or {})
         ocr_cfg = dict(ocr_llm_config or llm_config or {})
 
-        # Validate API key early — ChatOpenAI/OpenAI SDK will throw a confusing
-        # "Missing credentials … OPENAI_API_KEY" error if api_key is empty.
+        # Validate that all required fields are present — no silent defaults.
         for role, cfg in [("vision", geometry_cfg), ("OCR", ocr_cfg)]:
-            api_key = cfg.get("api_key", "")
-            if not api_key:
-                model = cfg.get("model", "")
-                base_url = cfg.get("base_url", "")
+            missing = []
+            if not cfg.get("api_key"):
+                missing.append("api_key")
+            if not cfg.get("base_url"):
+                missing.append("base_url")
+            if not cfg.get("model"):
+                missing.append("model")
+            if missing:
                 raise ValueError(
-                    f"{role} model 的 API Key 为空（model={model}, base_url={base_url}）。"
-                    f"请在设置页面配置对应的 API Key，或在 .env.local 中设置 DASHSCOPE_API_KEY 环境变量。"
+                    f"{role} 配置不完整（缺少: {', '.join(missing)}）。"
+                    f"请在设置页面同时配置 API Key、Base URL 和模型名称。"
                 )
 
         self.geometry_llm = ChatOpenAI(
-            api_key=geometry_cfg.get("api_key", ""),
-            base_url=geometry_cfg.get("base_url", ""),
-            model=geometry_cfg.get("model", "qwen3-vl-plus"),
+            api_key=geometry_cfg["api_key"],
+            base_url=geometry_cfg["base_url"],
+            model=geometry_cfg["model"],
             temperature=geometry_cfg.get("temperature", 0.05),
             max_tokens=geometry_cfg.get("max_tokens", 2048),
         )
@@ -46,9 +49,9 @@ class VisionTool:
             self.ocr_llm = self.geometry_llm
         else:
             self.ocr_llm = ChatOpenAI(
-                api_key=ocr_cfg.get("api_key", ""),
-                base_url=ocr_cfg.get("base_url", ""),
-                model=ocr_cfg.get("model", "qwen-vl-ocr-latest"),
+                api_key=ocr_cfg["api_key"],
+                base_url=ocr_cfg["base_url"],
+                model=ocr_cfg["model"],
                 temperature=ocr_cfg.get("temperature", 0.0),
                 max_tokens=ocr_cfg.get("max_tokens", 2048),
             )

@@ -40,7 +40,8 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { toast } from 'sonner';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 import { UNIFIED_MENTOR_PRESET } from '@/lib/orchestration/registry/classroom-presets';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/features/auth/components/auth-provider';
@@ -1176,6 +1177,16 @@ export default function AITutorPage() {
   const handleSend = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || isTyping || !activeSession) return;
+
+    // Validate model configurations before sending
+    const validation = validateModelConfigForFeature('chat');
+    if (!validation.valid) {
+      const missingText = validation.missingRoles.join('、');
+      toast.error('模型配置不完整', {
+        description: `请先在设置页面配置：${missingText}`,
+      });
+      return;
+    }
 
     const targetSessionId = activeSession.id;
     const userMessage: TutorMessage = {

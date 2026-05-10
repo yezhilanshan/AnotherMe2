@@ -15,7 +15,7 @@ from ..execution.merge_agent import MergeAgent
 from ..planning.learner_modeling_agent import LearnerModelingAgent
 from ..perception.vision_agent import VisionAgent
 from ..perception.vision_tool import VisionTool
-from ..foundation.config import MANIM_CANVAS_CONFIG
+from ..foundation.config import MANIM_CANVAS_CONFIG, AGENT_CONFIGS
 from ..foundation.state_contracts import wrap_agent_node
 try:
     from output_paths import DEFAULT_OUTPUT_DIR
@@ -224,10 +224,7 @@ def create_default_workflow(llm_config: Dict[str, Any],
         config={
             "temperature": 0.05,
             "output_dir": output_dir,
-            "tts_config": {
-                "api_key": llm_config.get("api_key", ""),
-                "base_url": llm_config.get("base_url", ""),
-            }
+            **AGENT_CONFIGS.get("voice", {}),
         },
         llm=llm,
         vision_tool=vision_tool

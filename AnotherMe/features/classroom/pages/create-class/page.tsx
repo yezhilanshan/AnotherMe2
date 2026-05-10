@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Upload, Sparkles, Settings2, ArrowRight, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useSettingsStore } from '@/lib/store/settings';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 
 interface ParsePdfSuccess {
   success: true;
@@ -124,6 +125,32 @@ export default function CreateClassPage() {
     if (!trimmedTopic) {
       setErrorText('请先填写课程主题。');
       return;
+    }
+
+    // Validate text model configuration (mandatory for classroom generation)
+    const validation = validateModelConfigForFeature('chat');
+    if (!validation.valid) {
+      const missingText = validation.missingRoles.join('、');
+      setErrorText(`请先在设置页面配置以下模型：${missingText}。每个角色需要同时配置 API Key 和 Base URL。`);
+      toast.error('模型配置不完整', {
+        description: `缺少：${missingText}`,
+      });
+      return;
+    }
+
+    // Validate PDF provider if user uploaded a PDF file
+    if (materialFile) {
+      const isPdf = materialFile.type === 'application/pdf' || materialFile.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        const activePdfConfig = pdfProvidersConfig?.[pdfProviderId];
+        if (!activePdfConfig?.apiKey || !activePdfConfig?.baseUrl) {
+          setErrorText('请先在设置页面配置 PDF 解析服务的 API Key 和 Base URL。');
+          toast.error('PDF 解析配置不完整', {
+            description: '需要配置 PDF provider 才能解析上传的文件',
+          });
+          return;
+        }
+      }
     }
 
     setErrorText('');

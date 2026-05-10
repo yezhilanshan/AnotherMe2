@@ -2,39 +2,32 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { PROVIDERS } from '@/lib/ai/providers';
 import type { ProviderId } from '@/lib/types/provider';
 
-function hasUserConfig(
-  providerConfig: { apiKey?: string; baseUrl?: string; isServerConfigured?: boolean } | undefined,
-) {
-  return Boolean(providerConfig?.apiKey?.trim() || providerConfig?.baseUrl?.trim() || providerConfig?.isServerConfigured);
-}
+/**
+ * Resolve effective credentials for a specific role (text / vision / OCR).
+ *
+ * Strict rule: a provider is only used when the user has configured BOTH
+ * apiKey AND baseUrl.  If either is missing, the role is NOT configured.
+ * No auto-detection, no env guessing, no fallback — the user must provide
+ * complete configuration for each role they want to use.
+ */
+function resolveRoleCredentials(params: {
+  roleProviderId: ProviderId;
+  providersConfig: ReturnType<typeof useSettingsStore.getState>['providersConfig'];
+}): { apiKey: string; baseUrl: string; configured: boolean } {
+  const { roleProviderId, providersConfig } = params;
+  const providerCfg = providersConfig[roleProviderId] || PROVIDERS[roleProviderId];
 
-function resolveProviderFromClientConfig(
-  providerId: ProviderId,
-  providersConfig: ReturnType<typeof useSettingsStore.getState>['providersConfig'],
-): ProviderId {
-  const currentProvider = providersConfig[providerId];
-  if (hasUserConfig(currentProvider)) {
-    return providerId;
+  const roleApiKey = providerCfg?.apiKey?.trim() || '';
+  const roleBaseUrl =
+    providerCfg?.baseUrl?.trim() || providerCfg?.defaultBaseUrl || '';
+
+  // Both must be present to use this provider for this role
+  if (roleApiKey && roleBaseUrl) {
+    return { apiKey: roleApiKey, baseUrl: roleBaseUrl, configured: true };
   }
 
-  const configuredProvider = (Object.keys(providersConfig) as ProviderId[]).find((id) =>
-    hasUserConfig(providersConfig[id]),
-  );
-
-  return configuredProvider || providerId;
-}
-
-function resolveProviderForRole(
-  providerId: ProviderId | undefined,
-  fallbackProviderId: ProviderId,
-  providersConfig: ReturnType<typeof useSettingsStore.getState>['providersConfig'],
-): ProviderId {
-  const requestedProviderId = (providerId || fallbackProviderId) as ProviderId;
-  const requestedConfig = providersConfig[requestedProviderId] || PROVIDERS[requestedProviderId];
-  if (requestedConfig && hasUserConfig(requestedConfig)) {
-    return requestedProviderId;
-  }
-  return fallbackProviderId;
+  // Incomplete config → NOT configured (no fallback)
+  return { apiKey: '', baseUrl: '', configured: false };
 }
 
 function stripProviderPrefix(modelId: string) {
@@ -46,11 +39,8 @@ function stripProviderPrefix(modelId: string) {
 
 function resolveTaskModel(params: {
   configuredModelId?: string;
-  providerId: ProviderId;
-  baseUrl?: string;
   models: Array<{ id: string; capabilities?: { vision?: boolean } }>;
   fallbackModelId: string;
-  kind: 'vision' | 'ocr';
 }) {
   const configuredModelId = stripProviderPrefix(params.configuredModelId || '');
   if (configuredModelId) return configuredModelId;
@@ -60,7 +50,14 @@ function resolveTaskModel(params: {
 }
 
 /**
- * Get current model configuration from settings store
+ * Get current model configuration from settings store.
+ *
+ * Strict requirement: every provider MUST have both apiKey and baseUrl
+ * configured independently.  No fallback between roles — each role
+ * (text / vision / OCR) must be explicitly configured.
+ *
+ * Returns `configured` flags so callers can prevent generation when
+ * required roles are not fully configured.
  */
 export function getCurrentModelConfig() {
   const {
@@ -72,78 +69,133 @@ export function getCurrentModelConfig() {
     ocrModelId,
     providersConfig,
   } = useSettingsStore.getState();
-  const safeProviderId = resolveProviderFromClientConfig((providerId || 'openai') as ProviderId, providersConfig);
-  const providerConfig = providersConfig[safeProviderId] || PROVIDERS[safeProviderId];
-  const providerModelIds = new Set([
-    ...(providerConfig?.models?.map((model) => model.id) || []),
-    ...(providerConfig?.serverModels || []),
+
+  // --- Text provider (must have both apiKey + baseUrl) ---
+  const textProviderId = (providerId || 'openai') as ProviderId;
+  const textProviderCfg = providersConfig[textProviderId] || PROVIDERS[textProviderId];
+  const textApiKey = textProviderCfg?.apiKey?.trim() || '';
+  const textBaseUrl =
+    textProviderCfg?.baseUrl?.trim() || textProviderCfg?.defaultBaseUrl || '';
+  const textConfigured = !!(textApiKey && textBaseUrl);
+
+  // Text model
+  const textModelIds = new Set([
+    ...(textProviderCfg?.models?.map((m) => m.id) || []),
+    ...(textProviderCfg?.serverModels || []),
   ]);
-  const selectedModelId =
-    providerId === safeProviderId && modelId && providerModelIds.has(modelId)
-      ? modelId
-      : '';
-  const safeModelId =
-    selectedModelId ||
-    providerConfig?.models?.[0]?.id ||
-    providerConfig?.serverModels?.[0] ||
-    PROVIDERS[safeProviderId]?.models?.[0]?.id ||
+  const safeTextModelId =
+    (providerId === textProviderId && modelId && textModelIds.has(modelId) ? modelId : '') ||
+    textProviderCfg?.models?.[0]?.id ||
+    textProviderCfg?.serverModels?.[0] ||
+    PROVIDERS[textProviderId]?.models?.[0]?.id ||
     '';
-  const safeVisionProviderId = resolveProviderForRole(visionProviderId, safeProviderId, providersConfig);
-  const visionProviderConfig = providersConfig[safeVisionProviderId] || PROVIDERS[safeVisionProviderId];
-  const safeOcrProviderId = resolveProviderForRole(ocrProviderId, safeVisionProviderId, providersConfig);
-  const ocrProviderConfig = providersConfig[safeOcrProviderId] || PROVIDERS[safeOcrProviderId];
 
-  const visionModels = visionProviderConfig?.models || PROVIDERS[safeVisionProviderId]?.models || [];
-  const ocrModels = ocrProviderConfig?.models || PROVIDERS[safeOcrProviderId]?.models || [];
+  // --- Vision provider (must have both apiKey + baseUrl, no fallback) ---
+  const visionProviderIdRaw = (visionProviderId || textProviderId) as ProviderId;
+  const { apiKey: visionApiKey, baseUrl: visionBaseUrl, configured: visionConfigured } =
+    resolveRoleCredentials({
+      roleProviderId: visionProviderIdRaw,
+      providersConfig,
+    });
+  const visionProviderCfg =
+    providersConfig[visionProviderIdRaw] || PROVIDERS[visionProviderIdRaw];
+  const visionModels = visionProviderCfg?.models || [];
   const safeVisionModelId = resolveTaskModel({
-    configuredModelId: visionModelId,
-    providerId: safeVisionProviderId,
-    baseUrl: visionProviderConfig?.baseUrl || visionProviderConfig?.defaultBaseUrl,
+    configuredModelId: visionConfigured ? visionModelId : undefined,
     models: visionModels,
-    fallbackModelId: safeModelId,
-    kind: 'vision',
+    fallbackModelId: '',
   });
-  const safeOcrModelId = resolveTaskModel({
-    configuredModelId: ocrModelId,
-    providerId: safeOcrProviderId,
-    baseUrl: ocrProviderConfig?.baseUrl || ocrProviderConfig?.defaultBaseUrl,
-    models: ocrModels,
-    fallbackModelId: safeVisionModelId || safeModelId,
-    kind: 'ocr',
-  });
-  const modelString = safeModelId ? `${safeProviderId}:${safeModelId}` : '';
-  const visionModelString = safeVisionModelId ? `${safeVisionProviderId}:${safeVisionModelId}` : '';
-  const ocrModelString = safeOcrModelId ? `${safeOcrProviderId}:${safeOcrModelId}` : '';
 
-  // Fall back to text provider's credentials when vision/OCR configs lack them,
-  // so the Python engine always receives non-empty API keys.
-  const textApiKey = providerConfig?.apiKey || '';
-  const textBaseUrl = providerConfig?.baseUrl || '';
+  // --- OCR provider (must have both apiKey + baseUrl, no fallback) ---
+  const ocrProviderIdRaw = (ocrProviderId || visionProviderIdRaw || textProviderId) as ProviderId;
+  const { apiKey: ocrApiKey, baseUrl: ocrBaseUrl, configured: ocrConfigured } =
+    resolveRoleCredentials({
+      roleProviderId: ocrProviderIdRaw,
+      providersConfig,
+    });
+  const ocrProviderCfg = providersConfig[ocrProviderIdRaw] || PROVIDERS[ocrProviderIdRaw];
+  const ocrModels = ocrProviderCfg?.models || [];
+  const safeOcrModelId = resolveTaskModel({
+    configuredModelId: ocrConfigured ? ocrModelId : undefined,
+    models: ocrModels,
+    fallbackModelId: '',
+  });
+
+  // --- Compose strings for the backend ---
+  const modelString = textConfigured && safeTextModelId ? `${textProviderId}:${safeTextModelId}` : '';
+  const visionModelString = visionConfigured && safeVisionModelId ? `${visionProviderIdRaw}:${safeVisionModelId}` : '';
+  const ocrModelString = ocrConfigured && safeOcrModelId ? `${ocrProviderIdRaw}:${safeOcrModelId}` : '';
 
   return {
-    providerId: safeProviderId,
-    modelId: safeModelId,
-    visionProviderId: safeVisionProviderId,
-    visionModelId: safeVisionModelId,
-    ocrProviderId: safeOcrProviderId,
-    ocrModelId: safeOcrModelId,
+    // Text
+    providerId: textProviderId,
+    modelId: safeTextModelId,
     modelString,
-    visionModelString,
-    ocrModelString,
     apiKey: textApiKey,
-    baseUrl: providerConfig?.baseUrl || '',
-    providerType: providerConfig?.type,
-    requiresApiKey: providerConfig?.requiresApiKey,
-    isServerConfigured: providerConfig?.isServerConfigured,
-    visionApiKey: visionProviderConfig?.apiKey || textApiKey,
-    visionBaseUrl: visionProviderConfig?.baseUrl || textBaseUrl || undefined,
-    visionProviderType: visionProviderConfig?.type,
-    visionRequiresApiKey: visionProviderConfig?.requiresApiKey,
-    visionIsServerConfigured: visionProviderConfig?.isServerConfigured,
-    ocrApiKey: ocrProviderConfig?.apiKey || textApiKey,
-    ocrBaseUrl: ocrProviderConfig?.baseUrl || textBaseUrl || undefined,
-    ocrProviderType: ocrProviderConfig?.type,
-    ocrRequiresApiKey: ocrProviderConfig?.requiresApiKey,
-    ocrIsServerConfigured: ocrProviderConfig?.isServerConfigured,
+    baseUrl: textBaseUrl,
+    providerType: textProviderCfg?.type,
+    requiresApiKey: textProviderCfg?.requiresApiKey,
+    isServerConfigured: textProviderCfg?.isServerConfigured,
+    configured: textConfigured,
+    // Vision
+    visionProviderId: visionProviderIdRaw,
+    visionModelId: safeVisionModelId,
+    visionModelString,
+    visionApiKey,
+    visionBaseUrl: visionBaseUrl || undefined,
+    visionProviderType: visionProviderCfg?.type,
+    visionRequiresApiKey: visionProviderCfg?.requiresApiKey,
+    visionIsServerConfigured: visionProviderCfg?.isServerConfigured,
+    visionConfigured,
+    // OCR
+    ocrProviderId: ocrProviderIdRaw,
+    ocrModelId: safeOcrModelId,
+    ocrModelString,
+    ocrApiKey,
+    ocrBaseUrl: ocrBaseUrl || undefined,
+    ocrProviderType: ocrProviderCfg?.type,
+    ocrRequiresApiKey: ocrProviderCfg?.requiresApiKey,
+    ocrIsServerConfigured: ocrProviderCfg?.isServerConfigured,
+    ocrConfigured,
+  };
+}
+
+/**
+ * Validate that required model configurations are present for a given feature.
+ *
+ * Feature requirements:
+ * - 'chat': Text/LLM only (for AI tutor, live-book, classroom generation)
+ * - 'problem_video': Text + Vision + OCR (for photo-to-video generation)
+ * - 'vision': Text + Vision (for vision-related tasks)
+ *
+ * Image/Video/TTS providers are optional and not validated here.
+ *
+ * @param feature - The feature requiring model configs
+ * @returns Object with `valid` flag and optional `missingRoles` list
+ */
+export function validateModelConfigForFeature(
+  feature: 'problem_video' | 'chat' | 'vision',
+): { valid: boolean; missingRoles: string[] } {
+  const config = getCurrentModelConfig();
+  const missingRoles: string[] = [];
+
+  // Text/LLM is required for all features
+  if (!config.configured) {
+    missingRoles.push('文本模型');
+  }
+
+  // Vision and OCR are only required for problem_video
+  if (feature === 'problem_video') {
+    if (!config.visionConfigured) {
+      missingRoles.push('视觉模型');
+    }
+    if (!config.ocrConfigured) {
+      missingRoles.push('OCR模型');
+    }
+  }
+
+  return {
+    valid: missingRoles.length === 0,
+    missingRoles,
   };
 }

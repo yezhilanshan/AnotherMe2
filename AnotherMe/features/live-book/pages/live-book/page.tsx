@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 import {
   AlertTriangle,
   AlignLeft,
@@ -39,7 +40,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 import {
   createInitialProgressState,
   liveBookProgressReducer,
@@ -930,6 +931,17 @@ export default function LiveBookPage() {
 
   async function handleCompile() {
     if (!detail) return;
+
+    // Validate model configurations before compiling
+    const validation = validateModelConfigForFeature('chat');
+    if (!validation.valid) {
+      const missingText = validation.missingRoles.join('、');
+      toast.error('模型配置不完整', {
+        description: `请先在设置页面配置：${missingText}`,
+      });
+      return;
+    }
+
     setCompiling(true);
 
     const payload = await parseApi<{ job: LiveBookJob }>(

@@ -83,84 +83,6 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     return result
 
 
-# Supported provider base URL patterns for auto-detection
-_PROVIDER_PATTERNS = {
-    "openai": ["api.openai.com"],
-    "anthropic": ["api.anthropic.com"],
-    "gemini": ["generativelanguage.googleapis.com", "googleapis.com"],
-    "deepseek": ["api.deepseek.com"],
-    "qwen": ["dashscope.aliyuncs.com"],
-    "kimi": ["api.moonshot.cn"],
-    "minimax": ["api.minimaxi.com"],
-    "glm": ["open.bigmodel.cn"],
-    "siliconflow": ["api.siliconflow.cn"],
-    "doubao": ["ark.cn-beijing.volces.com", "volces.com"],
-    "grok": ["api.x.ai", "x.ai"],
-}
-
-
-def _detect_provider_from_url(base_url: str) -> str | None:
-    """Detect provider from base URL."""
-    base_url_lower = base_url.lower()
-    for provider, patterns in _PROVIDER_PATTERNS.items():
-        for pattern in patterns:
-            if pattern in base_url_lower:
-                return provider
-    return None
-
-
-def _is_vision_capable_model(model: str) -> bool:
-    """Check if a model supports vision capabilities."""
-    model_lower = model.lower()
-    vision_keywords = [
-        "vision", "vl", "gpt-4o", "claude-3", "gemini", "qwen-vl", "qwen2-vl",
-        "kimi-k2", "doubao-vision", "glm-4v"
-    ]
-    return any(kw in model_lower for kw in vision_keywords)
-
-
-def _is_ocr_capable_model(model: str) -> bool:
-    """Check if a model supports OCR capabilities."""
-    model_lower = model.lower()
-    ocr_keywords = ["ocr", "qwen-vl-ocr"]
-    return any(kw in model_lower for kw in ocr_keywords)
-
-
-def _get_default_vision_model(provider: str, current_model: str) -> str:
-    """Get default vision model for a provider."""
-    defaults = {
-        "openai": "gpt-4o",
-        "anthropic": "claude-3-5-sonnet-20241022",
-        "gemini": "gemini-2.0-flash",
-        "deepseek": "deepseek-chat",
-        "qwen": "qwen3-vl-plus",
-        "kimi": "kimi-k2-5",
-        "minimax": "MiniMax-Text-01",
-        "glm": "glm-4v-plus",
-        "siliconflow": "Qwen/Qwen2-VL-72B-Instruct",
-        "doubao": "doubao-1.5-vision-pro-250328",
-        "grok": "grok-3",
-    }
-    return defaults.get(provider, current_model)
-
-
-def _get_default_ocr_model(provider: str, current_model: str) -> str:
-    """Get default OCR model for a provider."""
-    defaults = {
-        "openai": "gpt-4o",
-        "anthropic": "claude-3-5-sonnet-20241022",
-        "gemini": "gemini-2.0-flash",
-        "deepseek": "deepseek-chat",
-        "qwen": "qwen-vl-ocr-latest",
-        "kimi": "kimi-k2-5",
-        "minimax": "MiniMax-Text-01",
-        "glm": "glm-4v-plus",
-        "siliconflow": "Qwen/Qwen2-VL-72B-Instruct",
-        "doubao": "doubao-1.5-vision-pro-250328",
-        "grok": "grok-3",
-    }
-    return defaults.get(provider, current_model)
-
 
 def _merge_runtime_configs(
     *,
@@ -184,11 +106,7 @@ def _merge_runtime_configs(
     vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
     ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
 
-    # Detect provider from base URL
-    provider = _detect_provider_from_url(base_url) if base_url else None
-    vision_provider = _detect_provider_from_url(vision_base_url) if vision_base_url else provider
-    ocr_provider = _detect_provider_from_url(ocr_base_url) if ocr_base_url else provider
-
+    # Apply text provider credentials to all roles as base defaults
     if api_key:
         llm_config["api_key"] = api_key
         vision_config["api_key"] = api_key
@@ -199,61 +117,22 @@ def _merge_runtime_configs(
         ocr_config["base_url"] = base_url
     if model:
         llm_config["model"] = model
-        # Auto-detect vision capability
-        if _is_vision_capable_model(model):
-            vision_config["model"] = model
-            if _is_ocr_capable_model(model):
-                ocr_config["model"] = model
+
+    # Apply role-specific overrides (take precedence over text defaults)
     if vision_api_key:
         vision_config["api_key"] = vision_api_key
     if vision_base_url:
         vision_config["base_url"] = vision_base_url
+    if vision_model:
+        vision_config["model"] = vision_model
     if ocr_api_key:
         ocr_config["api_key"] = ocr_api_key
     if ocr_base_url:
         ocr_config["base_url"] = ocr_base_url
-    if ocr_engine:
-        ocr_config["ocr_engine"] = ocr_engine
-    if vision_model:
-        vision_config["model"] = vision_model
     if ocr_model:
         ocr_config["model"] = ocr_model
-
-    # Validate and fix vision/ocr models based on provider.
-    # Skip validation when the user explicitly provided the model — trust their choice.
-    vision_model_current = str(vision_config.get("model") or "").lower()
-    vision_base_url_current = str(vision_config.get("base_url") or "").lower()
-    detected_vision_provider = vision_provider or _detect_provider_from_url(vision_base_url_current)
-
-    if detected_vision_provider and not vision_model:
-        # Check if current vision model is appropriate for the provider
-        is_appropriate = False
-        if detected_vision_provider == "qwen":
-            is_appropriate = vision_model_current.startswith("qwen") and ("vl" in vision_model_current or "vision" in vision_model_current)
-        elif detected_vision_provider == "doubao":
-            is_appropriate = "vision" in vision_model_current or "vl" in vision_model_current
-        elif detected_vision_provider in ["openai", "anthropic", "gemini"]:
-            is_appropriate = _is_vision_capable_model(vision_model_current)
-
-        if not is_appropriate:
-            vision_config["model"] = _get_default_vision_model(detected_vision_provider, vision_model_current)
-
-    # Validate and fix OCR model
-    ocr_model_current = str(ocr_config.get("model") or "").lower()
-    ocr_base_url_current = str(ocr_config.get("base_url") or "").lower()
-    detected_ocr_provider = ocr_provider or _detect_provider_from_url(ocr_base_url_current) or detected_vision_provider
-
-    if detected_ocr_provider and ocr_engine != "paddleocr" and not ocr_model:
-        is_ocr_appropriate = False
-        if detected_ocr_provider == "qwen":
-            is_ocr_appropriate = "qwen" in ocr_model_current and ("vl" in ocr_model_current or "ocr" in ocr_model_current)
-        elif detected_ocr_provider == "doubao":
-            is_ocr_appropriate = "vision" in ocr_model_current
-        else:
-            is_ocr_appropriate = _is_vision_capable_model(ocr_model_current)
-
-        if not is_ocr_appropriate:
-            ocr_config["model"] = _get_default_ocr_model(detected_ocr_provider, ocr_model_current)
+    if ocr_engine:
+        ocr_config["ocr_engine"] = ocr_engine
 
     return llm_config, vision_config, ocr_config
 
@@ -278,64 +157,72 @@ def _generation_subprocess_entry(
             build_default_llm_config,
             build_ocr_model_config,
             build_vision_model_config,
-            build_llm_config_from_env,
-            build_vision_config_from_env,
-            build_ocr_config_from_env,
         )
         from main import MathVideoGenerator
 
         cleaned_config = _clean_llm_config(llm_config_override)
 
-        # If override has api_key and base_url, use them; otherwise auto-detect from env
-        if cleaned_config.get("api_key") and cleaned_config.get("base_url"):
-            llm_config, vision_config, ocr_config = _merge_runtime_configs(
-                base_llm_config=build_default_llm_config(),
-                base_vision_config=build_vision_model_config(),
-                base_ocr_config=build_ocr_model_config(),
-                override=cleaned_config,
-            )
-        else:
-            # Auto-detect provider from environment variables
-            llm_config = build_llm_config_from_env()
-            vision_config = build_vision_config_from_env()
-            ocr_config = build_ocr_config_from_env()
-            # Apply partial overrides: api_key, base_url, and model names.
-            # Always apply api_key/base_url from frontend when present,
-            # even if base_url is missing (the env detection provides the base_url).
-            for cfg in (llm_config, vision_config, ocr_config):
-                if cleaned_config.get("api_key"):
-                    cfg["api_key"] = cleaned_config["api_key"]
-                if cleaned_config.get("base_url"):
-                    cfg["base_url"] = cleaned_config["base_url"]
-            # Apply vision/OCR specific overrides (take precedence over text fallback)
-            if cleaned_config.get("vision_api_key"):
-                vision_config["api_key"] = cleaned_config["vision_api_key"]
-            if cleaned_config.get("vision_base_url"):
-                vision_config["base_url"] = cleaned_config["vision_base_url"]
-            if cleaned_config.get("ocr_api_key"):
-                ocr_config["api_key"] = cleaned_config["ocr_api_key"]
-            if cleaned_config.get("ocr_base_url"):
-                ocr_config["base_url"] = cleaned_config["ocr_base_url"]
-            if cleaned_config.get("model"):
-                llm_config["model"] = cleaned_config["model"]
-            if cleaned_config.get("vision_model"):
-                vision_config["model"] = cleaned_config["vision_model"]
-            if cleaned_config.get("ocr_model"):
-                ocr_config["model"] = cleaned_config["ocr_model"]
+        # Log incoming config for debugging (mask API keys)
+        def _mask_key(key: str) -> str:
+            if not key or len(key) < 8:
+                return "***" if key else "(empty)"
+            return key[:4] + "..." + key[-4:]
 
-        # Validate that we have API keys before attempting generation
+        print(f"[executor] cleaned_config keys: {list(cleaned_config.keys())}")
+        print(f"[executor] api_key={_mask_key(cleaned_config.get('api_key', ''))}, "
+              f"base_url={cleaned_config.get('base_url', '')}")
+        print(f"[executor] vision_api_key={_mask_key(cleaned_config.get('vision_api_key', ''))}, "
+              f"vision_base_url={cleaned_config.get('vision_base_url', '')}")
+        print(f"[executor] ocr_api_key={_mask_key(cleaned_config.get('ocr_api_key', ''))}, "
+              f"ocr_base_url={cleaned_config.get('ocr_base_url', '')}")
+        print(f"[executor] model={cleaned_config.get('model', '')}, "
+              f"vision_model={cleaned_config.get('vision_model', '')}, "
+              f"ocr_model={cleaned_config.get('ocr_model', '')}")
+
+        # Require both api_key and base_url from the frontend.
+        # No env auto-detection — the frontend is the single source of truth.
+        if not cleaned_config.get("api_key") or not cleaned_config.get("base_url"):
+            missing = []
+            if not cleaned_config.get("api_key"):
+                missing.append("api_key")
+            if not cleaned_config.get("base_url"):
+                missing.append("base_url")
+            raise RuntimeError(
+                f"前端未提供完整的模型配置（缺少: {', '.join(missing)}）。"
+                f"请在设置页面配置 API Key 和 Base URL。"
+            )
+
+        llm_config, vision_config, ocr_config = _merge_runtime_configs(
+            base_llm_config=build_default_llm_config(),
+            base_vision_config=build_vision_model_config(),
+            base_ocr_config=build_ocr_model_config(),
+            override=cleaned_config,
+        )
+
+        # Log final resolved configs for debugging
+        for role, cfg in [("llm", llm_config), ("vision", vision_config), ("ocr", ocr_config)]:
+            print(f"[executor] final {role}: model={cfg.get('model', '')}, "
+                  f"api_key={_mask_key(cfg.get('api_key', ''))}, "
+                  f"base_url={cfg.get('base_url', '')}")
+
+        # Validate that we have both api_key and base_url before attempting generation
         for role, cfg in [
             ("文本模型", llm_config),
             ("视觉模型", vision_config),
             ("OCR模型", ocr_config),
         ]:
             api_key = cfg.get("api_key", "") if isinstance(cfg, dict) else ""
-            if not api_key:
-                model = cfg.get("model", "") if isinstance(cfg, dict) else ""
+            base_url = cfg.get("base_url", "") if isinstance(cfg, dict) else ""
+            model = cfg.get("model", "") if isinstance(cfg, dict) else ""
+            if not api_key or not base_url:
+                missing = []
+                if not api_key:
+                    missing.append("API Key")
+                if not base_url:
+                    missing.append("Base URL")
                 raise RuntimeError(
-                    f"{role}的 API Key 为空（model={model}）。"
-                    f"请在前端设置页面配置对应模型的 API Key，"
-                    f"或在 .env.local 中设置 DASHSCOPE_API_KEY 环境变量。"
+                    f"{role}配置不完整（缺少: {', '.join(missing)}，model={model}）。"
+                    f"请在设置页面同时配置 API Key 和 Base URL。"
                 )
 
         generator = MathVideoGenerator(

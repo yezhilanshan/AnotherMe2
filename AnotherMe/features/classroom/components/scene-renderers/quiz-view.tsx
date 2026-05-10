@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 import { createLogger } from '@/lib/logger';
 import type { QuizQuestion } from '@/lib/types/stage';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
@@ -93,6 +93,12 @@ async function gradeShortAnswerQuestion(
 ): Promise<QuestionResult> {
   const pts = q.points ?? 1;
   try {
+    // Validate model configurations before grading
+    const validation = validateModelConfigForFeature('chat');
+    if (!validation.valid) {
+      throw new Error('模型配置不完整');
+    }
+
     const modelConfig = getCurrentModelConfig();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

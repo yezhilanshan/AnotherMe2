@@ -19,7 +19,7 @@ import {
   cleanupOldImages,
   storeImages,
 } from '@/lib/utils/image-storage';
-import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
 import { db } from '@/lib/utils/database';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
 import { nanoid } from 'nanoid';
@@ -144,15 +144,15 @@ export function GenerationPreviewContent() {
       await settingsState.fetchServerProviders();
     }
 
+    // Validate model configurations before generating
+    const validation = validateModelConfigForFeature('chat');
+    if (!validation.valid) {
+      const missingText = validation.missingRoles.join('、');
+      setError(`${t('settings.modelNotConfigured')}: ${missingText}`);
+      return;
+    }
+
     const modelConfig = getCurrentModelConfig();
-    if (!modelConfig.modelId) {
-      setError(t('settings.modelNotConfigured'));
-      return;
-    }
-    if (modelConfig.requiresApiKey && !modelConfig.apiKey && !modelConfig.isServerConfigured) {
-      setError(`${t('settings.setupNeeded')}: ${t('settings.apiKeyDesc')}`);
-      return;
-    }
 
     // Use a local mutable copy so we can update it after PDF parsing
     let currentSession = session;
