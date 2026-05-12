@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { ServerProvidersInit } from '@/components/layout/server-providers-init';
 import { AuthProvider } from '@/features/auth/components/auth-provider';
 import { PwaRuntime } from '@/components/pwa/pwa-runtime';
+import { KeyboardProvider } from '@/lib/contexts/keyboard-context';
 
 export const metadata: Metadata = {
   title: '镜我 - AI 教育平台',
@@ -42,14 +43,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="font-sans antialiased" suppressHydrationWarning>
         <ThemeProvider>
-          <AuthProvider>
-            <I18nProvider>
-              <ServerProvidersInit />
-              {children}
-              <PwaRuntime />
-              <Toaster position="top-center" />
-            </I18nProvider>
-          </AuthProvider>
+          <KeyboardProvider>
+            <AuthProvider>
+              <I18nProvider>
+                <ServerProvidersInit />
+                {children}
+                <PwaRuntime />
+                <Toaster position="top-center" />
+              </I18nProvider>
+            </AuthProvider>
+          </KeyboardProvider>
         </ThemeProvider>
       </body>
     </html>

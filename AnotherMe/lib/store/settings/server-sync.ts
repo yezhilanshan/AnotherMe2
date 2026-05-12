@@ -15,216 +15,132 @@ type StoreSet = (
 ) => void;
 type SettingsLogger = { warn: (...args: unknown[]) => void };
 
+/** Server response shape per provider category */
+type ServerProviderInfo = Record<string, { models?: string[]; baseUrl?: string }>;
+
+/**
+ * Merge server provider info into a provider config map.
+ * Resets all entries' server flags, then marks entries present in `serverInfo`.
+ *
+ * For LLM providers, pass `filterModels` to handle model-list filtering
+ * (the only category with model-level server constraints).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeProviderConfigs(
+  config: Record<string, any>,
+  serverInfo: ServerProviderInfo | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  filterModels?: (current: any, info: { models?: string[]; baseUrl?: string }) => Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Record<string, any> {
+  const result = { ...config };
+
+  // Reset all server flags
+  for (const pid of Object.keys(result)) {
+    if (result[pid]) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const reset: any = {
+        ...result[pid],
+        isServerConfigured: false,
+        serverBaseUrl: undefined,
+      };
+      if (filterModels) reset.serverModels = undefined;
+      result[pid] = reset;
+    }
+  }
+
+  // Mark server-configured entries
+  if (serverInfo) {
+    for (const [pid, info] of Object.entries(serverInfo)) {
+      if (result[pid]) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const update: any = {
+          ...result[pid],
+          isServerConfigured: true,
+          serverBaseUrl: info.baseUrl,
+        };
+        if (filterModels) {
+          Object.assign(update, filterModels(result[pid], info));
+        }
+        result[pid] = update;
+      }
+    }
+  }
+
+  return result;
+}
+
+/** Build a fallback list: server-configured first, then client-key-only */
+function buildFallback<T extends string>(
+  config: Record<string, { isServerConfigured?: boolean; apiKey?: string }>,
+): T[] {
+  return [
+    ...Object.entries(config)
+      .filter(([, c]) => c.isServerConfigured)
+      .map(([id]) => id as T),
+    ...Object.entries(config)
+      .filter(([, c]) => !c.isServerConfigured && !!c.apiKey)
+      .map(([id]) => id as T),
+  ];
+}
+
 export function createFetchServerProvidersAction(set: StoreSet, log: SettingsLogger) {
   return async () => {
     try {
       const res = await fetch('/api/server-providers');
       if (!res.ok) return;
       const data = (await res.json()) as {
-        providers: Record<string, { models?: string[]; baseUrl?: string }>;
-        tts: Record<string, { baseUrl?: string }>;
-        asr: Record<string, { baseUrl?: string }>;
-        pdf: Record<string, { baseUrl?: string }>;
-        image: Record<string, { baseUrl?: string }>;
-        video: Record<string, { baseUrl?: string }>;
-        webSearch: Record<string, { baseUrl?: string }>;
+        providers: ServerProviderInfo;
+        tts: ServerProviderInfo;
+        asr: ServerProviderInfo;
+        pdf: ServerProviderInfo;
+        image: ServerProviderInfo;
+        video: ServerProviderInfo;
+        webSearch: ServerProviderInfo;
       };
 
       set((state) => {
-        // Merge LLM providers
-        const newProvidersConfig = { ...state.providersConfig };
-        // First reset all server flags
-        for (const pid of Object.keys(newProvidersConfig)) {
-          const key = pid as ProviderId;
-          if (newProvidersConfig[key]) {
-            newProvidersConfig[key] = {
-              ...newProvidersConfig[key],
-              isServerConfigured: false,
-              serverModels: undefined,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        // Set flags for server-configured providers
-        for (const [pid, info] of Object.entries(data.providers)) {
-          const key = pid as ProviderId;
-          if (newProvidersConfig[key]) {
-            const currentModels = newProvidersConfig[key].models;
-            // When server specifies allowed models, filter the list.
-            // Keep unknown server model IDs as placeholders so recovery
-            // can still select them even if the built-in registry lags.
+        // === Merge server info into each provider config ===
+
+        // LLM: extra model filtering logic
+        const newProvidersConfig = mergeProviderConfigs(
+          state.providersConfig,
+          data.providers,
+          (current: { models?: Array<{ id: string; name: string }> }, info) => {
+            const currentModels = current?.models ?? [];
             const filteredModels = info.models?.length
               ? [
                   ...currentModels.filter((m) => info.models!.includes(m.id)),
                   ...info.models
                     .filter((modelId) => !currentModels.some((m) => m.id === modelId))
-                    .map((modelId) => ({
-                      id: modelId,
-                      name: modelId,
-                    })),
+                    .map((modelId) => ({ id: modelId, name: modelId })),
                 ]
               : currentModels;
-            newProvidersConfig[key] = {
-              ...newProvidersConfig[key],
-              isServerConfigured: true,
-              serverModels: info.models,
-              serverBaseUrl: info.baseUrl,
-              models: filteredModels,
-            };
-          }
-        }
+            return { models: filteredModels, serverModels: info.models };
+          },
+        ) as SettingsState['providersConfig'];
 
-        // Merge TTS providers
-        const newTTSConfig = { ...state.ttsProvidersConfig };
-        for (const pid of Object.keys(newTTSConfig)) {
-          const key = pid as TTSProviderId;
-          if (newTTSConfig[key]) {
-            newTTSConfig[key] = {
-              ...newTTSConfig[key],
-              isServerConfigured: false,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        for (const [pid, info] of Object.entries(data.tts)) {
-          const key = pid as TTSProviderId;
-          if (newTTSConfig[key]) {
-            newTTSConfig[key] = {
-              ...newTTSConfig[key],
-              isServerConfigured: true,
-              serverBaseUrl: info.baseUrl,
-            };
-          }
-        }
-
-        // Merge ASR providers
-        const newASRConfig = { ...state.asrProvidersConfig };
-        for (const pid of Object.keys(newASRConfig)) {
-          const key = pid as ASRProviderId;
-          if (newASRConfig[key]) {
-            newASRConfig[key] = {
-              ...newASRConfig[key],
-              isServerConfigured: false,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        for (const [pid, info] of Object.entries(data.asr)) {
-          const key = pid as ASRProviderId;
-          if (newASRConfig[key]) {
-            newASRConfig[key] = {
-              ...newASRConfig[key],
-              isServerConfigured: true,
-              serverBaseUrl: info.baseUrl,
-            };
-          }
-        }
-
-        // Merge PDF providers
-        const newPDFConfig = { ...state.pdfProvidersConfig };
-        for (const pid of Object.keys(newPDFConfig)) {
-          const key = pid as PDFProviderId;
-          if (newPDFConfig[key]) {
-            newPDFConfig[key] = {
-              ...newPDFConfig[key],
-              isServerConfigured: false,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        for (const [pid, info] of Object.entries(data.pdf)) {
-          const key = pid as PDFProviderId;
-          if (newPDFConfig[key]) {
-            newPDFConfig[key] = {
-              ...newPDFConfig[key],
-              isServerConfigured: true,
-              serverBaseUrl: info.baseUrl,
-            };
-          }
-        }
-
-        // Merge Image providers
-        const newImageConfig = { ...state.imageProvidersConfig };
-        for (const pid of Object.keys(newImageConfig)) {
-          const key = pid as ImageProviderId;
-          if (newImageConfig[key]) {
-            newImageConfig[key] = {
-              ...newImageConfig[key],
-              isServerConfigured: false,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        for (const [pid, info] of Object.entries(data.image)) {
-          const key = pid as ImageProviderId;
-          if (newImageConfig[key]) {
-            newImageConfig[key] = {
-              ...newImageConfig[key],
-              isServerConfigured: true,
-              serverBaseUrl: info.baseUrl,
-            };
-          }
-        }
-
-        // Merge Video providers
-        const newVideoConfig = { ...state.videoProvidersConfig };
-        for (const pid of Object.keys(newVideoConfig)) {
-          const key = pid as VideoProviderId;
-          if (newVideoConfig[key]) {
-            newVideoConfig[key] = {
-              ...newVideoConfig[key],
-              isServerConfigured: false,
-              serverBaseUrl: undefined,
-            };
-          }
-        }
-        if (data.video) {
-          for (const [pid, info] of Object.entries(data.video)) {
-            const key = pid as VideoProviderId;
-            if (newVideoConfig[key]) {
-              newVideoConfig[key] = {
-                ...newVideoConfig[key],
-                isServerConfigured: true,
-                serverBaseUrl: info.baseUrl,
-              };
-            }
-          }
-        }
-
-        // Merge Web Search config — reset all first, then mark server-configured
-        const newWebSearchConfig = { ...state.webSearchProvidersConfig };
-        for (const key of Object.keys(newWebSearchConfig) as WebSearchProviderId[]) {
-          newWebSearchConfig[key] = {
-            ...newWebSearchConfig[key],
-            isServerConfigured: false,
-            serverBaseUrl: undefined,
-          };
-        }
-        if (data.webSearch) {
-          for (const [pid, info] of Object.entries(data.webSearch)) {
-            const key = pid as WebSearchProviderId;
-            if (newWebSearchConfig[key]) {
-              newWebSearchConfig[key] = {
-                ...newWebSearchConfig[key],
-                isServerConfigured: true,
-                serverBaseUrl: info.baseUrl,
-              };
-            }
-          }
-        }
+        // TTS, ASR, PDF, Image, Video, WebSearch: simple reset+set
+        const newTTSConfig = mergeProviderConfigs(
+          state.ttsProvidersConfig, data.tts,
+        ) as SettingsState['ttsProvidersConfig'];
+        const newASRConfig = mergeProviderConfigs(
+          state.asrProvidersConfig, data.asr,
+        ) as SettingsState['asrProvidersConfig'];
+        const newPDFConfig = mergeProviderConfigs(
+          state.pdfProvidersConfig, data.pdf,
+        ) as SettingsState['pdfProvidersConfig'];
+        const newImageConfig = mergeProviderConfigs(
+          state.imageProvidersConfig, data.image,
+        ) as SettingsState['imageProvidersConfig'];
+        const newVideoConfig = mergeProviderConfigs(
+          state.videoProvidersConfig, data.video,
+        ) as SettingsState['videoProvidersConfig'];
+        const newWebSearchConfig = mergeProviderConfigs(
+          state.webSearchProvidersConfig, data.webSearch,
+        ) as SettingsState['webSearchProvidersConfig'];
 
         // === Validate current selections against updated configs ===
-        // Build fallback: server-configured first, then client-key-only
-        const buildFallback = <T extends string>(
-          config: Record<string, { isServerConfigured?: boolean; apiKey?: string }>,
-        ): T[] => [
-          ...Object.entries(config)
-            .filter(([, c]) => c.isServerConfigured)
-            .map(([id]) => id as T),
-          ...Object.entries(config)
-            .filter(([, c]) => !c.isServerConfigured && !!c.apiKey)
-            .map(([id]) => id as T),
-        ];
 
         const llmFallback = buildFallback<ProviderId>(newProvidersConfig);
         const ttsFallback = buildFallback<TTSProviderId>(newTTSConfig);
@@ -234,37 +150,25 @@ export function createFetchServerProvidersAction(set: StoreSet, log: SettingsLog
         const videoFallback = buildFallback<VideoProviderId>(newVideoConfig);
 
         const validLLMProvider = validateProvider(
-          state.providerId,
-          newProvidersConfig,
-          llmFallback,
+          state.providerId, newProvidersConfig, llmFallback,
         );
         const validTTSProvider = validateProvider(
-          state.ttsProviderId,
-          newTTSConfig,
-          ttsFallback,
+          state.ttsProviderId, newTTSConfig, ttsFallback,
           'browser-native-tts' as TTSProviderId,
         );
         const validASRProvider = validateProvider(
-          state.asrProviderId,
-          newASRConfig,
-          asrFallback,
+          state.asrProviderId, newASRConfig, asrFallback,
           'browser-native' as ASRProviderId,
         );
         const validPDFProvider = validateProvider(
-          state.pdfProviderId,
-          newPDFConfig,
-          pdfFallback,
+          state.pdfProviderId, newPDFConfig, pdfFallback,
           'unpdf' as PDFProviderId,
         );
         let validImageProvider = validateProvider(
-          state.imageProviderId,
-          newImageConfig,
-          imageFallback,
+          state.imageProviderId, newImageConfig, imageFallback,
         );
         let validVideoProvider = validateProvider(
-          state.videoProviderId,
-          newVideoConfig,
-          videoFallback,
+          state.videoProviderId, newVideoConfig, videoFallback,
         );
 
         // Auto-recover: when provider is empty but server has available ones
@@ -294,7 +198,6 @@ export function createFetchServerProvidersAction(set: StoreSet, log: SettingsLog
         const validImageModel = validImageProvider
           ? recoveredImageModel ||
             validateModel(state.imageModelId, imageModels) ||
-            // validateModel('', ...) returns '' — fallback to first model when modelId is empty
             imageModels[0]?.id ||
             ''
           : '';
@@ -432,9 +335,7 @@ export function createFetchServerProvidersAction(set: StoreSet, log: SettingsLog
           }),
           ...(shouldDisableImage && { imageGenerationEnabled: false }),
           ...(shouldDisableVideo && { videoGenerationEnabled: false }),
-          // First-run auto-select overrides validation (autoConfigApplied guard).
-          // On first sync, auto-select picks the best provider. On subsequent syncs,
-          // auto* variables stay undefined so only validation spreads take effect.
+          // First-run auto-select overrides validation (autoConfigApplied guard)
           ...(autoPdfProvider && { pdfProviderId: autoPdfProvider }),
           ...(autoTtsProvider && {
             ttsProviderId: autoTtsProvider,

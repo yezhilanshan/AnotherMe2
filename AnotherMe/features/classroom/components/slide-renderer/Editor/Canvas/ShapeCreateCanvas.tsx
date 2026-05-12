@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { useCanvasStore, useSceneSelector } from '@/lib/store';
 import type { CreateCustomShapeData } from '@/lib/types/edit';
 import type { SlideContent } from '@/lib/types/stage';
@@ -11,7 +11,7 @@ interface ShapeCreateCanvasProps {
 }
 
 export function ShapeCreateCanvas({ onCreated }: ShapeCreateCanvasProps) {
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
   const setCreatingCustomShapeState = useCanvasStore.use.setCreatingCustomShapeState();
   const theme = useSceneSelector<SlideContent, SlideTheme>((content) => content.canvas.theme);
 

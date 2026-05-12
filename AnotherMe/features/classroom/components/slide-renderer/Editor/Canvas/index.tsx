@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { useViewportSize } from './hooks/useViewportSize';
 import { useSelectElement } from './hooks/useSelectElement';
 import { useDragElement } from './hooks/useDragElement';
@@ -87,7 +87,7 @@ export function Canvas(_props: CanvasProps) {
   const setRulerState = useCanvasStore.use.setRulerState();
 
   // Keyboard state
-  const spaceKeyState = useKeyboardStore((state) => state.spaceKeyState);
+  const { spaceKeyState } = useKeyboard();
 
   const [alignmentLines, setAlignmentLines] = useState<AlignmentLineProps[]>([]);
   const [linkDialogVisible, setLinkDialogVisible] = useState(false);

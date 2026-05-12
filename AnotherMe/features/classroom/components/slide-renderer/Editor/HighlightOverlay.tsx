@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
-import { useCanvasStore } from '@/lib/store/canvas';
+import { useTeachingEffects } from '@/lib/store/teaching-effects';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement } from '@/lib/types/slides';
 
@@ -21,8 +21,8 @@ import type { PPTElement } from '@/lib/types/slides';
  * - Uses CSS animation for animated effects
  */
 export function HighlightOverlay() {
-  const highlightedElementIds = useCanvasStore.use.highlightedElementIds();
-  const highlightOptions = useCanvasStore.use.highlightOptions();
+  const highlightedElementIds = useTeachingEffects.use.highlightedElementIds();
+  const highlightOptions = useTeachingEffects.use.highlightOptions();
 
   // Get the element list of the current scene
   const elements = useSceneSelector<SlideContent, PPTElement[]>(

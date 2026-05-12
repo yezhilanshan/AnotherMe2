@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
-import { useCanvasStore, useKeyboardStore } from '@/lib/store';
+import { useCanvasStore } from '@/lib/store';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { useHistorySnapshot } from '@/lib/hooks/use-history-snapshot';
 import type { PPTElement } from '@/lib/types/slides';
 import type { AlignmentLineProps } from '@/lib/types/edit';
@@ -21,7 +22,7 @@ export function useDragElement(
   const activeElementIdList = useCanvasStore.use.activeElementIdList();
   const activeGroupElementId = useCanvasStore.use.activeGroupElementId();
   const canvasScale = useCanvasStore.use.canvasScale();
-  const shiftKeyState = useKeyboardStore((state) => state.shiftKeyState);
+  const { shiftKeyState } = useKeyboard();
 
   const viewportRatio = useCanvasStore.use.viewportRatio();
   const viewportSize = useCanvasStore.use.viewportSize();

@@ -12,6 +12,7 @@
 import type { StageStore } from '@/lib/api/stage-api';
 import { createStageAPI } from '@/lib/api/stage-api';
 import { useCanvasStore } from '@/lib/store/canvas';
+import { useTeachingEffects } from '@/lib/store/teaching-effects';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
 import { getClientTranslation } from '@/lib/i18n';
@@ -132,7 +133,7 @@ export class ActionEngine {
       clearTimeout(this.effectTimer);
       this.effectTimer = null;
     }
-    useCanvasStore.getState().clearAllEffects();
+    useTeachingEffects.getState().clearAllEffects();
   }
 
   /** Schedule auto-clear for fire-and-forget effects */
@@ -141,7 +142,7 @@ export class ActionEngine {
       clearTimeout(this.effectTimer);
     }
     this.effectTimer = setTimeout(() => {
-      useCanvasStore.getState().clearAllEffects();
+      useTeachingEffects.getState().clearAllEffects();
       this.effectTimer = null;
     }, EFFECT_AUTO_CLEAR_MS);
   }
@@ -149,14 +150,14 @@ export class ActionEngine {
   // ==================== Fire-and-forget ====================
 
   private executeSpotlight(action: SpotlightAction): void {
-    useCanvasStore.getState().setSpotlight(action.elementId, {
+    useTeachingEffects.getState().setSpotlight(action.elementId, {
       dimness: action.dimOpacity ?? 0.5,
     });
     this.scheduleEffectClear();
   }
 
   private executeLaser(action: LaserAction): void {
-    useCanvasStore.getState().setLaser(action.elementId, {
+    useTeachingEffects.getState().setLaser(action.elementId, {
       color: action.color ?? '#ff0000',
     });
     this.scheduleEffectClear();

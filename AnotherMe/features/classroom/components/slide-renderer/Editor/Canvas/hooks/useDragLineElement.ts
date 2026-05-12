@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { useCanvasStore } from '@/lib/store';
 import type { PPTElement, PPTLineElement } from '@/lib/types/slides';
 import { OperateLineHandlers } from '@/lib/types/edit';
@@ -23,7 +23,7 @@ export function useDragLineElement(
 ) {
   const updateSlide = useCanvasOperations().updateSlide;
   const canvasScale = useCanvasStore.use.canvasScale();
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
   const { addHistorySnapshot } = useHistorySnapshot();
 
   // Drag line endpoint

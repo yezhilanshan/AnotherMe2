@@ -36,8 +36,6 @@ function debounce<T extends (...args: Parameters<T>) => ReturnType<T>>(
   };
 }
 
-type ToolbarState = 'design' | 'ai';
-
 interface StageState {
   // Stage info
   stage: Stage | null;
@@ -51,9 +49,6 @@ interface StageState {
 
   // Mode
   mode: StageMode;
-
-  // UI state
-  toolbarState: ToolbarState;
 
   // Transient generation state (not persisted)
   generatingOutlines: SceneOutline[];
@@ -76,7 +71,6 @@ interface StageState {
   setCurrentSceneId: (sceneId: string | null) => void;
   setChats: (chats: ChatSession[]) => void;
   setMode: (mode: StageMode) => void;
-  setToolbarState: (state: ToolbarState) => void;
   setGeneratingOutlines: (outlines: SceneOutline[]) => void;
   setOutlines: (outlines: SceneOutline[]) => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
@@ -104,7 +98,6 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   currentSceneId: null,
   chats: [],
   mode: 'playback',
-  toolbarState: 'ai',
   generatingOutlines: [],
   outlines: [],
   generationEpoch: 0,
@@ -192,8 +185,6 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   },
 
   setMode: (mode) => set({ mode }),
-
-  setToolbarState: (toolbarState) => set({ toolbarState }),
 
   setGeneratingOutlines: (generatingOutlines) => set({ generatingOutlines }),
 

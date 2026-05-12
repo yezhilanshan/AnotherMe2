@@ -2,7 +2,8 @@
 
 import { useRef, useEffect, useCallback, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { debounce } from 'lodash';
-import { useKeyboardStore, useCanvasStore } from '@/lib/store';
+import { useCanvasStore } from '@/lib/store';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import type { EditorView } from 'prosemirror-view';
 import { toggleMark, wrapIn, lift } from 'prosemirror-commands';
 import { initProsemirrorEditor, createDocument } from '@/lib/prosemirror';
@@ -76,7 +77,7 @@ export const ProsemirrorEditor = forwardRef<ProsemirrorEditorRef, ProsemirrorEdi
     const setDisableHotkeysState = useCanvasStore.use.setDisableHotkeysState();
     const setRichtextAttrs = useCanvasStore.use.setRichtextAttrs();
     const setTextFormatPainter = useCanvasStore.use.setTextFormatPainter();
-    const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+    const { ctrlOrShiftKeyActive } = useKeyboard();
 
     // Handle input with debounce
 

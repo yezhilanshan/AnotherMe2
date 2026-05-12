@@ -3,12 +3,12 @@
  *
  * Factory function that creates the canvas namespace of the Stage API.
  * Handles background, theme, highlight, spotlight, laser, and zoom effects.
- * Uses useCanvasStore for visual overlay effects.
+ * Uses useTeachingEffects for visual overlay effects.
  */
 
 import type { SlideContent } from '@/lib/types/stage';
 import type { SlideTheme, SlideBackground } from '@/lib/types/slides';
-import { useCanvasStore } from '@/lib/store/canvas';
+import { useTeachingEffects } from '@/lib/store/teaching-effects';
 import type { StageStore, APIResult, HighlightOptions, SpotlightOptions } from './stage-api-types';
 import { getScene } from './stage-api-defaults';
 
@@ -127,10 +127,10 @@ export function createCanvasAPI(store: StageStore) {
       const { duration, color = '#ff6b6b', style = 'outline' } = options;
 
       try {
-        // Use the new Canvas Store highlight overlay API
+        // Use the new Teaching Effects store highlight overlay API
         // Advantage: does not modify the element itself, purely visual effect
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setHighlight([elementId], {
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setHighlight([elementId], {
           color,
           opacity: style === 'fill' ? 0.3 : 0.5,
           borderWidth: 3,
@@ -140,7 +140,7 @@ export function createCanvasAPI(store: StageStore) {
         // If duration is set, automatically clear the highlight
         if (duration) {
           setTimeout(() => {
-            canvasStore.clearHighlight();
+            teachingEffects.clearHighlight();
           }, duration);
         }
 
@@ -167,14 +167,14 @@ export function createCanvasAPI(store: StageStore) {
       options: SpotlightOptions = {},
     ): APIResult<boolean> {
       try {
-        // Use Canvas Store's spotlight API
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setSpotlight(elementId, options);
+        // Use Teaching Effects store's spotlight API
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setSpotlight(elementId, options);
 
         // If duration is set, automatically clear the spotlight
         if (options.duration) {
           setTimeout(() => {
-            canvasStore.clearSpotlight();
+            teachingEffects.clearSpotlight();
           }, options.duration);
         }
 
@@ -192,10 +192,10 @@ export function createCanvasAPI(store: StageStore) {
      */
     clearHighlights(_sceneId: string): APIResult<boolean> {
       try {
-        // Use Canvas Store to clear all teaching effects
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.clearHighlight();
-        canvasStore.clearSpotlight();
+        // Use Teaching Effects store to clear all teaching effects
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.clearHighlight();
+        teachingEffects.clearSpotlight();
 
         return { success: true, data: true };
       } catch (error) {
@@ -210,8 +210,8 @@ export function createCanvasAPI(store: StageStore) {
      */
     clearSpotlight(_sceneId?: string): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.clearSpotlight();
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.clearSpotlight();
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -234,12 +234,12 @@ export function createCanvasAPI(store: StageStore) {
       options: SpotlightOptions = {},
     ): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setSpotlightPercentage(elementId, geometry, options);
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setSpotlightPercentage(elementId, geometry, options);
 
         if (options.duration) {
           setTimeout(() => {
-            canvasStore.clearSpotlight();
+            teachingEffects.clearSpotlight();
           }, options.duration);
         }
 
@@ -262,15 +262,15 @@ export function createCanvasAPI(store: StageStore) {
       sceneId: string,
       elementId: string,
       geometry: import('@/lib/types/action').PercentageGeometry,
-      options: import('@/lib/store/canvas').LaserOptions = {},
+      options: import('@/lib/store/teaching-effects').LaserOptions = {},
     ): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setLaser(elementId, options);
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setLaser(elementId, options);
 
         if (options.duration) {
           setTimeout(() => {
-            canvasStore.clearLaser();
+            teachingEffects.clearLaser();
           }, options.duration);
         }
 
@@ -288,8 +288,8 @@ export function createCanvasAPI(store: StageStore) {
      */
     clearLaser(_sceneId: string): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.clearLaser();
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.clearLaser();
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -312,8 +312,8 @@ export function createCanvasAPI(store: StageStore) {
       scale: number,
     ): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setZoom(elementId, scale);
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setZoom(elementId, scale);
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -328,8 +328,8 @@ export function createCanvasAPI(store: StageStore) {
      */
     clearZoom(_sceneId: string): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.clearZoom();
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.clearZoom();
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -344,8 +344,8 @@ export function createCanvasAPI(store: StageStore) {
      */
     clearAllEffects(_sceneId: string): APIResult<boolean> {
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.clearAllEffects();
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.clearAllEffects();
         return { success: true, data: true };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -368,8 +368,8 @@ export function createCanvasAPI(store: StageStore) {
       const { duration, color = '#ff6b6b' } = options;
 
       try {
-        const canvasStore = useCanvasStore.getState();
-        canvasStore.setHighlight(elementIds, {
+        const teachingEffects = useTeachingEffects.getState();
+        teachingEffects.setHighlight(elementIds, {
           color,
           opacity: 0.3,
           borderWidth: 3,
@@ -378,7 +378,7 @@ export function createCanvasAPI(store: StageStore) {
 
         if (duration) {
           setTimeout(() => {
-            canvasStore.clearHighlight();
+            teachingEffects.clearHighlight();
           }, duration);
         }
 

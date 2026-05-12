@@ -6,6 +6,7 @@ import { SpotlightOverlay } from './SpotlightOverlay';
 import { LaserOverlay } from './LaserOverlay';
 import { useSlideBackgroundStyle } from '@/lib/hooks/use-slide-background-style';
 import { useCanvasStore } from '@/lib/store';
+import { useTeachingEffects } from '@/lib/store/teaching-effects';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
 import { findElementGeometry } from '@/lib/utils/geometry';
 import type { SlideContent } from '@/lib/types/stage';
@@ -32,9 +33,9 @@ export function ScreenCanvas() {
   const { backgroundStyle } = useSlideBackgroundStyle(background);
 
   // Get visual effect state
-  const laserElementId = useCanvasStore.use.laserElementId();
-  const laserOptions = useCanvasStore.use.laserOptions();
-  const zoomTarget = useCanvasStore.use.zoomTarget();
+  const laserElementId = useTeachingEffects.use.laserElementId();
+  const laserOptions = useTeachingEffects.use.laserOptions();
+  const zoomTarget = useTeachingEffects.use.zoomTarget();
 
   // Compute laser pointer geometry
   const laserGeometry = useMemo<PercentageGeometry | null>(() => {

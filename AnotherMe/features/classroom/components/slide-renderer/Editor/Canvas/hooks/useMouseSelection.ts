@@ -1,5 +1,5 @@
 import { useState, useCallback, type RefObject } from 'react';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { useCanvasStore } from '@/lib/store';
 import type { PPTElement } from '@/lib/types/slides';
 import { getElementRange } from '@/lib/utils/element';
@@ -20,7 +20,7 @@ export function useMouseSelection(
   const canvasScale = useCanvasStore.use.canvasScale();
   const hiddenElementIdList = useCanvasStore.use.hiddenElementIdList();
   const setActiveElementIdList = useCanvasStore.use.setActiveElementIdList();
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
 
   // Update mouse selection range
   const updateMouseSelection = useCallback(

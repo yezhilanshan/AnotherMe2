@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useKeyboardStore, useCanvasStore } from '@/lib/store';
+import { useCanvasStore } from '@/lib/store';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import { KEYS } from '@/configs/hotkey';
 import { OperateResizeHandlers } from '@/lib/types/edit';
 import type { ImageClipedEmitData } from '@/lib/types/edit';
@@ -29,7 +30,7 @@ export function ImageClipHandler({
   onClip,
 }: ImageClipHandlerProps) {
   const canvasScale = useCanvasStore.use.canvasScale();
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
 
   const [clipWrapperPositionStyle, setClipWrapperPositionStyle] = useState({
     top: '0',

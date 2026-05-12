@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { isAnotherMe2GatewayError } from './anotherme2-gateway/core';
+import { AuthError } from '@/lib/auth/types';
 
 export const API_ERROR_CODES = {
   MISSING_REQUIRED_FIELD: 'MISSING_REQUIRED_FIELD',
@@ -49,4 +51,29 @@ export function apiError(
 
 export function apiSuccess<T extends Record<string, unknown>>(data: T, status = 200): NextResponse {
   return NextResponse.json({ success: true, ...data }, { status });
+}
+
+/**
+ * Handle common errors in API routes.
+ * Returns an appropriate NextResponse for known error types, or null if the error is unknown.
+ *
+ * @example
+ * try {
+ *   // ... route logic
+ * } catch (error) {
+ *   const errorResponse = handleRouteError(error);
+ *   if (errorResponse) return errorResponse;
+ *   throw error; // Re-throw unknown errors
+ * }
+ */
+export function handleRouteError(error: unknown): NextResponse<ApiErrorBody> | null {
+  if (error instanceof AuthError) {
+    return apiError('AUTH_FAILED', error.status || 401, error.message);
+  }
+
+  if (isAnotherMe2GatewayError(error)) {
+    return apiError('UPSTREAM_ERROR', error.status || 502, error.message);
+  }
+
+  return null;
 }

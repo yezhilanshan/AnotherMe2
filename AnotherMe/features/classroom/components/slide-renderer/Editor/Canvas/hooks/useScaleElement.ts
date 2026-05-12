@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useCanvasStore } from '@/lib/store';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import type {
   PPTElement,
   PPTLineElement,
@@ -136,7 +136,7 @@ export function useScaleElement(
 
   const updateSlide = useCanvasOperations().updateSlide;
 
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
 
   const { addHistorySnapshot } = useHistorySnapshot();
 

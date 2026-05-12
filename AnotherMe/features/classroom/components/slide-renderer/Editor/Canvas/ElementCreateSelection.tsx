@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useCanvasStore } from '@/lib/store';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import type { CreateElementSelectionData } from '@/lib/types/edit';
 
 interface ElementCreateSelectionProps {
@@ -10,7 +10,7 @@ interface ElementCreateSelectionProps {
 export function ElementCreateSelection({ onCreated }: ElementCreateSelectionProps) {
   const creatingElement = useCanvasStore.use.creatingElement();
   const setCreatingElement = useCanvasStore.use.setCreatingElement();
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
 
   const [start, setStart] = useState<[number, number]>();
   const [end, setEnd] = useState<[number, number]>();

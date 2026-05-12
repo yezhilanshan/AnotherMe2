@@ -18,11 +18,12 @@
  */
 
 import { useSceneData, useSceneSelector } from '@/lib/contexts/scene-context';
+import { useCanvasStore } from '@/lib/store/canvas';
 import {
-  useCanvasStore,
+  useTeachingEffects,
   type SpotlightOptions,
   type HighlightOverlayOptions,
-} from '@/lib/store/canvas';
+} from '@/lib/store/teaching-effects';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement, Slide } from '@/lib/types/slides';
 import { useCallback, useMemo } from 'react';
@@ -470,14 +471,14 @@ export function useCanvasOperations() {
    * @param options Spotlight options
    */
   const spotlightElement = useCallback((elementId: string, options?: SpotlightOptions) => {
-    useCanvasStore.getState().setSpotlight(elementId, options);
+    useTeachingEffects.getState().setSpotlight(elementId, options);
   }, []);
 
   /**
    * Clear spotlight
    */
   const clearSpotlight = useCallback(() => {
-    useCanvasStore.getState().clearSpotlight();
+    useTeachingEffects.getState().clearSpotlight();
   }, []);
 
   /**
@@ -487,7 +488,7 @@ export function useCanvasOperations() {
    */
   const highlightElements = useCallback(
     (elementIds: string[], options?: HighlightOverlayOptions) => {
-      useCanvasStore.getState().setHighlight(elementIds, options);
+      useTeachingEffects.getState().setHighlight(elementIds, options);
     },
     [],
   );
@@ -496,7 +497,7 @@ export function useCanvasOperations() {
    * Clear highlight
    */
   const clearHighlight = useCallback(() => {
-    useCanvasStore.getState().clearHighlight();
+    useTeachingEffects.getState().clearHighlight();
   }, []);
 
   /**
@@ -506,7 +507,7 @@ export function useCanvasOperations() {
    */
   const laserElement = useCallback(
     (elementId: string, options?: { color?: string; duration?: number }) => {
-      useCanvasStore.getState().setLaser(elementId, options);
+      useTeachingEffects.getState().setLaser(elementId, options);
     },
     [],
   );
@@ -515,7 +516,7 @@ export function useCanvasOperations() {
    * Clear laser pointer
    */
   const clearLaser = useCallback(() => {
-    useCanvasStore.getState().clearLaser();
+    useTeachingEffects.getState().clearLaser();
   }, []);
 
   /**
@@ -524,24 +525,21 @@ export function useCanvasOperations() {
    * @param scale Zoom scale
    */
   const zoomElement = useCallback((elementId: string, scale: number) => {
-    useCanvasStore.getState().setZoom(elementId, scale);
+    useTeachingEffects.getState().setZoom(elementId, scale);
   }, []);
 
   /**
    * Clear zoom
    */
   const clearZoom = useCallback(() => {
-    useCanvasStore.getState().clearZoom();
+    useTeachingEffects.getState().clearZoom();
   }, []);
 
   /**
    * Clear all teaching effects (spotlight + highlight + laser + zoom)
    */
   const clearAllEffects = useCallback(() => {
-    useCanvasStore.getState().clearSpotlight();
-    useCanvasStore.getState().clearHighlight();
-    useCanvasStore.getState().clearLaser();
-    useCanvasStore.getState().clearZoom();
+    useTeachingEffects.getState().clearAllEffects();
   }, []);
 
   return {

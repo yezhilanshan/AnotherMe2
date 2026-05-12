@@ -3,7 +3,7 @@
 import { useRef, useState, useLayoutEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useSceneSelector } from '@/lib/contexts/scene-context';
-import { useCanvasStore } from '@/lib/store/canvas';
+import { useTeachingEffects } from '@/lib/store/teaching-effects';
 import type { SlideContent } from '@/lib/types/stage';
 import type { PPTElement } from '@/lib/types/slides';
 
@@ -21,8 +21,8 @@ interface SpotlightRect {
  * avoiding alignment offsets from percentage coordinate conversion.
  */
 export function SpotlightOverlay() {
-  const spotlightElementId = useCanvasStore.use.spotlightElementId();
-  const spotlightOptions = useCanvasStore.use.spotlightOptions();
+  const spotlightElementId = useTeachingEffects.use.spotlightElementId();
+  const spotlightOptions = useTeachingEffects.use.spotlightOptions();
   const containerRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<SpotlightRect | null>(null);
 

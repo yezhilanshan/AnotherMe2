@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { uniq } from 'lodash';
 import { useCanvasStore } from '@/lib/store';
-import { useKeyboardStore } from '@/lib/store/keyboard';
+import { useKeyboard } from '@/lib/contexts/keyboard-context';
 import type { PPTElement } from '@/lib/types/slides';
 
 /**
@@ -21,7 +21,7 @@ export function useSelectElement(
   const setActiveGroupElementId = useCanvasStore.use.setActiveGroupElementId();
   const setEditorAreaFocus = useCanvasStore.use.setEditorAreaFocus();
 
-  const ctrlOrShiftKeyActive = useKeyboardStore((state) => state.ctrlOrShiftKeyActive());
+  const { ctrlOrShiftKeyActive } = useKeyboard();
 
   // Select element
   // startMove indicates whether to enter move state after selection

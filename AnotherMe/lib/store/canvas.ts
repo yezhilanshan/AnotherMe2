@@ -3,34 +3,6 @@ import { createSelectors } from '@/lib/utils/create-selectors';
 import type { TextAttrs } from '@/lib/prosemirror/utils';
 import { defaultRichTextAttrs } from '@/lib/prosemirror/utils';
 import type { TextFormatPainter, ShapeFormatPainter, CreatingElement } from '@/lib/types/edit';
-import type { PercentageGeometry } from '@/lib/types/action';
-
-/**
- * Spotlight options
- */
-export interface SpotlightOptions {
-  radius?: number; // Spotlight radius (pixels)
-  dimness?: number; // Background dimming level (0-1)
-  transition?: number; // Transition animation duration (milliseconds)
-}
-
-/**
- * Highlight overlay options
- */
-export interface HighlightOverlayOptions {
-  color?: string; // Highlight color
-  opacity?: number; // Highlight opacity (0-1)
-  borderWidth?: number; // Border width
-  animated?: boolean; // Whether to animate
-}
-
-/**
- * Laser pointer options
- */
-export interface LaserOptions {
-  color?: string; // Laser pointer color, default red
-  duration?: number; // Duration (milliseconds)
-}
 
 /**
  * Canvas Store - Manages all UI state of the Canvas editor
@@ -44,7 +16,11 @@ export interface LaserOptions {
  * - Format painter state
  *
  * Note: Does not manage slide data (elements, background, etc.), which is managed by Scene Context
+ * Note: Teaching effects (spotlight/highlight/laser/zoom) are in teaching-effects.ts
  */
+
+// Re-export teaching effects types for backward compatibility
+export type { SpotlightOptions, HighlightOverlayOptions, LaserOptions } from './teaching-effects';
 
 // ==================== Store Interface ====================
 
@@ -55,17 +31,6 @@ interface CanvasState {
   activeGroupElementId: string; // Selected child element within a group
   editingElementId: string; // Element being edited (e.g., text editing)
   hiddenElementIdList: string[]; // Hidden element IDs
-
-  // ===== Teaching feature state =====
-  spotlightElementId: string; // Element focused by spotlight
-  spotlightOptions: SpotlightOptions | null; // Spotlight configuration
-  spotlightMode: 'pixel' | 'percentage'; // Spotlight mode: pixel or percentage
-  spotlightPercentageGeometry: PercentageGeometry | null; // Percentage mode geometry info
-  highlightedElementIds: string[]; // Highlighted element IDs
-  highlightOptions: HighlightOverlayOptions | null; // Highlight configuration
-  laserElementId: string; // Element focused by laser pointer
-  laserOptions: LaserOptions | null; // Laser pointer configuration
-  zoomTarget: { elementId: string; scale: number } | null; // Zoom target
 
   // ===== Canvas viewport state =====
   canvasScale: number; // Canvas actual zoom scale
@@ -162,22 +127,6 @@ interface CanvasState {
   setDisableHotkeysState: (disable: boolean) => void;
   setSelectedTableCells: (cells: string[]) => void;
 
-  // ----- Teaching features -----
-  setSpotlight: (elementId: string, options?: SpotlightOptions) => void;
-  clearSpotlight: () => void;
-  setSpotlightPercentage: (
-    elementId: string,
-    geometry: PercentageGeometry,
-    options?: SpotlightOptions,
-  ) => void;
-  setHighlight: (elementIds: string[], options?: HighlightOverlayOptions) => void;
-  clearHighlight: () => void;
-  setLaser: (elementId: string, options?: LaserOptions) => void;
-  clearLaser: () => void;
-  setZoom: (elementId: string, scale: number) => void;
-  clearZoom: () => void;
-  clearAllEffects: () => void;
-
   // ----- Batch operations -----
   resetCanvasState: () => void; // Reset Canvas state (used when switching scenes)
 }
@@ -233,17 +182,6 @@ const initialState = {
   thumbnailsFocus: false,
   disableHotkeys: false,
   selectedTableCells: [],
-
-  // Teaching features
-  spotlightElementId: '',
-  spotlightOptions: null,
-  spotlightMode: 'pixel' as const,
-  spotlightPercentageGeometry: null,
-  highlightedElementIds: [],
-  highlightOptions: null,
-  laserElementId: '',
-  laserOptions: null,
-  zoomTarget: null,
 };
 
 // ==================== Store Implementation ====================
@@ -350,111 +288,6 @@ const useCanvasStoreBase = create<CanvasState>((set, get) => ({
   setDisableHotkeysState: (disable) => set({ disableHotkeys: disable }),
 
   setSelectedTableCells: (cells) => set({ selectedTableCells: cells }),
-
-  // ===== Teaching Feature Actions =====
-
-  setSpotlight: (elementId, options = {}) => {
-    set({
-      spotlightElementId: elementId,
-      spotlightMode: 'pixel',
-      spotlightOptions: {
-        radius: 200,
-        dimness: 0.7,
-        transition: 300,
-        ...options,
-      },
-      spotlightPercentageGeometry: null,
-    });
-  },
-
-  setSpotlightPercentage: (elementId, geometry, options = {}) => {
-    set({
-      spotlightElementId: elementId,
-      spotlightMode: 'percentage',
-      spotlightPercentageGeometry: geometry,
-      spotlightOptions: {
-        dimness: 0.7,
-        transition: 300,
-        ...options,
-      },
-    });
-  },
-
-  clearSpotlight: () => {
-    set({
-      spotlightElementId: '',
-      spotlightOptions: null,
-      spotlightMode: 'pixel',
-      spotlightPercentageGeometry: null,
-    });
-  },
-
-  setHighlight: (elementIds, options = {}) => {
-    set({
-      highlightedElementIds: elementIds,
-      highlightOptions: {
-        color: '#ff6b6b',
-        opacity: 0.3,
-        borderWidth: 3,
-        animated: true,
-        ...options,
-      },
-    });
-  },
-
-  clearHighlight: () => {
-    set({
-      highlightedElementIds: [],
-      highlightOptions: null,
-    });
-  },
-
-  setLaser: (elementId, options = {}) => {
-    set({
-      laserElementId: elementId,
-      laserOptions: {
-        color: '#ff0000',
-        duration: 3000,
-        ...options,
-      },
-    });
-  },
-
-  clearLaser: () => {
-    set({
-      laserElementId: '',
-      laserOptions: null,
-    });
-  },
-
-  setZoom: (elementId, scale) => {
-    set({
-      zoomTarget: { elementId, scale },
-    });
-  },
-
-  clearZoom: () => {
-    set({
-      zoomTarget: null,
-    });
-  },
-
-  clearAllEffects: () => {
-    set({
-      spotlightElementId: '',
-      spotlightOptions: null,
-      spotlightMode: 'pixel',
-      spotlightPercentageGeometry: null,
-      highlightedElementIds: [],
-      highlightOptions: null,
-      laserElementId: '',
-      laserOptions: null,
-      zoomTarget: null,
-      // Note: playingVideoElementId intentionally NOT cleared here.
-      // Video playback has its own lifecycle (playVideo/pauseVideo/onEnded)
-      // and must not be interrupted by visual effect auto-clear timers.
-    });
-  },
 
   // ===== Batch Operations =====
 

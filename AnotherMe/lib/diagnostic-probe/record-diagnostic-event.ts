@@ -8,7 +8,7 @@
 
 import { recordLearningEvent } from '@/lib/learning-events/client';
 import type { DiagnosticProbe } from '@/lib/types/diagnostic-probe';
-import { useDiagnosticBlockStore } from '@/lib/store/diagnostic-blocks';
+import { useDiagnosticStore } from '@/lib/store/diagnostic';
 
 export interface RecordDiagnosticEventInput {
   userId: string;
@@ -27,7 +27,7 @@ export async function recordDiagnosticEvent(input: RecordDiagnosticEventInput): 
   const { probe, correct, timeSpentMs = 0 } = input;
 
   // Record block-level attempt for mastery tracking
-  useDiagnosticBlockStore.getState().recordAttempt({
+  useDiagnosticStore.getState().recordBlockAttempt({
     knowledgePointId: probe.knowledgePointId,
     success: correct,
     score: correct ? 100 : 0,
