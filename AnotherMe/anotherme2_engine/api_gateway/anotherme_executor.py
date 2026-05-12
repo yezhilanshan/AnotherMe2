@@ -49,17 +49,29 @@ def _strip_provider_prefix(model: str | None) -> str | None:
 def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
-    api_key = str(raw.get("api_key") or raw.get("apiKey") or "").strip()
-    base_url = str(raw.get("base_url") or raw.get("baseUrl") or "").strip()
-    vision_api_key = str(raw.get("vision_api_key") or raw.get("visionApiKey") or "").strip()
-    vision_base_url = str(raw.get("vision_base_url") or raw.get("visionBaseUrl") or "").strip()
-    ocr_api_key = str(raw.get("ocr_api_key") or raw.get("ocrApiKey") or "").strip()
-    ocr_base_url = str(raw.get("ocr_base_url") or raw.get("ocrBaseUrl") or "").strip()
+
+    roles = raw.get("roles") if isinstance(raw.get("roles"), dict) else {}
+    text_role = roles.get("text") if isinstance(roles.get("text"), dict) else {}
+    vision_role = roles.get("vision") if isinstance(roles.get("vision"), dict) else {}
+    ocr_role = roles.get("ocr") if isinstance(roles.get("ocr"), dict) else {}
+
+    api_key = str(text_role.get("api_key") or text_role.get("apiKey") or raw.get("api_key") or raw.get("apiKey") or "").strip()
+    base_url = str(text_role.get("base_url") or text_role.get("baseUrl") or raw.get("base_url") or raw.get("baseUrl") or "").strip()
+    vision_api_key = str(vision_role.get("api_key") or vision_role.get("apiKey") or raw.get("vision_api_key") or raw.get("visionApiKey") or "").strip()
+    vision_base_url = str(vision_role.get("base_url") or vision_role.get("baseUrl") or raw.get("vision_base_url") or raw.get("visionBaseUrl") or "").strip()
+    ocr_api_key = str(ocr_role.get("api_key") or ocr_role.get("apiKey") or raw.get("ocr_api_key") or raw.get("ocrApiKey") or "").strip()
+    ocr_base_url = str(ocr_role.get("base_url") or ocr_role.get("baseUrl") or raw.get("ocr_base_url") or raw.get("ocrBaseUrl") or "").strip()
     ocr_engine = str(raw.get("ocr_engine") or raw.get("ocrEngine") or "").strip().lower()
-    model = _strip_provider_prefix(str(raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
-    vision_model = _strip_provider_prefix(str(raw.get("vision_model") or raw.get("visionModel") or ""))
-    ocr_model = _strip_provider_prefix(str(raw.get("ocr_model") or raw.get("ocrModel") or ""))
+    model = _strip_provider_prefix(str(text_role.get("model") or raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
+    vision_model = _strip_provider_prefix(str(vision_role.get("model") or raw.get("vision_model") or raw.get("visionModel") or ""))
+    ocr_model = _strip_provider_prefix(str(ocr_role.get("model") or raw.get("ocr_model") or raw.get("ocrModel") or ""))
     result: Dict[str, Any] = {}
+    if text_role:
+        result["__text_explicit"] = True
+    if vision_role or any(raw.get(key) for key in ("vision_api_key", "visionApiKey", "vision_base_url", "visionBaseUrl", "vision_model", "visionModel")):
+        result["__vision_explicit"] = True
+    if ocr_role or any(raw.get(key) for key in ("ocr_api_key", "ocrApiKey", "ocr_base_url", "ocrBaseUrl", "ocr_model", "ocrModel")):
+        result["__ocr_explicit"] = True
     if api_key:
         result["api_key"] = api_key
     if base_url:
@@ -105,18 +117,36 @@ def _merge_runtime_configs(
     model = _strip_provider_prefix(str(override.get("model") or ""))
     vision_model = _strip_provider_prefix(str(override.get("vision_model") or ""))
     ocr_model = _strip_provider_prefix(str(override.get("ocr_model") or ""))
+    vision_explicit = bool(override.get("__vision_explicit"))
+    ocr_explicit = bool(override.get("__ocr_explicit"))
 
-    # Apply text provider credentials to all roles as base defaults
+    if vision_explicit:
+        for key in ("api_key", "base_url", "model"):
+            vision_config.pop(key, None)
+    if ocr_explicit:
+        for key in ("api_key", "base_url", "model"):
+            ocr_config.pop(key, None)
+
+    # Apply text provider credentials to the text role. For legacy requests
+    # without explicit role config, keep the previous same-provider fallback.
     if api_key:
         llm_config["api_key"] = api_key
-        vision_config["api_key"] = api_key
-        ocr_config["api_key"] = api_key
+        if not vision_explicit:
+            vision_config["api_key"] = api_key
+        if not ocr_explicit:
+            ocr_config["api_key"] = api_key
     if base_url:
         llm_config["base_url"] = base_url
-        vision_config["base_url"] = base_url
-        ocr_config["base_url"] = base_url
+        if not vision_explicit:
+            vision_config["base_url"] = base_url
+        if not ocr_explicit:
+            ocr_config["base_url"] = base_url
     if model:
         llm_config["model"] = model
+        if not vision_explicit:
+            vision_config["model"] = model
+        if not ocr_explicit:
+            ocr_config["model"] = model
 
     # Apply role-specific overrides (take precedence over text defaults)
     if vision_api_key:

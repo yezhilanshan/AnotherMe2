@@ -57,6 +57,11 @@ class FakeQueueClient:
         return True
 
 
+class FailingQueueClient(FakeQueueClient):
+    def enqueue(self, queue_name, message):
+        raise RuntimeError("queue unavailable")
+
+
 class StubCourseClient:
     def __init__(self):
         self.last_payload = None
@@ -204,6 +209,7 @@ def test_init_db_auto_falls_back_to_sqlite_when_postgres_unreachable(tmp_path: P
     monkeypatch.setenv("GATEWAY_DB_CONNECT_TIMEOUT_SEC", "1")
 
     reconfigure_db("postgresql+psycopg://postgres:postgres@127.0.0.1:5432/anotherme2")
+    original_create_all = db_module.Base.metadata.create_all
 
     def _fake_create_all(*args, **kwargs):
         bind = kwargs.get("bind")
@@ -219,7 +225,7 @@ def test_init_db_auto_falls_back_to_sqlite_when_postgres_unreachable(tmp_path: P
                 {},
                 Exception("could not connect to server: Connection refused"),
             )
-        return None
+        return original_create_all(*args, **kwargs)
 
     with patch.object(db_module, "_postgres_tcp_reachable", return_value=True), patch.object(
         db_module.Base.metadata,
@@ -293,6 +299,68 @@ def test_api_contract_uploads_and_jobs(tmp_path: Path):
 
     result = client.get(f"/v1/jobs/{job_id}/result")
     assert result.status_code == 409
+
+
+def test_create_job_marks_failed_when_enqueue_fails(tmp_path: Path):
+    db_path = tmp_path / "gateway-enqueue-fails.db"
+    storage_root = tmp_path / "objects"
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+        worker_temp_root=str(tmp_path / "tmp"),
+    )
+
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FailingQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/jobs",
+        json={
+            "job_type": "problem_video_generate",
+            "user_id": "u2",
+            "payload": {"image_object_key": "uploads/problem.png"},
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "JOB_ENQUEUE_FAILED"
+
+    with session_scope() as session:
+        job = session.query(Job).filter(Job.error_code == "JOB_ENQUEUE_FAILED").one()
+        assert job.status == "failed"
+        assert job.error_code == "JOB_ENQUEUE_FAILED"
+
+
+def test_gateway_health_endpoints_remain_available(tmp_path: Path):
+    db_path = tmp_path / "gateway-health.db"
+    storage_root = tmp_path / "objects"
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+        worker_temp_root=str(tmp_path / "tmp"),
+    )
+
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.json()["health"] == "/healthz"
+
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.json()["ok"] is True
+    assert "queue_backend" in health.json()
 
 
 def test_study_package_requires_output():
@@ -376,6 +444,42 @@ def test_problem_video_runtime_config_applies_role_specific_provider_config():
     assert vision_config["model"] == "qwen-vl-max"
     assert ocr_config["api_key"] == "dashscope-ocr-key"
     assert ocr_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert ocr_config["model"] == "qwen-vl-ocr-latest"
+
+
+def test_problem_video_runtime_config_does_not_inherit_text_credentials_for_explicit_role():
+    _llm_config, vision_config, ocr_config = _merge_runtime_configs(
+        base_llm_config={
+            "api_key": "",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-seed-2-0-pro-260215",
+        },
+        base_vision_config={
+            "api_key": "base-vision-key",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-1.5-vision-pro-250328",
+        },
+        base_ocr_config={
+            "api_key": "base-ocr-key",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "doubao-1.5-vision-pro-250328",
+        },
+        override={
+            "api_key": "text-key",
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-4o-mini",
+            "__vision_explicit": True,
+            "vision_model": "qwen:qwen-vl-max",
+            "__ocr_explicit": True,
+            "ocr_model": "qwen:qwen-vl-ocr-latest",
+        },
+    )
+
+    assert "api_key" not in vision_config
+    assert "base_url" not in vision_config
+    assert vision_config["model"] == "qwen-vl-max"
+    assert "api_key" not in ocr_config
+    assert "base_url" not in ocr_config
     assert ocr_config["model"] == "qwen-vl-ocr-latest"
 
 

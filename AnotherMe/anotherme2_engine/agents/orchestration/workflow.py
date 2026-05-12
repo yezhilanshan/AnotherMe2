@@ -109,16 +109,23 @@ def create_default_workflow(llm_config: Dict[str, Any],
     from langchain_openai import ChatOpenAI
     chat_openai_cls: Any = ChatOpenAI
 
-    # Validate API keys early — ChatOpenAI/OpenAI SDK throws a confusing
-    # "Missing credentials … OPENAI_API_KEY" error when api_key is empty.
+    # Validate model configs early — ChatOpenAI/OpenAI SDK throws confusing
+    # provider-level errors when api_key/base_url/model are empty.
     for role, cfg in [("文本模型", llm_config), ("视觉模型", vision_llm_config or llm_config), ("OCR模型", ocr_llm_config or vision_llm_config or llm_config)]:
         api_key = cfg.get("api_key", "") if cfg else ""
+        model = cfg.get("model", "") if cfg else ""
+        base_url = cfg.get("base_url", "") if cfg else ""
+        missing = []
         if not api_key:
-            model = cfg.get("model", "") if cfg else ""
-            base_url = cfg.get("base_url", "") if cfg else ""
+            missing.append("API Key")
+        if not base_url:
+            missing.append("Base URL")
+        if not model:
+            missing.append("Model")
+        if missing:
             raise ValueError(
-                f"{role}的 API Key 为空（model={model}, base_url={base_url}）。"
-                f"请在设置页面配置对应的 API Key，或在 .env.local 中设置 DASHSCOPE_API_KEY 环境变量。"
+                f"{role}配置不完整（缺少: {', '.join(missing)}，model={model}, base_url={base_url}）。"
+                f"请在设置页面配置对应模型，或在服务端配置该 provider。"
             )
 
     if vision_llm_config is None:

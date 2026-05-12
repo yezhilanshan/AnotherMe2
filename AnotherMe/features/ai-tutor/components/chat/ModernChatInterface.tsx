@@ -161,7 +161,12 @@ export function ModernChatInterface({ className }: ModernChatInterfaceProps) {
   }
 
   return (
-    <div className={cn('flex h-[calc(100vh-4rem)] bg-gray-50 dark:bg-gray-950 overflow-hidden', className)}>
+    <div
+      className={cn(
+        'flex h-mobile-app overflow-hidden bg-gray-50 dark:bg-gray-950 md:h-[calc(var(--app-dvh)-4rem)]',
+        className,
+      )}
+    >
       {/* 侧边栏 */}
       <AnimatePresence mode="wait">
         {!sidebarCollapsed && (

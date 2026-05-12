@@ -337,8 +337,7 @@ export function Stage({
     };
 
     window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('mousedown', handleActivity);
-    window.addEventListener('touchstart', handleActivity);
+    window.addEventListener('pointerdown', handleActivity);
     if (isPresentationInteractionActive) {
       setControlsVisible(true);
       clearPresentationIdleTimer();
@@ -348,8 +347,7 @@ export function Stage({
 
     return () => {
       window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('mousedown', handleActivity);
-      window.removeEventListener('touchstart', handleActivity);
+      window.removeEventListener('pointerdown', handleActivity);
       clearPresentationIdleTimer();
     };
   }, [

@@ -11,6 +11,9 @@ requests>=2.31.0
 # Edge TTS
 edge-tts>=6.1.0
 
+# Manim video rendering
+manim>=0.19.0
+
 # 音频处理
 mutagen>=1.47.0
 

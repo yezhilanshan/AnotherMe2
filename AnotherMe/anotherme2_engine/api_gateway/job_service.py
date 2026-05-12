@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .anotherme_executor import (
     MissingInputObjectError,
+    ProblemVideoExecutionResult,
     build_requirement_from_photo,
     extract_core_example_text,
     run_problem_video_job,
@@ -550,6 +551,10 @@ def _mark_failed(session: Session, job: Job, error_code: str, message: str) -> N
     add_event(session, job.id, "failed", message, {"error_code": error_code})
 
 
+def mark_job_enqueue_failed(session: Session, job: Job, message: str) -> None:
+    _mark_failed(session, job, "JOB_ENQUEUE_FAILED", message)
+
+
 def _mark_succeeded(session: Session, job: Job, result_payload: Dict[str, Any]) -> None:
     _clear_retry_schedule(job)
     job.status = JobStatus.SUCCEEDED.value
@@ -772,6 +777,54 @@ def _build_learner_memory_bundle(
     }
 
 
+def _resolve_problem_video_run_output_dir(artifact_path: str) -> Path | None:
+    candidate = Path(artifact_path)
+    if candidate.parent.name == "run_output":
+        return candidate.parent
+    if candidate.parent.parent.name == "run_output":
+        return candidate.parent.parent
+    return None
+
+
+def _upload_problem_video_artifacts(
+    session: Session,
+    job: Job,
+    storage: ObjectStorage,
+    trace: TraceEventEmitter,
+    exec_result: ProblemVideoExecutionResult,
+) -> tuple[str, str | None]:
+    video_ext = Path(exec_result.video_path).suffix or ".mp4"
+    video_key = f"jobs/{job.id}/problem_video/final{video_ext}"
+    video_url = storage.upload_file(exec_result.video_path, video_key)
+    add_artifact(session, job.id, "problem_video", video_key, video_url)
+
+    trace_event = trace.emit(TraceEvent(
+        type="video_rendered",
+        step="uploading_artifacts",
+        status="completed",
+        message=f"Video rendered and uploaded: {video_key}",
+        severity="success",
+        payload={"video_key": video_key, "video_url": video_url},
+    ))
+    add_trace_event(
+        session,
+        job.id,
+        "artifact_uploaded",
+        "Problem video artifact uploaded",
+        trace_event_id=trace_event.id,
+        trace_event_type=trace_event.type,
+        payload={"video_key": video_key, "video_url": video_url},
+    )
+
+    debug_url = None
+    if exec_result.debug_bundle_path and Path(exec_result.debug_bundle_path).exists():
+        debug_key = f"jobs/{job.id}/problem_video/debug_bundle.zip"
+        debug_url = storage.upload_file(exec_result.debug_bundle_path, debug_key, content_type="application/zip")
+        add_artifact(session, job.id, "debug_bundle", debug_key, debug_url)
+
+    return video_url, debug_url
+
+
 def _run_problem_video_generate(
     session: Session,
     job: Job,
@@ -779,14 +832,6 @@ def _run_problem_video_generate(
     settings: Settings,
     storage: ObjectStorage,
 ) -> Dict[str, Any]:
-    def _resolve_run_output_dir(artifact_path: str) -> Path | None:
-        candidate = Path(artifact_path)
-        if candidate.parent.name == "run_output":
-            return candidate.parent
-        if candidate.parent.parent.name == "run_output":
-            return candidate.parent.parent
-        return None
-
     trace = TraceEventEmitter(job_id=job.id)
     trace.emit_workflow_started(total_steps=5, message="Problem video generation started")
 
@@ -831,42 +876,14 @@ def _run_problem_video_generate(
         output_root=settings.worker_output_root,
         keep_run_output=settings.keep_run_output,
     )
-    run_output_dir = _resolve_run_output_dir(exec_result.video_path)
+    run_output_dir = _resolve_problem_video_run_output_dir(exec_result.video_path)
 
     trace.complete_step("video_generation", payload={"duration_sec": exec_result.duration_sec})
 
     _mark_running(session, job, "uploading_artifacts", "Uploading generated artifacts", 80)
     session.commit()
     try:
-        video_ext = Path(exec_result.video_path).suffix or ".mp4"
-        video_key = f"jobs/{job.id}/problem_video/final{video_ext}"
-        video_url = storage.upload_file(exec_result.video_path, video_key)
-        add_artifact(session, job.id, "problem_video", video_key, video_url)
-
-        trace_event = trace.emit(TraceEvent(
-            type="video_rendered",
-            step="uploading_artifacts",
-            status="completed",
-            message=f"Video rendered and uploaded: {video_key}",
-            severity="success",
-            payload={"video_key": video_key, "video_url": video_url},
-        ))
-        add_trace_event(
-            session,
-            job.id,
-            "artifact_uploaded",
-            "Problem video artifact uploaded",
-            trace_event_id=trace_event.id,
-            trace_event_type=trace_event.type,
-            payload={"video_key": video_key, "video_url": video_url},
-        )
-
-        debug_url = None
-        if exec_result.debug_bundle_path and Path(exec_result.debug_bundle_path).exists():
-            debug_key = f"jobs/{job.id}/problem_video/debug_bundle.zip"
-            debug_url = storage.upload_file(exec_result.debug_bundle_path, debug_key, content_type="application/zip")
-            add_artifact(session, job.id, "debug_bundle", debug_key, debug_url)
-
+        video_url, debug_url = _upload_problem_video_artifacts(session, job, storage, trace, exec_result)
         trace.emit_workflow_completed(message="Problem video generation completed successfully")
         job.engine_state = {
             **(job.engine_state or {}),

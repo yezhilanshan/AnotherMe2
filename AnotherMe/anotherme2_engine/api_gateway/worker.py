@@ -68,8 +68,6 @@ def run_worker() -> None:
     stale_recovery_queues = [settings.queue_problem_video]
     missing_input_cleanup_queues = [settings.queue_problem_video]
     reconcile_result_queues = [settings.queue_problem_video]
-    last_db_fallback_scan = 0.0
-    db_fallback_scan_interval_sec = 1.0
 
     while True:
         idle_sleep_seconds = 0.0
@@ -107,23 +105,12 @@ def run_worker() -> None:
                     idle_sleep_seconds = 0.3
                     message = None
             else:
-                now_monotonic = time.monotonic()
-                message = None
-                if (now_monotonic - last_db_fallback_scan) >= db_fallback_scan_interval_sec:
-                    # Fallback DB polling keeps queued jobs recoverable even if Redis messages are lost.
-                    message = dequeue_next_queued_job(session, queue_order)
-                    last_db_fallback_scan = now_monotonic
-
-                if not message:
-                    item = queue_client.dequeue(queue_order, timeout=3)
-                    if not item:
-                        idle_sleep_seconds = 0.1
-                        message = None
-                    else:
-                        _queue_name, message = item
+                item = queue_client.dequeue(queue_order, timeout=3)
+                if not item:
+                    idle_sleep_seconds = 0.1
+                    message = None
                 else:
-                    # Avoid starving Redis queues when DB fallback keeps finding work.
-                    idle_sleep_seconds = 0.0
+                    _queue_name, message = item
 
             if not message:
                 continue

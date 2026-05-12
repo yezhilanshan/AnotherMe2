@@ -5,6 +5,7 @@ import {
   hasStatelessAuthSecret,
   isStatelessAdminAuthEnabled,
 } from '@/lib/auth/stateless';
+import { getAuthStorageBackend } from '@/lib/auth/store';
 
 export const runtime = 'nodejs';
 
@@ -23,6 +24,8 @@ export async function GET() {
     authAdminEmailMasked: maskEmail(adminEmail),
     authAdminPasswordConfigured: hasStatelessAdminPassword(),
     authSecretConfigured: hasStatelessAuthSecret(),
+    authStorageBackend: getAuthStorageBackend(),
+    authDatabaseUrlConfigured: Boolean(process.env.AUTH_DATABASE_URL?.trim()),
     authDataDir: process.env.AUTH_DATA_DIR || '',
     vercel: Boolean(process.env.VERCEL),
     vercelEnv: process.env.VERCEL_ENV || '',

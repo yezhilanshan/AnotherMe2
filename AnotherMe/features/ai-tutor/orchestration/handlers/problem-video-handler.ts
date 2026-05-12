@@ -8,6 +8,7 @@
 
 import type { CapabilityHandler, CapabilityRequest, CapabilityStageResult, CapabilityResult } from '../capability-runtime';
 import type { LearningContext } from '@/lib/types/learning-context';
+import type { ProblemVideoModelConfig } from '@/features/problem-video/shared/model-config';
 
 export interface ProblemVideoCapabilityPayload {
   imageObjectKey: string;
@@ -27,6 +28,7 @@ export interface ProblemVideoCapabilityPayload {
   ocrBaseUrl?: string;
   ocrProviderType?: string;
   ocrRequiresApiKey?: boolean;
+  modelConfig?: ProblemVideoModelConfig;
   userId?: string;
   learnerSessionId?: string;
   learnerLookbackDays?: number;
@@ -72,6 +74,7 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       ocrBaseUrl: typeof p.ocrBaseUrl === 'string' ? p.ocrBaseUrl : undefined,
       ocrProviderType: typeof p.ocrProviderType === 'string' ? p.ocrProviderType : undefined,
       ocrRequiresApiKey: typeof p.ocrRequiresApiKey === 'boolean' ? p.ocrRequiresApiKey : undefined,
+      modelConfig: p.modelConfig as ProblemVideoModelConfig | undefined,
       userId: typeof p.userId === 'string' ? p.userId : undefined,
       learnerSessionId: typeof p.learnerSessionId === 'string' ? p.learnerSessionId : undefined,
       learnerLookbackDays: typeof p.learnerLookbackDays === 'number' ? p.learnerLookbackDays : undefined,
@@ -99,6 +102,7 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
       ocrBaseUrl,
       ocrProviderType,
       ocrRequiresApiKey,
+      modelConfig,
       userId,
       learnerSessionId,
       learnerLookbackDays,
@@ -151,6 +155,7 @@ export const problemVideoGenerateHandler: CapabilityHandler<ProblemVideoCapabili
         ...(ocrBaseUrl ? { ocrBaseUrl } : {}),
         ...(ocrProviderType ? { ocrProviderType } : {}),
         ...(typeof ocrRequiresApiKey === 'boolean' ? { ocrRequiresApiKey } : {}),
+        ...(modelConfig ? { modelConfig } : {}),
         ...(userId ? { userId } : {}),
         ...(learnerSessionId ? { learnerSessionId } : {}),
         ...(typeof learnerLookbackDays === 'number' ? { learnerLookbackDays } : {}),

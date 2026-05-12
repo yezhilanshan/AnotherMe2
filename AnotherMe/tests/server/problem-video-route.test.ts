@@ -24,6 +24,7 @@ describe('problem-video routes', () => {
   afterEach(() => {
     delete process.env.ANOTHERME2_GATEWAY_BASE_URL;
     delete process.env.ANOTHERME2_GATEWAY_TOKEN;
+    delete process.env.QWEN_API_KEY;
   });
 
   it('creates an AnotherMe2 problem-video job from an uploaded image', async () => {
@@ -93,6 +94,64 @@ describe('problem-video routes', () => {
       ocr_api_key: 'dashscope-ocr-key',
       ocr_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     });
+  });
+
+  it('resolves server-side provider credentials from structured modelConfig', async () => {
+    process.env.QWEN_API_KEY = 'server-qwen-key';
+    const { POST } = await import('@/app/api/problem-video/route');
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          object_key: 'uploads/problem.png',
+          url: 'http://127.0.0.1:8080/uploads/problem.png',
+          size: 123,
+          content_type: 'image/png',
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          job_id: 'job_server_cfg',
+          job_type: 'problem_video_generate',
+          status: 'queued',
+          progress: 0,
+          step: 'queued',
+        }),
+      });
+
+    const formData = new FormData();
+    formData.append('image', new File(['image-bytes'], 'problem.png', { type: 'image/png' }));
+    formData.append(
+      'modelConfig',
+      JSON.stringify({
+        text: { providerId: 'qwen', model: 'qwen:qwen3.5-flash', requiresApiKey: true },
+        vision: { providerId: 'qwen', model: 'qwen:qwen3-vl-plus', requiresApiKey: true },
+        ocr: { providerId: 'qwen', model: 'qwen:qwen-vl-ocr-latest', requiresApiKey: true },
+      }),
+    );
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/problem-video', {
+        method: 'POST',
+        body: formData,
+      }),
+    );
+
+    const json = await response.json();
+    expect(response.status).toBe(202);
+    expect(json.success).toBe(true);
+
+    const createJobBody = JSON.parse(String(mockFetch.mock.calls[1][1]?.body));
+    expect(createJobBody.payload.llm_config.roles.text.api_key).toBe('server-qwen-key');
+    expect(createJobBody.payload.llm_config.roles.vision.api_key).toBe('server-qwen-key');
+    expect(createJobBody.payload.llm_config.roles.ocr.api_key).toBe('server-qwen-key');
+    expect(createJobBody.payload.llm_config.roles.text.base_url).toBe(
+      'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    );
   });
 
   it('returns a validation error when the image is missing', async () => {

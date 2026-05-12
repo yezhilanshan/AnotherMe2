@@ -30,16 +30,16 @@ export function WhiteboardHistory({ isOpen, onClose }: WhiteboardHistoryProps) {
   // Close on outside click
   useEffect(() => {
     if (!isOpen) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: PointerEvent) => {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         onClose();
       }
     };
     // Delay listener so the click that opens the panel doesn't immediately close it
-    const id = setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    const id = setTimeout(() => document.addEventListener('pointerdown', handler), 0);
     return () => {
       clearTimeout(id);
-      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('pointerdown', handler);
     };
   }, [isOpen, onClose]);
 

@@ -7,7 +7,27 @@ import { getRuntimeDataDir } from '@/lib/server/runtime-data-dir';
 
 const DATA_DIR = getRuntimeDataDir();
 const DB_FILE = path.join(DATA_DIR, 'live-books.sqlite');
-const WASM_FILE = path.join(process.cwd(), 'public', 'sql-wasm.wasm');
+
+const WASM_CANDIDATES = [
+  path.join(process.cwd(), 'public', 'sql-wasm.wasm'),
+  path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+];
+
+let resolvedWasmPath: string | null = null;
+
+async function resolveWasmFile(): Promise<string> {
+  if (resolvedWasmPath) return resolvedWasmPath;
+  for (const candidate of WASM_CANDIDATES) {
+    try {
+      await fs.access(candidate);
+      resolvedWasmPath = candidate;
+      return candidate;
+    } catch {
+      // try next
+    }
+  }
+  throw new Error(`sql-wasm.wasm not found in any of: ${WASM_CANDIDATES.join(', ')}`);
+}
 
 let sqlRuntimePromise: Promise<SqlJsStatic> | null = null;
 let dbPromise: Promise<Database> | null = null;
@@ -15,9 +35,11 @@ let persistQueue = Promise.resolve();
 
 function getSqlRuntime(): Promise<SqlJsStatic> {
   if (!sqlRuntimePromise) {
-    sqlRuntimePromise = initSqlJs({
-      locateFile: () => WASM_FILE,
-    });
+    sqlRuntimePromise = resolveWasmFile().then((wasmPath) =>
+      initSqlJs({
+        locateFile: () => wasmPath,
+      }),
+    );
   }
   return sqlRuntimePromise;
 }
@@ -328,29 +350,48 @@ async function loadDatabase(): Promise<Database> {
 
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch {
-    // ignore
+  } catch (error) {
+    console.error('[live-book-db] Failed to create data directory:', DATA_DIR, error);
+    // Continue anyway — in-memory DB will be used as fallback
   }
 
   let db: Database;
+  let usingPersistedDb = false;
   try {
     const content = await fs.readFile(DB_FILE);
     db = new SQL.Database(content);
+    usingPersistedDb = true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[live-book-db] Failed to read DB file:', DB_FILE, error);
       throw error;
     }
+    console.warn('[live-book-db] No existing DB file, creating fresh database at:', DB_FILE);
     db = new SQL.Database();
   }
 
   initializeSchema(db);
+
+  if (!usingPersistedDb) {
+    // Persist the fresh DB so subsequent reads don't hit ENOENT again
+    try {
+      await persistDatabase(db);
+    } catch (error) {
+      console.error('[live-book-db] Failed to persist fresh database:', DB_FILE, error);
+    }
+  }
+
   return db;
 }
 
 async function persistDatabase(db: Database): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const data = db.export();
-  await fs.writeFile(DB_FILE, Buffer.from(data));
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const data = db.export();
+    await fs.writeFile(DB_FILE, Buffer.from(data));
+  } catch (error) {
+    console.error('[live-book-db] Failed to persist database to:', DB_FILE, error);
+  }
 }
 
 export async function getLiveBookDatabase(): Promise<Database> {
@@ -364,7 +405,17 @@ export async function withLiveBookDatabase<T>(
   callback: (db: Database) => T | Promise<T>,
   options?: { persist?: boolean },
 ): Promise<T> {
-  const db = await getLiveBookDatabase();
+  let db: Database;
+  try {
+    db = await getLiveBookDatabase();
+  } catch (error) {
+    console.error('[live-book-db] Failed to initialize database:', error);
+    throw new Error(
+      `Database initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}. ` +
+        `WASM resolved to: ${resolvedWasmPath ?? 'not resolved'}, ` +
+        `DATA_DIR: ${DATA_DIR}, DB_FILE: ${DB_FILE}`,
+    );
+  }
   const result = await callback(db);
 
   if (options?.persist !== false) {

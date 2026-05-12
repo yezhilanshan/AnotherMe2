@@ -5,10 +5,9 @@ import type { ProviderId } from '@/lib/types/provider';
 /**
  * Resolve effective credentials for a specific role (text / vision / OCR).
  *
- * Strict rule: a provider is only used when the user has configured BOTH
- * apiKey AND baseUrl.  If either is missing, the role is NOT configured.
- * No auto-detection, no env guessing, no fallback — the user must provide
- * complete configuration for each role they want to use.
+ * A role is usable when it has a model endpoint and either a client API key
+ * or a server-side provider configuration. Server-side keys never leave Next;
+ * downstream API routes resolve them before calling the Python gateway.
  */
 function resolveRoleCredentials(params: {
   roleProviderId: ProviderId;
@@ -19,14 +18,13 @@ function resolveRoleCredentials(params: {
 
   const roleApiKey = providerCfg?.apiKey?.trim() || '';
   const roleBaseUrl =
-    providerCfg?.baseUrl?.trim() || providerCfg?.defaultBaseUrl || '';
+    providerCfg?.baseUrl?.trim() || providerCfg?.serverBaseUrl?.trim() || providerCfg?.defaultBaseUrl || '';
+  const hasCredentialPath = !!roleApiKey || !!providerCfg?.isServerConfigured;
 
-  // Both must be present to use this provider for this role
-  if (roleApiKey && roleBaseUrl) {
+  if (hasCredentialPath && roleBaseUrl) {
     return { apiKey: roleApiKey, baseUrl: roleBaseUrl, configured: true };
   }
 
-  // Incomplete config → NOT configured (no fallback)
   return { apiKey: '', baseUrl: '', configured: false };
 }
 
@@ -52,9 +50,8 @@ function resolveTaskModel(params: {
 /**
  * Get current model configuration from settings store.
  *
- * Strict requirement: every provider MUST have both apiKey and baseUrl
- * configured independently.  No fallback between roles — each role
- * (text / vision / OCR) must be explicitly configured.
+ * Each role (text / vision / OCR) is resolved independently. Client-side
+ * API keys are optional when that provider is configured on the server.
  *
  * Returns `configured` flags so callers can prevent generation when
  * required roles are not fully configured.
@@ -75,8 +72,8 @@ export function getCurrentModelConfig() {
   const textProviderCfg = providersConfig[textProviderId] || PROVIDERS[textProviderId];
   const textApiKey = textProviderCfg?.apiKey?.trim() || '';
   const textBaseUrl =
-    textProviderCfg?.baseUrl?.trim() || textProviderCfg?.defaultBaseUrl || '';
-  const textConfigured = !!(textApiKey && textBaseUrl);
+    textProviderCfg?.baseUrl?.trim() || textProviderCfg?.serverBaseUrl?.trim() || textProviderCfg?.defaultBaseUrl || '';
+  const textConfigured = !!((textApiKey || textProviderCfg?.isServerConfigured) && textBaseUrl);
 
   // Text model
   const textModelIds = new Set([

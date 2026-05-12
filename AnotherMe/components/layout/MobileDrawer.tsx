@@ -68,7 +68,7 @@ export function MobileDrawer() {
   return (
     <>
       {/* Mobile Top Bar */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 pt-safe bg-[#F3F2EE] dark:bg-slate-950 border-b border-gray-200/50 dark:border-slate-800 flex items-center justify-between px-4">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 h-14 pt-safe bg-[#F3F2EE]/90 dark:bg-slate-950/90 backdrop-blur-md border-b border-gray-200/50 dark:border-slate-800 flex items-center justify-between px-4">
         <div className="flex items-center gap-2 text-gray-900 dark:text-gray-100">
           <div className="h-7 w-7 bg-black dark:bg-white rounded-lg flex items-center justify-center text-white dark:text-slate-900">
             <GraduationCap className="h-4 w-4" />
@@ -95,7 +95,7 @@ export function MobileDrawer() {
       {/* Drawer Panel */}
       <div
         className={cn(
-          'md:hidden fixed top-0 right-0 bottom-0 z-50 w-[280px] bg-white dark:bg-slate-950 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col pt-safe',
+          'md:hidden fixed top-0 right-0 bottom-0 z-50 w-[280px] bg-white dark:bg-slate-950 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col pt-safe pb-safe',
           open ? 'translate-x-0' : 'translate-x-full'
         )}
         onTouchStart={handleTouchStart}

@@ -2,32 +2,27 @@ import 'server-only';
 
 import { randomBytes, randomUUID } from 'crypto';
 import { hashPassword, verifyPassword } from '@/lib/auth/password';
-import { queryRows, withAuthDatabase } from '@/lib/auth/sqlite';
 import {
   authenticateStatelessAdmin,
   createStatelessAdminSession,
   getUserFromStatelessSession,
   isStatelessSession,
 } from '@/lib/auth/stateless';
+import {
+  deleteSession,
+  deleteSessionsByUser,
+  findSessionById,
+  findUserByActiveSession,
+  findUserByEmail,
+  insertSession,
+  insertUser,
+  type UserRecord,
+} from '@/lib/auth/store';
 import { AuthError, type AuthSession, type AuthUser } from '@/lib/auth/types';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
 const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 128;
-
-interface UserRow {
-  id: string;
-  email: string;
-  display_name: string;
-  password_hash: string;
-  created_at: number;
-}
-
-interface SessionRow {
-  id: string;
-  user_id: string;
-  expires_at: number;
-}
 
 function normalizeEmail(input: string): string {
   return input.trim().toLowerCase();
@@ -57,27 +52,13 @@ function sanitizeDisplayName(displayName: string, email: string): string {
   return normalizeEmail(email).split('@')[0] || '同学';
 }
 
-function toAuthUser(row: UserRow): AuthUser {
+function toAuthUser(row: UserRecord): AuthUser {
   return {
     id: row.id,
     email: row.email,
     displayName: row.display_name,
     createdAt: new Date(row.created_at).toISOString(),
   };
-}
-
-async function getUserByEmail(email: string): Promise<UserRow | null> {
-  return withAuthDatabase((db) => {
-    const rows = queryRows<UserRow>(
-      db,
-      `SELECT id, email, display_name, password_hash, created_at
-       FROM users
-       WHERE email = ?
-       LIMIT 1`,
-      [normalizeEmail(email)],
-    );
-    return rows[0] ?? null;
-  });
 }
 
 export async function registerUser(input: {
@@ -92,30 +73,28 @@ export async function registerUser(input: {
   assertEmail(email);
   assertPassword(password);
 
-  const existing = await getUserByEmail(email);
+  const existing = await findUserByEmail(email);
   if (existing) {
     throw new AuthError('EMAIL_ALREADY_EXISTS', '该邮箱已被注册。', 409);
   }
 
-  return withAuthDatabase(
-    (db) => {
-      const now = Date.now();
-      const userId = randomUUID();
-      db.run(
-        `INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [userId, email, displayName, hashPassword(password), now, now],
-      );
+  const now = Date.now();
+  const userId = randomUUID();
+  await insertUser({
+    id: userId,
+    email,
+    display_name: displayName,
+    password_hash: hashPassword(password),
+    created_at: now,
+    updated_at: now,
+  });
 
-      return {
-        id: userId,
-        email,
-        displayName,
-        createdAt: new Date(now).toISOString(),
-      } satisfies AuthUser;
-    },
-    { persist: true },
-  );
+  return {
+    id: userId,
+    email,
+    displayName,
+    createdAt: new Date(now).toISOString(),
+  };
 }
 
 export async function authenticateUser(email: string, password: string): Promise<AuthUser> {
@@ -123,7 +102,7 @@ export async function authenticateUser(email: string, password: string): Promise
   assertEmail(normalizedEmail);
   assertPassword(password);
 
-  const row = await getUserByEmail(normalizedEmail);
+  const row = await findUserByEmail(normalizedEmail);
   if (!row || !verifyPassword(password, row.password_hash)) {
     throw new AuthError('INVALID_CREDENTIALS', '邮箱或密码错误。', 401);
   }
@@ -170,35 +149,26 @@ export async function loginAndCreateSession(
  */
 export async function revokeAllUserSessions(userId: string): Promise<void> {
   if (!userId) return;
-  await withAuthDatabase(
-    (db) => {
-      db.run('DELETE FROM sessions WHERE user_id = ?', [userId]);
-    },
-    { persist: true },
-  );
+  await deleteSessionsByUser(userId);
 }
 
 export async function createSession(userId: string): Promise<AuthSession> {
-  return withAuthDatabase(
-    (db) => {
-      const now = Date.now();
-      const sessionId = randomBytes(24).toString('base64url');
-      const expiresAt = now + SESSION_TTL_MS;
+  const now = Date.now();
+  const sessionId = randomBytes(24).toString('base64url');
+  const expiresAt = now + SESSION_TTL_MS;
 
-      db.run(
-        `INSERT INTO sessions (id, user_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?)`,
-        [sessionId, userId, now, expiresAt],
-      );
+  await insertSession({
+    id: sessionId,
+    user_id: userId,
+    created_at: now,
+    expires_at: expiresAt,
+  });
 
-      return {
-        id: sessionId,
-        userId,
-        expiresAt,
-      } satisfies AuthSession;
-    },
-    { persist: true },
-  );
+  return {
+    id: sessionId,
+    userId,
+    expiresAt,
+  };
 }
 
 export async function getUserBySession(sessionId: string): Promise<AuthUser | null> {
@@ -209,59 +179,20 @@ export async function getUserBySession(sessionId: string): Promise<AuthUser | nu
 
   const now = Date.now();
 
-  let shouldPersist = false;
-  const user = await withAuthDatabase((db) => {
-    const rows = queryRows<UserRow>(
-      db,
-      `SELECT u.id, u.email, u.display_name, u.password_hash, u.created_at
-       FROM sessions s
-       JOIN users u ON s.user_id = u.id
-       WHERE s.id = ?
-         AND s.expires_at > ?
-       LIMIT 1`,
-      [sessionId, now],
-    );
+  const user = await findUserByActiveSession(sessionId, now);
+  if (user) return toAuthUser(user);
 
-    if (rows.length > 0) {
-      return toAuthUser(rows[0]);
-    }
-
-    const expired = queryRows<SessionRow>(
-      db,
-      `SELECT id, user_id, expires_at
-       FROM sessions
-       WHERE id = ?
-       LIMIT 1`,
-      [sessionId],
-    )[0];
-    if (expired && expired.expires_at <= now) {
-      db.run('DELETE FROM sessions WHERE id = ?', [sessionId]);
-      shouldPersist = true;
-    }
-
-    return null;
-  });
-
-  if (shouldPersist) {
-    await withAuthDatabase(
-      () => {
-        // no-op: flush pending expired-session deletion
-      },
-      { persist: true },
-    );
+  const expired = await findSessionById(sessionId);
+  if (expired && expired.expires_at <= now) {
+    await deleteSession(sessionId);
   }
 
-  return user;
+  return null;
 }
 
 export async function revokeSession(sessionId: string): Promise<void> {
   if (!sessionId) return;
   if (isStatelessSession(sessionId)) return;
 
-  await withAuthDatabase(
-    (db) => {
-      db.run('DELETE FROM sessions WHERE id = ?', [sessionId]);
-    },
-    { persist: true },
-  );
+  await deleteSession(sessionId);
 }

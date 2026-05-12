@@ -1,0 +1,1707 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
+import {
+  User,
+  Bell,
+  Monitor,
+  Sparkles,
+  Save,
+  Eye,
+  EyeOff,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Server,
+  Settings,
+  Palette,
+  Volume2,
+  Mic,
+  FileText,
+  Image as ImageIcon,
+  Video,
+  Globe,
+  ChevronRight,
+  Shield,
+  Zap,
+  Clock,
+  Mail,
+  Smartphone,
+  GraduationCap,
+  UserCircle,
+} from 'lucide-react';
+import Image from 'next/image';
+import { motion, AnimatePresence } from 'motion/react';
+import { cn } from '@/lib/utils';
+import { useTheme } from '@/lib/hooks/use-theme';
+import { AVATAR_OPTIONS, useUserProfileStore } from '@/lib/store/user-profile';
+import { useSettingsStore } from '@/lib/store/settings';
+import type { ProviderId } from '@/lib/types/provider';
+import { SettingsDialog } from '@/features/settings/components';
+import type { SettingsSection as AdvancedSettingsSection } from '@/lib/types/settings';
+import {
+  DEFAULT_NOTIFICATIONS,
+  DEFAULT_PROFILE_EXTRAS,
+  NOTIFICATION_LEGACY_STORAGE_KEY,
+  NOTIFICATION_STORAGE_KEY,
+  PROFILE_EXTRA_LEGACY_STORAGE_KEY,
+  PROFILE_EXTRA_STORAGE_KEY,
+} from '@/features/settings/pages/settings/constants';
+import type {
+  HealthResponse,
+  NotificationSettings,
+  ProfileExtras,
+  ProvidersResponse,
+  SettingsSection,
+} from '@/features/settings/pages/settings/types';
+import {
+  inferProviderIdFromConnection,
+  loadWithLegacyKey,
+  resolveDefaultOcrModel,
+  resolveDefaultVisionModel,
+  saveToStorage,
+} from '@/features/settings/pages/settings/utils';
+import { MoonIcon, SunIcon } from '@/features/settings/pages/settings/appearance-icons';
+import { SettingsSidebar } from '@/features/settings/pages/settings/settings-sidebar';
+
+export default function SettingsPage() {
+  const { theme, setTheme, resolvedTheme } = useTheme();
+
+  const avatar = useUserProfileStore((s) => s.avatar);
+  const nickname = useUserProfileStore((s) => s.nickname);
+  const bio = useUserProfileStore((s) => s.bio);
+  const setAvatar = useUserProfileStore((s) => s.setAvatar);
+  const setNickname = useUserProfileStore((s) => s.setNickname);
+  const setBio = useUserProfileStore((s) => s.setBio);
+
+  const providerId = useSettingsStore((s) => s.providerId);
+  const modelId = useSettingsStore((s) => s.modelId);
+  const visionProviderId = useSettingsStore((s) => s.visionProviderId);
+  const visionModelId = useSettingsStore((s) => s.visionModelId);
+  const ocrProviderId = useSettingsStore((s) => s.ocrProviderId);
+  const ocrModelId = useSettingsStore((s) => s.ocrModelId);
+  const ocrEngine = useSettingsStore((s) => s.ocrEngine);
+  const providersConfig = useSettingsStore((s) => s.providersConfig);
+  const setProviderConfig = useSettingsStore((s) => s.setProviderConfig);
+  const setModel = useSettingsStore((s) => s.setModel);
+  const setVisionModel = useSettingsStore((s) => s.setVisionModel);
+  const setOcrModel = useSettingsStore((s) => s.setOcrModel);
+  const setOcrEngine = useSettingsStore((s) => s.setOcrEngine);
+  const fetchServerProviders = useSettingsStore((s) => s.fetchServerProviders);
+
+  const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedSection, setAdvancedSection] = useState<AdvancedSettingsSection>('providers');
+
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [serverProviders, setServerProviders] = useState<ProvidersResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState('');
+  const [warningText, setWarningText] = useState('');
+
+  const [profileDraft, setProfileDraft] = useState({
+    nickname: '',
+    bio: '',
+    grade: '',
+    email: '',
+    phone: '',
+  });
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  const [notifications, setNotifications] = useState<NotificationSettings>(DEFAULT_NOTIFICATIONS);
+  const [notificationSaved, setNotificationSaved] = useState(false);
+
+  const providerIds = useMemo(
+    () =>
+      (Object.keys(providersConfig) as ProviderId[]).sort((a, b) =>
+        (providersConfig[a]?.name || a).localeCompare(providersConfig[b]?.name || b, 'zh-CN'),
+      ),
+    [providersConfig],
+  );
+
+  const visionProviderIds = useMemo(
+    () =>
+      providerIds.filter((id) => {
+        const cfg = providersConfig[id];
+        return cfg?.models?.some((m) => m.capabilities?.vision);
+      }),
+    [providerIds, providersConfig],
+  );
+
+  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>(providerId);
+  const [selectedVisionProviderId, setSelectedVisionProviderId] = useState<ProviderId>(
+    visionProviderId || providerId,
+  );
+  const [selectedOcrProviderId, setSelectedOcrProviderId] = useState<ProviderId>(
+    ocrProviderId || providerId,
+  );
+  const [modelIdDraft, setModelIdDraft] = useState('');
+  const [visionModelIdDraft, setVisionModelIdDraft] = useState('');
+  const [ocrModelIdDraft, setOcrModelIdDraft] = useState('');
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [baseUrlDraft, setBaseUrlDraft] = useState('');
+  const [visionApiKeyDraft, setVisionApiKeyDraft] = useState('');
+  const [visionBaseUrlDraft, setVisionBaseUrlDraft] = useState('');
+  const [ocrApiKeyDraft, setOcrApiKeyDraft] = useState('');
+  const [ocrBaseUrlDraft, setOcrBaseUrlDraft] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [aiSaved, setAiSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResults, setTestResults] = useState<{
+    text: { ok: boolean; text: string } | null;
+    vision: { ok: boolean; text: string } | null;
+    ocr: { ok: boolean; text: string } | null;
+  }>({ text: null, vision: null, ocr: null });
+
+  // Collapsible sections state
+  const [showVisionOcrSettings, setShowVisionOcrSettings] = useState(false);
+
+  useEffect(() => {
+    const profileExtra = loadWithLegacyKey<ProfileExtras>(
+      PROFILE_EXTRA_STORAGE_KEY,
+      PROFILE_EXTRA_LEGACY_STORAGE_KEY,
+      DEFAULT_PROFILE_EXTRAS,
+    );
+    const notificationSettings = loadWithLegacyKey<NotificationSettings>(
+      NOTIFICATION_STORAGE_KEY,
+      NOTIFICATION_LEGACY_STORAGE_KEY,
+      DEFAULT_NOTIFICATIONS,
+    );
+
+    setProfileDraft({
+      nickname: nickname || '',
+      bio: bio || '',
+      ...profileExtra,
+    });
+    setNotifications(notificationSettings);
+  }, [nickname, bio]);
+
+  useEffect(() => {
+    if (!providerIds.includes(selectedProviderId) && providerIds.length > 0) {
+      setSelectedProviderId(providerIds[0]);
+    }
+    if (!visionProviderIds.includes(selectedVisionProviderId) && visionProviderIds.length > 0) {
+      setSelectedVisionProviderId(visionProviderIds[0]);
+    }
+    if (!visionProviderIds.includes(selectedOcrProviderId) && visionProviderIds.length > 0) {
+      setSelectedOcrProviderId(visionProviderIds[0]);
+    }
+  }, [
+    providerIds,
+    visionProviderIds,
+    selectedOcrProviderId,
+    selectedProviderId,
+    selectedVisionProviderId,
+  ]);
+
+  useEffect(() => {
+    const selected = providersConfig[selectedProviderId];
+    const fallbackModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    setApiKeyDraft(selected?.apiKey || '');
+    setBaseUrlDraft(selected?.baseUrl || '');
+    setModelIdDraft(selectedProviderId === providerId && modelId ? modelId : fallbackModelId);
+    setTestResults((prev) => ({ ...prev, text: null }));
+  }, [modelId, providerId, selectedProviderId, providersConfig]);
+
+  useEffect(() => {
+    const selected = providersConfig[selectedVisionProviderId];
+    const fallbackTextModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    const fallbackVisionModelId = resolveDefaultVisionModel(
+      selectedVisionProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      selected?.models || [],
+      fallbackTextModelId,
+    );
+    setVisionApiKeyDraft(selected?.apiKey || '');
+    setVisionBaseUrlDraft(selected?.baseUrl || '');
+    setVisionModelIdDraft(
+      selectedVisionProviderId === visionProviderId && visionModelId
+        ? visionModelId
+        : fallbackVisionModelId,
+    );
+  }, [providersConfig, selectedVisionProviderId, visionModelId, visionProviderId]);
+
+  useEffect(() => {
+    const selected = providersConfig[selectedOcrProviderId];
+    const fallbackTextModelId = selected?.models?.[0]?.id || selected?.serverModels?.[0] || '';
+    const fallbackVisionModelId = resolveDefaultVisionModel(
+      selectedOcrProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      selected?.models || [],
+      fallbackTextModelId,
+    );
+    const fallbackOcrModelId = resolveDefaultOcrModel(
+      selectedOcrProviderId,
+      selected?.baseUrl || selected?.defaultBaseUrl || '',
+      fallbackVisionModelId,
+    );
+    setOcrApiKeyDraft(selected?.apiKey || '');
+    setOcrBaseUrlDraft(selected?.baseUrl || '');
+    setOcrModelIdDraft(
+      selectedOcrProviderId === ocrProviderId && ocrModelId ? ocrModelId : fallbackOcrModelId,
+    );
+  }, [ocrModelId, ocrProviderId, providersConfig, selectedOcrProviderId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBackendData() {
+      try {
+        const [providerResult, healthResult] = await Promise.allSettled([
+          fetch('/api/server-providers', { method: 'GET', cache: 'no-store' }).then(
+            async (resp) => {
+              const payload = (await resp.json()) as ProvidersResponse;
+              if (!resp.ok || !payload.success) {
+                throw new Error(payload.error || '加载服务端提供商配置失败。');
+              }
+              return payload;
+            },
+          ),
+          fetch('/api/health', { method: 'GET', cache: 'no-store' }).then(async (resp) => {
+            const payload = (await resp.json()) as HealthResponse;
+            if (!resp.ok || !payload.success) {
+              throw new Error(payload.error || '加载系统健康状态失败。');
+            }
+            return payload;
+          }),
+        ]);
+
+        const hasProviderData = providerResult.status === 'fulfilled';
+        const hasHealthData = healthResult.status === 'fulfilled';
+
+        if (!hasProviderData && !hasHealthData) {
+          throw new Error('设置加载失败：后端连接与健康状态都不可用。');
+        }
+
+        if (!cancelled) {
+          if (hasProviderData) {
+            setServerProviders(providerResult.value);
+            void fetchServerProviders();
+          }
+          if (hasHealthData) {
+            setHealth(healthResult.value);
+          }
+          if (!hasProviderData || !hasHealthData) {
+            setWarningText('部分后端设置数据暂不可用，当前展示可获取的数据。');
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorText(error instanceof Error ? error.message : '设置加载失败。');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadBackendData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchServerProviders]);
+
+  const serverConfiguredCount = useMemo(
+    () => providerIds.filter((id) => providersConfig[id]?.isServerConfigured).length,
+    [providerIds, providersConfig],
+  );
+
+  const backendModelCount = useMemo(
+    () =>
+      Object.values(serverProviders?.providers || {}).reduce(
+        (acc, item) => acc + (item.models?.length || 0),
+        0,
+      ),
+    [serverProviders],
+  );
+
+  const selectedProvider = providersConfig[selectedProviderId];
+  const selectedModels = selectedProvider?.models || [];
+  const selectedOcrProvider = providersConfig[selectedOcrProviderId];
+  const selectedOcrModels = selectedOcrProvider?.models || [];
+
+  const handleSaveProfile = () => {
+    setNickname(profileDraft.nickname.trim());
+    setBio(profileDraft.bio.trim());
+    saveToStorage(PROFILE_EXTRA_STORAGE_KEY, {
+      grade: profileDraft.grade.trim(),
+      email: profileDraft.email.trim(),
+      phone: profileDraft.phone.trim(),
+    });
+    window.localStorage.removeItem(PROFILE_EXTRA_LEGACY_STORAGE_KEY);
+    setProfileSaved(true);
+    window.setTimeout(() => setProfileSaved(false), 1500);
+  };
+
+  const handleSaveAiPreference = () => {
+    if (!selectedProvider) return;
+    const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
+    const targetProvider = providersConfig[inferredProviderId] || selectedProvider;
+    const inferredVisionProviderId = inferProviderIdFromConnection(
+      selectedVisionProviderId,
+      visionBaseUrlDraft,
+    );
+    const visionProvider =
+      providersConfig[inferredVisionProviderId] || providersConfig[selectedVisionProviderId];
+    const inferredOcrProviderId = inferProviderIdFromConnection(
+      selectedOcrProviderId,
+      ocrBaseUrlDraft,
+    );
+    const targetModelIds = new Set([
+      ...(targetProvider.models?.map((model) => model.id) || []),
+      ...(targetProvider.serverModels || []),
+    ]);
+    const selectedModelId =
+      inferredProviderId === selectedProviderId
+        ? modelIdDraft.trim()
+        : modelIdDraft.trim() && targetModelIds.has(modelIdDraft.trim())
+          ? modelIdDraft.trim()
+          : '';
+    const targetModelId =
+      selectedModelId || targetProvider.models?.[0]?.id || targetProvider.serverModels?.[0] || '';
+    const targetVisionModelId =
+      visionModelIdDraft.trim() ||
+      resolveDefaultVisionModel(
+        inferredVisionProviderId,
+        visionBaseUrlDraft,
+        visionProvider?.models || [],
+        visionProvider?.models?.[0]?.id || visionProvider?.serverModels?.[0] || targetModelId,
+      );
+    const targetOcrModelId =
+      ocrModelIdDraft.trim() ||
+      resolveDefaultOcrModel(inferredOcrProviderId, ocrBaseUrlDraft, targetVisionModelId);
+
+    setProviderConfig(inferredProviderId, {
+      apiKey: apiKeyDraft.trim(),
+      baseUrl: baseUrlDraft.trim(),
+    });
+    setProviderConfig(inferredVisionProviderId, {
+      apiKey: visionApiKeyDraft.trim(),
+      baseUrl: visionBaseUrlDraft.trim(),
+    });
+    setProviderConfig(inferredOcrProviderId, {
+      apiKey: ocrApiKeyDraft.trim(),
+      baseUrl: ocrBaseUrlDraft.trim(),
+    });
+    setSelectedProviderId(inferredProviderId);
+    setSelectedVisionProviderId(inferredVisionProviderId);
+    setSelectedOcrProviderId(inferredOcrProviderId);
+    setModel(inferredProviderId, targetModelId);
+    setVisionModel(inferredVisionProviderId, targetVisionModelId);
+    setOcrModel(inferredOcrProviderId, targetOcrModelId);
+    setOcrEngine(ocrEngine);
+    setAiSaved(true);
+    window.setTimeout(() => setAiSaved(false), 1500);
+  };
+
+  const handleVerifyProvider = async () => {
+    setTesting(true);
+    setTestResults({ text: null, vision: null, ocr: null });
+
+    // Test text model
+    const testTextModel = async (): Promise<{ ok: boolean; text: string }> => {
+      if (!selectedProvider) {
+        return { ok: false, text: '未选择文本模型提供商' };
+      }
+      const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
+      const verifyProvider = providersConfig[inferredProviderId] || selectedProvider;
+      const verifyModelIds = new Set([
+        ...(verifyProvider.models?.map((model) => model.id) || []),
+        ...(verifyProvider.serverModels || []),
+      ]);
+      const verifyDraftModelId =
+        inferredProviderId === selectedProviderId
+          ? modelIdDraft.trim()
+          : modelIdDraft.trim() && verifyModelIds.has(modelIdDraft.trim())
+            ? modelIdDraft.trim()
+            : '';
+      const verifyModelId = verifyDraftModelId || verifyProvider.models?.[0]?.id;
+      if (!verifyModelId) {
+        return { ok: false, text: '没有可测试的文本模型' };
+      }
+
+      try {
+        const resp = await fetch('/api/verify-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: apiKeyDraft.trim(),
+            baseUrl: baseUrlDraft.trim(),
+            model: `${inferredProviderId}:${verifyModelId}`,
+            providerType: verifyProvider.type,
+            requiresApiKey: verifyProvider.requiresApiKey,
+          }),
+        });
+        const payload = (await resp.json()) as { success: boolean; error?: string };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || '连接测试失败');
+        }
+        return { ok: true, text: `连接成功（${verifyModelId}）` };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Test vision model
+    const testVisionModel = async (): Promise<{ ok: boolean; text: string }> => {
+      const inferredVisionProviderId = inferProviderIdFromConnection(
+        selectedVisionProviderId,
+        visionBaseUrlDraft,
+      );
+      const visionProvider =
+        providersConfig[inferredVisionProviderId] || providersConfig[selectedVisionProviderId];
+      if (!visionProvider) {
+        return { ok: false, text: '未选择视觉模型提供商' };
+      }
+      const visionModelIds = new Set([
+        ...(visionProvider.models?.map((model) => model.id) || []),
+        ...(visionProvider.serverModels || []),
+      ]);
+      const visionDraftModelId =
+        inferredVisionProviderId === selectedVisionProviderId
+          ? visionModelIdDraft.trim()
+          : visionModelIdDraft.trim() && visionModelIds.has(visionModelIdDraft.trim())
+            ? visionModelIdDraft.trim()
+            : '';
+      const visionModel = visionDraftModelId || visionProvider.models?.[0]?.id;
+      if (!visionModel) {
+        return { ok: false, text: '没有可测试的视觉模型' };
+      }
+
+      try {
+        const resp = await fetch('/api/verify-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: visionApiKeyDraft.trim() || apiKeyDraft.trim(),
+            baseUrl: visionBaseUrlDraft.trim() || baseUrlDraft.trim(),
+            model: `${inferredVisionProviderId}:${visionModel}`,
+            providerType: visionProvider.type,
+            requiresApiKey: visionProvider.requiresApiKey,
+          }),
+        });
+        const payload = (await resp.json()) as { success: boolean; error?: string };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || '连接测试失败');
+        }
+        return { ok: true, text: `连接成功（${visionModel}）` };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Test OCR model
+    const testOcrModel = async (): Promise<{ ok: boolean; text: string }> => {
+      const inferredOcrProviderId = inferProviderIdFromConnection(
+        selectedOcrProviderId,
+        ocrBaseUrlDraft,
+      );
+      const ocrProvider =
+        providersConfig[inferredOcrProviderId] || providersConfig[selectedOcrProviderId];
+      if (!ocrProvider) {
+        return { ok: false, text: '未选择 OCR 模型提供商' };
+      }
+
+      // Use specialized OCR verification API for MinerU and other OCR providers
+      try {
+        const resp = await fetch('/api/verify-ocr-provider', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            providerId: inferredOcrProviderId,
+            apiKey: ocrApiKeyDraft.trim() || apiKeyDraft.trim(),
+            baseUrl: ocrBaseUrlDraft.trim() || baseUrlDraft.trim(),
+            model: ocrModelIdDraft.trim() || ocrProvider.models?.[0]?.id,
+            providerType: ocrProvider.type,
+            requiresApiKey: ocrProvider.requiresApiKey,
+          }),
+        });
+        const payload = (await resp.json()) as {
+          success?: boolean;
+          error?: string;
+          message?: string;
+        };
+
+        if (!resp.ok || !payload.success) {
+          throw new Error(payload.error || payload.message || '连接测试失败');
+        }
+        return { ok: true, text: payload.message || '连接成功' };
+      } catch (error) {
+        return { ok: false, text: error instanceof Error ? error.message : '连接测试失败' };
+      }
+    };
+
+    // Run all tests
+    const [textResult, visionResult, ocrResult] = await Promise.all([
+      testTextModel(),
+      testVisionModel(),
+      testOcrModel(),
+    ]);
+
+    setTestResults({
+      text: textResult,
+      vision: visionResult,
+      ocr: ocrResult,
+    });
+    setTesting(false);
+  };
+
+  const handleSaveNotifications = () => {
+    saveToStorage(NOTIFICATION_STORAGE_KEY, notifications);
+    window.localStorage.removeItem(NOTIFICATION_LEGACY_STORAGE_KEY);
+    setNotificationSaved(true);
+    window.setTimeout(() => setNotificationSaved(false), 1500);
+  };
+
+  const openAdvancedSettings = (section: AdvancedSettingsSection) => {
+    setAdvancedSection(section);
+    setAdvancedOpen(true);
+  };
+
+  if (loading) {
+    return (
+      <div className="h-[50vh] flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex items-center gap-3 px-6 py-4 bg-card rounded-xl shadow-lg border border-border"
+        >
+          <Loader2 className="h-5 w-5 animate-spin text-[#E0573D]" />
+          <span className="text-muted-foreground font-medium">正在加载设置...</span>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (errorText) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-6 py-4 rounded-xl flex items-center gap-3"
+      >
+        <AlertCircle className="h-5 w-5 flex-shrink-0" />
+        {errorText}
+      </motion.div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6 px-1 pb-12 sm:px-4 md:space-y-8">
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center"
+      >
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">设置</h1>
+          <p className="text-muted-foreground mt-1">管理您的账户偏好和系统配置</p>
+        </div>
+        <div className="hidden sm:flex items-center gap-2 px-4 py-2 bg-card rounded-full shadow-sm border border-border">
+          <Settings className="h-4 w-4 text-gray-400" />
+          <span className="text-sm text-muted-foreground">系统设置</span>
+        </div>
+      </motion.div>
+
+      {warningText ? (
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 px-5 py-4 rounded-xl flex items-center gap-3 text-sm"
+        >
+          <AlertCircle className="h-5 w-5 flex-shrink-0" />
+          {warningText}
+        </motion.div>
+      ) : null}
+
+      <div className="bg-card rounded-xl shadow-xl shadow-border/50 dark:shadow-slate-950/50 overflow-hidden border border-border flex flex-col md:flex-row min-h-0 md:min-h-[700px]">
+        <SettingsSidebar
+          activeSection={activeSection}
+          onSectionChange={setActiveSection}
+          health={health}
+          providerCount={providerIds.length}
+        />
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
+          {activeSection === 'profile' ? (
+            <motion.div
+              key="profile"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+              className="space-y-8"
+            >
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-gradient-to-br from-orange-100 to-rose-100 dark:from-orange-900/30 dark:to-rose-900/30 rounded-xl">
+                  <User className="h-6 w-6 text-[#E0573D]" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">个人资料</h2>
+                  <p className="text-sm text-muted-foreground">更新您的头像和基本信息</p>
+                </div>
+              </div>
+
+              {/* Avatar Section */}
+              <motion.div
+                whileHover={{ scale: 1.01 }}
+                className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-6 border border-border"
+              >
+                <div className="flex items-center gap-6">
+                  <motion.div
+                    whileHover={{ scale: 1.05 }}
+                    className="relative h-24 w-24 rounded-xl overflow-hidden shadow-xl ring-4 ring-white dark:ring-slate-800"
+                  >
+                    <Image
+                      src={avatar || AVATAR_OPTIONS[0]}
+                      alt="User"
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+                  </motion.div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-foreground flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-amber-500" />
+                      选择头像
+                    </h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      点击下方头像即可切换，支持多种风格
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-5 sm:grid-cols-8 gap-3 mt-6">
+                  {AVATAR_OPTIONS.map((option, index) => (
+                    <motion.button
+                      key={option}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: index * 0.03 }}
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.95 }}
+                      type="button"
+                      onClick={() => setAvatar(option)}
+                      className={cn(
+                        'relative aspect-square rounded-xl overflow-hidden transition-all duration-300',
+                        avatar === option
+                          ? 'ring-3 ring-[#E0573D] ring-offset-2 dark:ring-offset-slate-900 shadow-lg'
+                          : 'hover:shadow-md ring-1 ring-gray-200 dark:ring-slate-700',
+                      )}
+                    >
+                      <Image src={option} alt="avatar" fill className="object-cover" />
+                      {avatar === option && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="absolute inset-0 bg-primary/20 flex items-center justify-center"
+                        >
+                          <CheckCircle2 className="h-5 w-5 text-white drop-shadow-md" />
+                        </motion.div>
+                      )}
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+
+              {/* Form Fields */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <User className="h-4 w-4 text-gray-400" />
+                    姓名
+                  </label>
+                  <input
+                    type="text"
+                    value={profileDraft.nickname}
+                    onChange={(e) =>
+                      setProfileDraft((prev) => ({ ...prev, nickname: e.target.value }))
+                    }
+                    className="w-full px-4 py-3.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground placeholder:text-gray-400"
+                    placeholder="请输入您的姓名"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <GraduationCap className="h-4 w-4 text-gray-400" />
+                    年级
+                  </label>
+                  <input
+                    type="text"
+                    value={profileDraft.grade}
+                    onChange={(e) =>
+                      setProfileDraft((prev) => ({ ...prev, grade: e.target.value }))
+                    }
+                    placeholder="例如：高二"
+                    className="w-full px-4 py-3.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground placeholder:text-gray-400"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <Mail className="h-4 w-4 text-gray-400" />
+                    邮箱
+                  </label>
+                  <input
+                    type="email"
+                    value={profileDraft.email}
+                    onChange={(e) =>
+                      setProfileDraft((prev) => ({ ...prev, email: e.target.value }))
+                    }
+                    className="w-full px-4 py-3.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground placeholder:text-gray-400"
+                    placeholder="your@email.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <Smartphone className="h-4 w-4 text-gray-400" />
+                    电话号码
+                  </label>
+                  <input
+                    type="tel"
+                    value={profileDraft.phone}
+                    onChange={(e) =>
+                      setProfileDraft((prev) => ({ ...prev, phone: e.target.value }))
+                    }
+                    className="w-full px-4 py-3.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground placeholder:text-gray-400"
+                    placeholder="请输入电话号码"
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <UserCircle className="h-4 w-4 text-gray-400" />
+                    个人简介
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={profileDraft.bio}
+                    onChange={(e) => setProfileDraft((prev) => ({ ...prev, bio: e.target.value }))}
+                    className="w-full px-4 py-3.5 bg-muted border border-border rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground resize-none placeholder:text-gray-400"
+                    placeholder="介绍一下自己..."
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 flex justify-end">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  type="button"
+                  onClick={handleSaveProfile}
+                  className="px-8 py-3.5 bg-gradient-to-r from-[#E0573D] to-[#c94d35] hover:from-[#c94d35] hover:to-[#b3452f] text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-[#E0573D]/25 hover:shadow-xl hover:shadow-[#E0573D]/30 inline-flex items-center gap-2"
+                >
+                  <motion.span initial={false} animate={{ rotate: profileSaved ? 0 : 0 }}>
+                    {profileSaved ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
+                  </motion.span>
+                  {profileSaved ? '已保存' : '保存更改'}
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {activeSection === 'ai' ? (
+            <motion.div
+              key="ai"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+              className="space-y-4"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-gradient-to-br from-violet-100 to-purple-100 dark:from-violet-900/30 dark:to-purple-900/30 rounded-xl">
+                    <Sparkles className="h-5 w-5 text-violet-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-foreground">AI 偏好</h2>
+                    <p className="text-xs text-muted-foreground">配置模型提供商和 API 连接</p>
+                  </div>
+                </div>
+                {/* Backend Status Badge */}
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-card rounded-full shadow-sm border border-border"
+                >
+                  <span
+                    className={cn(
+                      'h-2 w-2 rounded-full',
+                      health?.status === 'ok' ? 'bg-green-500 animate-pulse' : 'bg-amber-500',
+                    )}
+                  />
+                  <span className="text-xs font-medium text-foreground">
+                    后端 {health?.status === 'ok' ? '正常' : '异常'}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    v{health?.version || 'unknown'}
+                  </span>
+                </motion.div>
+              </div>
+
+              {/* Main Content Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                {/* Left Column - Provider Selection & Settings */}
+                <div className="lg:col-span-8 space-y-3">
+                  {/* Compact Provider Selector */}
+                  <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
+                        <Settings className="h-4 w-4 text-violet-500" />
+                        选择模型提供商
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        {providerIds.length} 个可用
+                      </span>
+                    </div>
+                    {/* Horizontal scrollable provider tabs */}
+                    <div className="flex flex-wrap gap-2">
+                      {providerIds.map((id, index) => {
+                        const item = providersConfig[id];
+                        const active = selectedProviderId === id;
+                        return (
+                          <motion.button
+                            key={id}
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ delay: index * 0.03 }}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            type="button"
+                            onClick={() => setSelectedProviderId(id)}
+                            className={cn(
+                              'flex items-center gap-2 px-3 py-2 rounded-lg border transition-all duration-200',
+                              active
+                                ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
+                                : 'border-border bg-card hover:border-primary/30 hover:shadow-sm',
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                'w-2 h-2 rounded-full',
+                                active
+                                  ? 'bg-violet-500'
+                                  : item?.isServerConfigured
+                                    ? 'bg-green-400'
+                                    : 'bg-gray-300',
+                              )}
+                            />
+                            <span
+                              className={cn(
+                                'text-sm font-medium',
+                                active ? 'text-violet-700 dark:text-violet-300' : 'text-foreground',
+                              )}
+                            >
+                              {item?.name || id}
+                            </span>
+                            {active && (
+                              <motion.div
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                className="ml-1"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5 text-violet-500" />
+                              </motion.div>
+                            )}
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Connection Settings with Tabs */}
+                  <div className="bg-card rounded-xl p-4 border border-border shadow-sm">
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="p-1.5 bg-violet-100 dark:bg-violet-900/30 rounded-lg">
+                        <Server className="h-4 w-4 text-violet-600" />
+                      </div>
+                      <h3 className="font-semibold text-foreground text-sm">
+                        {selectedProvider?.name || selectedProviderId} 连接设置
+                      </h3>
+                    </div>
+
+                    {/* Compact Form Layout */}
+                    <div className="space-y-3">
+                      {/* API Key & Base URL in one row on larger screens */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                            <Shield className="h-3 w-3 text-gray-400" />
+                            API Key
+                          </label>
+                          <div className="relative">
+                            <input
+                              type={showApiKey ? 'text' : 'password'}
+                              value={apiKeyDraft}
+                              onChange={(e) => setApiKeyDraft(e.target.value)}
+                              placeholder="请输入 API Key"
+                              className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKey((v) => !v)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              {showApiKey ? (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                            <Globe className="h-3 w-3 text-gray-400" />
+                            Base URL
+                          </label>
+                          <input
+                            type="url"
+                            value={baseUrlDraft}
+                            onChange={(e) => setBaseUrlDraft(e.target.value)}
+                            placeholder={selectedProvider?.defaultBaseUrl || '可选'}
+                            className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Model Selection */}
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                          <Sparkles className="h-3 w-3 text-gray-400" />
+                          文本模型
+                        </label>
+                        <input
+                          type="text"
+                          list={`models-${selectedProviderId}`}
+                          value={modelIdDraft}
+                          onChange={(e) => setModelIdDraft(e.target.value)}
+                          placeholder={selectedModels[0]?.id || '请输入模型 ID'}
+                          className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                        />
+                        <datalist id={`models-${selectedProviderId}`}>
+                          {selectedModels.map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {model.name || model.id}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+
+                      {/* Collapsible Advanced Settings */}
+                      <div className="border border-border rounded-lg overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowVisionOcrSettings(!showVisionOcrSettings)}
+                          className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/50 hover:bg-muted transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Eye className="h-3.5 w-3.5 text-violet-500" />
+                            <span className="text-xs font-medium text-foreground">
+                              视觉识别 & OCR 配置
+                            </span>
+                          </div>
+                          <ChevronRight
+                            className={cn(
+                              'h-4 w-4 text-muted-foreground transition-transform duration-200',
+                              showVisionOcrSettings ? 'rotate-90' : '',
+                            )}
+                          />
+                        </button>
+                        <AnimatePresence>
+                          {showVisionOcrSettings && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="p-3 space-y-4">
+                                {/* Vision Settings */}
+                                <div className="space-y-2 border-b border-border pb-3">
+                                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                    <Eye className="h-3 w-3 text-violet-500" />
+                                    视觉识别配置
+                                  </h4>
+                                  {/* Vision Provider & Model */}
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <select
+                                      value={selectedVisionProviderId}
+                                      onChange={(e) =>
+                                        setSelectedVisionProviderId(e.target.value as ProviderId)
+                                      }
+                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                    >
+                                      {visionProviderIds.map((id) => (
+                                        <option key={id} value={id}>
+                                          {providersConfig[id]?.name || id}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="text"
+                                      list={`models-vision-${selectedVisionProviderId}`}
+                                      value={visionModelIdDraft}
+                                      onChange={(e) => setVisionModelIdDraft(e.target.value)}
+                                      placeholder="视觉模型"
+                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                    />
+                                  </div>
+                                  {/* Vision API Key & Base URL */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <div className="relative">
+                                      <input
+                                        type={showApiKey ? 'text' : 'password'}
+                                        value={visionApiKeyDraft}
+                                        onChange={(e) => setVisionApiKeyDraft(e.target.value)}
+                                        placeholder="视觉 API Key（可选）"
+                                        className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowApiKey((v) => !v)}
+                                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                                      >
+                                        {showApiKey ? (
+                                          <EyeOff className="h-3 w-3" />
+                                        ) : (
+                                          <Eye className="h-3 w-3" />
+                                        )}
+                                      </button>
+                                    </div>
+                                    <input
+                                      type="url"
+                                      value={visionBaseUrlDraft}
+                                      onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
+                                      placeholder="视觉 Base URL（可选）"
+                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                    />
+                                  </div>
+                                </div>
+                                {/* OCR Settings */}
+                                <div className="space-y-2">
+                                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                    <FileText className="h-3 w-3 text-violet-500" />
+                                    OCR 识别配置
+                                  </h4>
+                                  {/* OCR Engine Selector */}
+                                  <select
+                                    value={ocrEngine}
+                                    onChange={(e) =>
+                                      setOcrEngine(e.target.value as 'llm' | 'paddleocr')
+                                    }
+                                    className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm w-full"
+                                  >
+                                    <option value="llm">LLM OCR (云端)</option>
+                                    <option value="paddleocr">PaddleOCR (本地)</option>
+                                  </select>
+                                  {/* OCR Provider & Model - Only show for LLM OCR */}
+                                  {ocrEngine === 'llm' && (
+                                    <>
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <select
+                                          value={selectedOcrProviderId}
+                                          onChange={(e) =>
+                                            setSelectedOcrProviderId(e.target.value as ProviderId)
+                                          }
+                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                        >
+                                          {visionProviderIds.map((id) => (
+                                            <option key={id} value={id}>
+                                              {providersConfig[id]?.name || id}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <input
+                                          type="text"
+                                          list={`models-ocr-${selectedOcrProviderId}`}
+                                          value={ocrModelIdDraft}
+                                          onChange={(e) => setOcrModelIdDraft(e.target.value)}
+                                          placeholder="OCR 模型"
+                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                        />
+                                        <datalist id={`models-ocr-${selectedOcrProviderId}`}>
+                                          {selectedOcrModels.map((model) => (
+                                            <option key={model.id} value={model.id}>
+                                              {model.name || model.id}
+                                            </option>
+                                          ))}
+                                        </datalist>
+                                      </div>
+                                      {/* OCR API Key & Base URL */}
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        <div className="relative">
+                                          <input
+                                            type={showApiKey ? 'text' : 'password'}
+                                            value={ocrApiKeyDraft}
+                                            onChange={(e) => setOcrApiKeyDraft(e.target.value)}
+                                            placeholder="OCR API Key（可选）"
+                                            className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => setShowApiKey((v) => !v)}
+                                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                                          >
+                                            {showApiKey ? (
+                                              <EyeOff className="h-3 w-3" />
+                                            ) : (
+                                              <Eye className="h-3 w-3" />
+                                            )}
+                                          </button>
+                                        </div>
+                                        <input
+                                          type="url"
+                                          value={ocrBaseUrlDraft}
+                                          onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
+                                          placeholder="OCR Base URL（可选）"
+                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+                                  {ocrEngine === 'paddleocr' && (
+                                    <div className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
+                                      PaddleOCR 是本地 OCR 引擎，无需配置 API
+                                      Key。请确保服务器已安装并启动 PaddleOCR 服务。
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex flex-wrap gap-2 pt-3 mt-3 border-t border-border">
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        type="button"
+                        onClick={handleSaveAiPreference}
+                        className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm inline-flex items-center gap-1.5"
+                      >
+                        {aiSaved ? (
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )}
+                        {aiSaved ? '已保存' : '保存设置'}
+                      </motion.button>
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        type="button"
+                        onClick={handleVerifyProvider}
+                        disabled={testing}
+                        className="px-4 py-2 bg-muted hover:bg-muted/80 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 disabled:opacity-70"
+                      >
+                        {testing ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="h-3.5 w-3.5" />
+                        )}
+                        测试连接
+                      </motion.button>
+                    </div>
+
+                    {/* Test Results */}
+                    {(testResults.text || testResults.vision || testResults.ocr) && (
+                      <div className="mt-3 space-y-2">
+                        {/* Text Model Result */}
+                        {testResults.text && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className={cn(
+                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                              testResults.text.ok
+                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
+                            )}
+                          >
+                            {testResults.text.ok ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                            ) : (
+                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                            )}
+                            <span className="font-medium">文本模型:</span>
+                            {testResults.text.text}
+                          </motion.div>
+                        )}
+                        {/* Vision Model Result */}
+                        {testResults.vision && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className={cn(
+                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                              testResults.vision.ok
+                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
+                            )}
+                          >
+                            {testResults.vision.ok ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                            ) : (
+                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                            )}
+                            <span className="font-medium">视觉模型:</span>
+                            {testResults.vision.text}
+                          </motion.div>
+                        )}
+                        {/* OCR Model Result */}
+                        {testResults.ocr && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className={cn(
+                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                              testResults.ocr.ok
+                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
+                            )}
+                          >
+                            {testResults.ocr.ok ? (
+                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                            ) : (
+                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                            )}
+                            <span className="font-medium">OCR 模型:</span>
+                            {testResults.ocr.text}
+                          </motion.div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right Column - Stats & Quick Actions */}
+                <div className="lg:col-span-4 space-y-3">
+                  {/* Compact Stats */}
+                  <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl p-4 text-white">
+                    <h3 className="font-semibold mb-3 text-sm flex items-center gap-1.5">
+                      <Zap className="h-3.5 w-3.5" />
+                      系统概览
+                    </h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="text-center">
+                        <div className="text-xl font-bold">{providerIds.length}</div>
+                        <div className="text-[10px] text-violet-100">提供商</div>
+                      </div>
+                      <div className="text-center border-x border-white/20">
+                        <div className="text-xl font-bold">{serverConfiguredCount}</div>
+                        <div className="text-[10px] text-violet-100">已配置</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xl font-bold">{backendModelCount}</div>
+                        <div className="text-[10px] text-violet-100">模型数</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Actions */}
+                  <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-3 border border-border">
+                    <h3 className="font-semibold text-foreground mb-2 text-xs flex items-center gap-1.5">
+                      <Settings className="h-3.5 w-3.5 text-amber-500" />
+                      更多配置
+                    </h3>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        {
+                          label: 'TTS',
+                          section: 'tts' as const,
+                          icon: Volume2,
+                          color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600',
+                        },
+                        {
+                          label: 'ASR',
+                          section: 'asr' as const,
+                          icon: Mic,
+                          color: 'bg-green-100 dark:bg-green-900/30 text-green-600',
+                        },
+                        {
+                          label: 'PDF',
+                          section: 'pdf' as const,
+                          icon: FileText,
+                          color: 'bg-red-100 dark:bg-red-900/30 text-red-600',
+                        },
+                        {
+                          label: 'Image',
+                          section: 'image' as const,
+                          icon: ImageIcon,
+                          color: 'bg-pink-100 dark:bg-pink-900/30 text-pink-600',
+                        },
+                        {
+                          label: 'Video',
+                          section: 'video' as const,
+                          icon: Video,
+                          color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600',
+                        },
+                        {
+                          label: '搜索',
+                          section: 'web-search' as const,
+                          icon: Globe,
+                          color: 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-600',
+                        },
+                      ].map((item) => (
+                        <motion.button
+                          key={item.label}
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          type="button"
+                          onClick={() => openAdvancedSettings(item.section)}
+                          className="flex flex-col items-center gap-1 p-2 rounded-lg bg-card border border-border hover:border-primary/30 hover:shadow-sm transition-all"
+                        >
+                          <div className={cn('p-1 rounded-md', item.color)}>
+                            <item.icon className="h-3 w-3" />
+                          </div>
+                          <span className="text-[10px] font-medium text-foreground">
+                            {item.label}
+                          </span>
+                        </motion.button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Compact Help Card */}
+                  <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-xl p-3 border border-amber-100 dark:border-amber-800">
+                    <div className="flex items-start gap-2">
+                      <div className="p-1.5 bg-amber-100 dark:bg-amber-800 rounded-lg shrink-0">
+                        <Sparkles className="h-3 w-3 text-amber-600" />
+                      </div>
+                      <div>
+                        <h4 className="font-semibold text-amber-900 dark:text-amber-300 text-xs">
+                          提示
+                        </h4>
+                        <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 leading-relaxed">
+                          配置 API Key 后自动保存。点击测试连接可验证配置。
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {activeSection === 'notifications' ? (
+            <motion.div
+              key="notifications"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+              className="space-y-8"
+            >
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-gradient-to-br from-blue-100 to-cyan-100 dark:from-blue-900/30 dark:to-cyan-900/30 rounded-xl">
+                  <Bell className="h-6 w-6 text-blue-600" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">通知设置</h2>
+                  <p className="text-sm text-muted-foreground">自定义您的消息提醒偏好</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  {
+                    key: 'classReminder',
+                    label: '课程提醒',
+                    desc: '上课前提醒与学习计划到期提醒',
+                    icon: Clock,
+                    color: 'amber',
+                  },
+                  {
+                    key: 'messagePush',
+                    label: '消息推送',
+                    desc: '消息中心会话与互动通知',
+                    icon: Bell,
+                    color: 'blue',
+                  },
+                  {
+                    key: 'weeklyDigest',
+                    label: '每周总结',
+                    desc: '每周学习数据摘要',
+                    icon: Mail,
+                    color: 'violet',
+                  },
+                  {
+                    key: 'aiSuggestion',
+                    label: 'AI 学习建议',
+                    desc: '根据学习轨迹给出建议任务',
+                    icon: Sparkles,
+                    color: 'green',
+                  },
+                ].map((item, index) => {
+                  const checked = notifications[item.key as keyof NotificationSettings];
+                  const Icon = item.icon;
+                  return (
+                    <motion.div
+                      key={item.key}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      whileHover={{ scale: 1.01 }}
+                      className={cn(
+                        'flex items-center justify-between p-5 rounded-xl border-2 transition-all duration-300',
+                        checked
+                          ? 'bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 border-blue-200 dark:border-blue-800'
+                          : 'bg-muted border-border',
+                      )}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div
+                          className={cn(
+                            'p-3 rounded-xl transition-colors',
+                            checked
+                              ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-600'
+                              : 'bg-gray-200 dark:bg-slate-700 text-muted-foreground',
+                          )}
+                        >
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-foreground">{item.label}</p>
+                          <p className="text-sm text-muted-foreground">{item.desc}</p>
+                        </div>
+                      </div>
+                      <motion.button
+                        whileTap={{ scale: 0.95 }}
+                        type="button"
+                        onClick={() =>
+                          setNotifications((prev) => ({
+                            ...prev,
+                            [item.key]: !prev[item.key as keyof NotificationSettings],
+                          }))
+                        }
+                        className={cn(
+                          'relative inline-flex h-7 w-12 items-center rounded-full transition-all duration-300',
+                          checked
+                            ? 'bg-blue-600 shadow-lg shadow-blue-600/25'
+                            : 'bg-gray-300 dark:bg-slate-600',
+                        )}
+                      >
+                        <motion.span
+                          initial={false}
+                          animate={{
+                            x: checked ? 22 : 3,
+                          }}
+                          transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                          className="inline-block h-5 w-5 rounded-full bg-white shadow-md"
+                        />
+                      </motion.button>
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-4 flex justify-end">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  type="button"
+                  onClick={handleSaveNotifications}
+                  className="px-8 py-3.5 bg-gradient-to-r from-[#E0573D] to-[#c94d35] hover:from-[#c94d35] hover:to-[#b3452f] text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-[#E0573D]/25 inline-flex items-center gap-2"
+                >
+                  {notificationSaved ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  {notificationSaved ? '已保存' : '保存设置'}
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {activeSection === 'appearance' ? (
+            <motion.div
+              key="appearance"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+              className="space-y-8"
+            >
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 rounded-xl">
+                  <Palette className="h-6 w-6 text-purple-600" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-foreground">外观设置</h2>
+                  <p className="text-sm text-muted-foreground">自定义界面主题和显示模式</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                {[
+                  {
+                    id: 'light',
+                    title: '浅色模式',
+                    desc: '日间学习场景',
+                    value: 'light' as const,
+                    icon: SunIcon,
+                    gradient: 'from-amber-100 to-orange-100',
+                    darkGradient: 'from-amber-900/30 to-orange-900/30',
+                  },
+                  {
+                    id: 'dark',
+                    title: '黑夜模式',
+                    desc: '夜间学习更护眼',
+                    value: 'dark' as const,
+                    icon: MoonIcon,
+                    gradient: 'from-indigo-100 to-purple-100',
+                    darkGradient: 'from-indigo-900/30 to-purple-900/30',
+                  },
+                  {
+                    id: 'system',
+                    title: '跟随系统',
+                    desc: '自动匹配系统主题',
+                    value: 'system' as const,
+                    icon: Monitor,
+                    gradient: 'from-gray-100 to-slate-100',
+                    darkGradient: 'from-gray-800/50 to-slate-800/50',
+                  },
+                ].map((mode, index) => {
+                  const active = theme === mode.value;
+                  const Icon = mode.icon;
+                  return (
+                    <motion.button
+                      key={mode.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      whileHover={{ scale: 1.03, y: -4 }}
+                      whileTap={{ scale: 0.98 }}
+                      type="button"
+                      onClick={() => setTheme(mode.value)}
+                      className={cn(
+                        'relative text-left p-6 rounded-xl border-2 transition-all duration-300 overflow-hidden',
+                        active
+                          ? 'border-gray-900 dark:border-white shadow-xl'
+                          : 'border-border hover:border-gray-200 dark:hover:border-slate-700 hover:shadow-lg',
+                      )}
+                    >
+                      {/* Background Gradient */}
+                      <div
+                        className={cn(
+                          'absolute inset-0 bg-gradient-to-br transition-opacity duration-300',
+                          mode.gradient,
+                          mode.darkGradient
+                            .replace('from-', 'dark:from-')
+                            .replace('to-', 'dark:to-'),
+                          active ? 'opacity-100' : 'opacity-50',
+                        )}
+                      />
+
+                      {/* Content */}
+                      <div className="relative">
+                        <div
+                          className={cn(
+                            'w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-all duration-300',
+                            active
+                              ? 'bg-gray-900 dark:bg-white text-white dark:text-slate-900 shadow-lg'
+                              : 'bg-white/80 dark:bg-slate-800/80 text-gray-600 dark:text-gray-400',
+                          )}
+                        >
+                          <Icon className="h-6 w-6" />
+                        </div>
+                        <p
+                          className={cn(
+                            'font-bold text-lg transition-colors',
+                            active ? 'text-gray-900 dark:text-white' : 'text-foreground',
+                          )}
+                        >
+                          {mode.title}
+                        </p>
+                        <p
+                          className={cn(
+                            'text-sm mt-1 transition-colors',
+                            active ? 'text-muted-foreground' : 'text-muted-foreground',
+                          )}
+                        >
+                          {mode.desc}
+                        </p>
+
+                        {/* Active Indicator */}
+                        {active && (
+                          <motion.div
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="absolute top-0 right-0 p-2"
+                          >
+                            <div className="w-6 h-6 rounded-full bg-gray-900 dark:bg-white flex items-center justify-center">
+                              <CheckCircle2 className="h-4 w-4 text-white dark:text-slate-900" />
+                            </div>
+                          </motion.div>
+                        )}
+                      </div>
+                    </motion.button>
+                  );
+                })}
+              </div>
+
+              <div className="p-6 bg-gradient-to-r from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl border border-border flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-gray-200 dark:bg-slate-700 rounded-xl">
+                    <Monitor className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-foreground">当前生效主题</p>
+                    <p className="text-sm text-muted-foreground">
+                      {resolvedTheme === 'dark' ? '黑夜模式已生效' : '浅色模式已生效'}
+                    </p>
+                  </div>
+                </div>
+                <div
+                  className={cn(
+                    'px-4 py-2 rounded-full text-sm font-medium',
+                    resolvedTheme === 'dark'
+                      ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                      : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
+                  )}
+                >
+                  {resolvedTheme === 'dark' ? 'Dark Mode' : 'Light Mode'}
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  type="button"
+                  onClick={() => setTheme('dark')}
+                  className="px-8 py-3.5 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-slate-900 text-sm font-semibold rounded-xl transition-all shadow-lg inline-flex items-center gap-2"
+                >
+                  <MoonIcon className="h-4 w-4" />
+                  一键切换黑夜模式
+                </motion.button>
+              </div>
+            </motion.div>
+          ) : null}
+        </div>
+      </div>
+      <SettingsDialog
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+        initialSection={advancedSection}
+      />
+    </div>
+  );
+}

@@ -166,7 +166,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection = 'providers
             className="absolute inset-0 bg-[rgba(61,43,16,0.35)] backdrop-blur-sm"
             onClick={() => onOpenChange(false)}
           />
-          <div className="relative z-10 flex w-full max-w-6xl mx-4 h-[calc(100vh-6rem)] max-h-[800px] rounded-3xl overflow-hidden shadow-[0_48px_120px_rgba(61,43,16,0.28)]">
+          <div className="relative z-10 flex w-full max-w-6xl mx-4 h-[calc(var(--app-dvh)-6rem)] max-h-[800px] rounded-3xl overflow-hidden shadow-[0_48px_120px_rgba(61,43,16,0.28)]">
             {/* Sidebar */}
             <div className="w-60 shrink-0 bg-[rgba(255,252,247,0.98)] border-r border-[rgba(133,88,34,0.1)] flex flex-col">
               <div className="p-5 border-b border-[rgba(133,88,34,0.08)]">

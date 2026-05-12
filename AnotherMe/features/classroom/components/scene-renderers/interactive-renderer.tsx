@@ -32,7 +32,7 @@ export function InteractiveRenderer({ content, mode: _mode, sceneId }: Interacti
  * Patch embedded HTML to display correctly inside an iframe.
  *
  * Fixes:
- * - min-h-screen / h-screen → use 100% of iframe viewport
+ * - Embedded min-height:100vh patterns → body uses min-height:100% with html/body height:100%
  * - Ensure html/body fill the iframe with no overflow issues
  * - Canvas elements use container sizing instead of viewport
  */
@@ -46,9 +46,8 @@ function patchHtmlForIframe(html: string): string {
     overflow-x: hidden;
     overflow-y: auto;
   }
-  /* Fix min-h-screen: in iframes 100vh is the iframe height, which is correct,
-     but ensure body actually fills it */
-  body { min-height: 100vh; }
+  /* Body fills iframe when html/body use height: 100% */
+  body { min-height: 100%; }
 </style>`;
 
   // Insert right after <head> or at the start of the document

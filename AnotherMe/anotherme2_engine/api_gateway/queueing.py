@@ -84,11 +84,15 @@ def build_queue_client(settings: Settings):
 
     redis_client = RedisQueueClient(settings.redis_url)
     if backend == "redis":
+        redis_client.ping()
         return redis_client
 
     try:
         if redis_client.ping():
             return redis_client
-    except Exception:
-        pass
-    return PollingQueueClient()
+    except Exception as exc:
+        raise RuntimeError(
+            "Redis queue is unavailable. Start Redis or set "
+            "GATEWAY_QUEUE_BACKEND=polling explicitly for a local-only development mode."
+        ) from exc
+    raise RuntimeError("Redis queue ping failed without an exception")

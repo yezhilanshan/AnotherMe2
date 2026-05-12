@@ -6,9 +6,9 @@ import { MobileDrawer } from './MobileDrawer';
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-[#F3F2EE] dark:bg-slate-950 flex font-sans text-gray-900 dark:text-gray-100 transition-colors">
+    <div className="min-h-mobile-screen bg-[#F3F2EE] dark:bg-slate-950 flex overflow-hidden font-sans text-gray-900 dark:text-gray-100 transition-colors">
       {/* Desktop Sidebar */}
-      <div className="hidden md:block">
+      <div className="hidden md:block shrink-0">
         <Sidebar />
       </div>
 
@@ -16,7 +16,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
       <MobileDrawer />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
         {/* Desktop Header */}
         <div className="hidden md:block">
           <Header />

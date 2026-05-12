@@ -19,74 +19,32 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
-
-interface ProblemVideoJobCreateResponse {
-  success: boolean;
-  jobId?: string;
-  pollUrl?: string;
-  pollIntervalMs?: number;
-  error?: string;
-}
-
-interface ProblemVideoJobResponse {
-  success: boolean;
-  status?: 'queued' | 'running' | 'succeeded' | 'failed';
-  step?: string;
-  progress?: number;
-  errorCode?: string;
-  errorMessage?: string | null;
-  details?: string;
-  result?: {
-    videoUrl?: string;
-    durationSec?: number;
-    scriptStepsCount?: number;
-    debugBundleUrl?: string | null;
-  };
-  error?: string;
-}
-
-interface RecentVideoItem {
-  id: string;
-  title: string;
-  date: string;
-  duration: string;
-  videoUrl?: string;
-  status: 'succeeded' | 'failed';
-  subject?: '数学';
-  createdAt?: string;
-}
-
-const STORAGE_KEY = 'anotherme:dashboard:recent-problem-videos:v1';
-const PROGRESS_STORAGE_KEY = 'anotherme:dashboard:problem-video-progress:v1';
-const PROJECT_START_KEY = 'anotherme:dashboard:project-start-flag';
-const PROGRESS_SNAPSHOT_VERSION = 1;
-const PROGRESS_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-type StageStatus = 'pending' | 'running' | 'completed' | 'failed';
+import { validateModelConfigForFeature } from '@/lib/utils/model-config';
+import { createProblemVideoJob, fetchProblemVideoJobStatus } from '@/features/problem-video/client/api';
+import { appendProblemVideoModelConfig } from '@/features/problem-video/client/model-config';
+import {
+  formatProblemVideoDateLabel,
+  formatProblemVideoDuration,
+  readRecentProblemVideos,
+  saveRecentProblemVideos,
+  type RecentVideoItem,
+} from '@/features/problem-video/client/recent-videos';
+import {
+  buildInitialProblemVideoStageStatus,
+  clearProblemVideoProgressSnapshot,
+  isProblemVideoProjectRestart,
+  markProblemVideoProjectStarted,
+  normalizeProblemVideoStageStatusMap,
+  readProblemVideoProgressSnapshot,
+  saveProblemVideoProgressSnapshot,
+  type ActiveJobMeta,
+  type StageStatus,
+} from '@/features/problem-video/client/progress-storage';
 
 interface PipelineStage {
   key: string;
   label: string;
   description: string;
-}
-
-interface ActiveJobMeta {
-  jobId: string;
-  pollUrl: string;
-  pollIntervalMs: number;
-  title: string;
-}
-
-interface PersistedProgressSnapshot {
-  version: number;
-  isGenerating: boolean;
-  statusText: string;
-  backendStepText: string;
-  overallProgress: number;
-  stageStatusMap: Record<string, StageStatus>;
-  activeJob: ActiveJobMeta | null;
-  updatedAt: string;
 }
 
 const PIPELINE_STAGES: PipelineStage[] = [
@@ -97,6 +55,7 @@ const PIPELINE_STAGES: PipelineStage[] = [
   { key: 'uploading_artifacts', label: '渲染视频', description: '渲染并上传最终讲解视频' },
   { key: 'completed', label: '生成完成', description: '视频已可播放' },
 ];
+const PIPELINE_STAGE_KEYS = PIPELINE_STAGES.map((stage) => stage.key);
 
 const BACKEND_STEP_TO_STAGE: Record<string, string> = {
   queued: 'queueing',
@@ -123,122 +82,8 @@ const TIME_OPTIONS = [
 ] as const;
 type TimeFilter = (typeof TIME_OPTIONS)[number]['value'];
 
-const LATEST_LOCAL_VIDEO_URL = '/videos/final_from_template_with_audio_custom_raw.mp4';
-const LATEST_LOCAL_VIDEO_TITLE = '菱形折叠坐标法讲解（最新）';
-const LATEST_LOCAL_VIDEO_ID = 'latest-local-problem-video';
-
 function buildInitialStageStatus(): Record<string, StageStatus> {
-  return PIPELINE_STAGES.reduce<Record<string, StageStatus>>((acc, stage) => {
-    acc[stage.key] = 'pending';
-    return acc;
-  }, {});
-}
-
-function formatDuration(durationSec?: number) {
-  if (!durationSec || durationSec <= 0) return '--';
-  const total = Math.round(durationSec);
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-function formatDateLabel(date: Date) {
-  const now = new Date();
-  const sameDay =
-    now.getFullYear() === date.getFullYear() &&
-    now.getMonth() === date.getMonth() &&
-    now.getDate() === date.getDate();
-  if (sameDay) {
-    return `今天 ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-  }
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
-}
-
-function buildLatestLocalVideoItem(): RecentVideoItem {
-  return {
-    id: LATEST_LOCAL_VIDEO_ID,
-    title: LATEST_LOCAL_VIDEO_TITLE,
-    date: formatDateLabel(new Date()),
-    duration: '01:54',
-    videoUrl: LATEST_LOCAL_VIDEO_URL,
-    status: 'succeeded',
-    subject: '数学',
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function readRecentVideos(): RecentVideoItem[] {
-  const latestVideo = buildLatestLocalVideoItem();
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [latestVideo];
-    const parsed = JSON.parse(raw) as RecentVideoItem[];
-    if (!Array.isArray(parsed)) return [latestVideo];
-    const normalized = parsed.map((item) => ({
-      ...item,
-      subject: '数学' as const,
-      createdAt: item.createdAt || new Date().toISOString(),
-    }));
-    const withoutDuplicate = normalized.filter(
-      (item) => item.id !== LATEST_LOCAL_VIDEO_ID && item.videoUrl !== LATEST_LOCAL_VIDEO_URL,
-    );
-    return [latestVideo, ...withoutDuplicate].slice(0, 12);
-  } catch {
-    return [latestVideo];
-  }
-}
-
-function saveRecentVideos(items: RecentVideoItem[]) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, 12)));
-}
-
-function normalizeStageStatusMap(
-  map: Record<string, StageStatus> | null | undefined,
-): Record<string, StageStatus> {
-  const base = buildInitialStageStatus();
-  if (!map) return base;
-  PIPELINE_STAGES.forEach((stage) => {
-    const value = map[stage.key];
-    if (value === 'pending' || value === 'running' || value === 'completed' || value === 'failed') {
-      base[stage.key] = value;
-    }
-  });
-  return base;
-}
-
-function clearProgressSnapshot() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(PROGRESS_STORAGE_KEY);
-}
-
-function readProgressSnapshot(): PersistedProgressSnapshot | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(PROGRESS_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PersistedProgressSnapshot;
-    if (!parsed || parsed.version !== PROGRESS_SNAPSHOT_VERSION) return null;
-    const updatedAtMs = Date.parse(String(parsed.updatedAt || ''));
-    if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > PROGRESS_SNAPSHOT_MAX_AGE_MS) {
-      clearProgressSnapshot();
-      return null;
-    }
-
-    return {
-      version: PROGRESS_SNAPSHOT_VERSION,
-      isGenerating: Boolean(parsed.isGenerating),
-      statusText: String(parsed.statusText || ''),
-      backendStepText: String(parsed.backendStepText || ''),
-      overallProgress: Number(parsed.overallProgress || 0),
-      stageStatusMap: normalizeStageStatusMap(parsed.stageStatusMap),
-      activeJob: parsed.activeJob || null,
-      updatedAt: String(parsed.updatedAt || ''),
-    };
-  } catch {
-    return null;
-  }
+  return buildInitialProblemVideoStageStatus(PIPELINE_STAGE_KEYS);
 }
 
 function shouldClearStaleJobProgress(message: string): boolean {
@@ -253,11 +98,6 @@ function shouldClearStaleJobProgress(message: string): boolean {
 
 function hasRunningHintText(text: string): boolean {
   return text.includes('正在');
-}
-
-function saveProgressSnapshot(snapshot: PersistedProgressSnapshot) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(snapshot));
 }
 
 async function sleep(ms: number) {
@@ -317,15 +157,15 @@ export default function PhotoToVideoPage() {
   };
 
   useEffect(() => {
-    setRecentVideos(readRecentVideos());
+    setRecentVideos(readRecentProblemVideos());
 
     // 检查是否是项目重启（sessionStorage 会被清除）
-    const isProjectRestart = typeof window !== 'undefined' && !sessionStorage.getItem(PROJECT_START_KEY);
+    const isProjectRestart = isProblemVideoProjectRestart();
 
     if (isProjectRestart) {
       // 项目重启时，设置标志并清除进度
-      sessionStorage.setItem(PROJECT_START_KEY, 'true');
-      clearProgressSnapshot();
+      markProblemVideoProjectStarted();
+      clearProblemVideoProgressSnapshot();
       setIsGenerating(false);
       setStatusText('');
       setBackendStepText('');
@@ -336,7 +176,7 @@ export default function PhotoToVideoPage() {
       setHasRestoredProgress(true);
     } else {
       // 页面刷新时，恢复之前的进度
-      const snapshot = readProgressSnapshot();
+      const snapshot = readProblemVideoProgressSnapshot(PIPELINE_STAGE_KEYS);
       if (snapshot) {
         const hasStaleRunningTextWithoutJob =
           !snapshot.isGenerating &&
@@ -344,7 +184,7 @@ export default function PhotoToVideoPage() {
           (hasRunningHintText(snapshot.statusText) || hasRunningHintText(snapshot.backendStepText));
 
         if (hasStaleRunningTextWithoutJob) {
-          clearProgressSnapshot();
+          clearProblemVideoProgressSnapshot();
           setIsGenerating(false);
           setStatusText('');
           setBackendStepText('');
@@ -357,7 +197,7 @@ export default function PhotoToVideoPage() {
         }
 
         if (snapshot.isGenerating && !snapshot.activeJob) {
-          clearProgressSnapshot();
+          clearProblemVideoProgressSnapshot();
           setIsGenerating(false);
           setStatusText('');
           setBackendStepText('');
@@ -373,7 +213,7 @@ export default function PhotoToVideoPage() {
         setStatusText(snapshot.statusText);
         setBackendStepText(snapshot.backendStepText);
         setOverallProgress(Math.max(0, Math.min(100, Math.round(snapshot.overallProgress))));
-        setStageStatusMap(normalizeStageStatusMap(snapshot.stageStatusMap));
+        setStageStatusMap(normalizeProblemVideoStageStatusMap(snapshot.stageStatusMap, PIPELINE_STAGE_KEYS));
         setActiveJob(snapshot.activeJob);
         if (snapshot.isGenerating && snapshot.activeJob) {
           setResumeJobOnLoad(snapshot.activeJob);
@@ -391,16 +231,15 @@ export default function PhotoToVideoPage() {
 
   useEffect(() => {
     if (!hasRestoredProgress) return;
-    saveProgressSnapshot({
-      version: PROGRESS_SNAPSHOT_VERSION,
+    saveProblemVideoProgressSnapshot({
       isGenerating,
       statusText,
       backendStepText,
       overallProgress,
-      stageStatusMap: normalizeStageStatusMap(stageStatusMap),
+      stageStatusMap,
       activeJob,
       updatedAt: new Date().toISOString(),
-    });
+    }, PIPELINE_STAGE_KEYS);
   }, [
     hasRestoredProgress,
     isGenerating,
@@ -450,15 +289,15 @@ export default function PhotoToVideoPage() {
   }, [isGenerating, backendStepText]);
 
   useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (!filterMenuRef.current) return;
       if (!filterMenuRef.current.contains(event.target as Node)) {
         setIsFilterMenuOpen(false);
       }
     };
-    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('pointerdown', onPointerDown);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown);
     };
   }, []);
 
@@ -610,7 +449,7 @@ export default function PhotoToVideoPage() {
   const appendRecentVideo = (item: RecentVideoItem) => {
     setRecentVideos((prev) => {
       const next = [item, ...prev.filter((video) => video.id !== item.id)].slice(0, 12);
-      saveRecentVideos(next);
+      saveRecentProblemVideos(next);
       return next;
     });
   };
@@ -694,21 +533,7 @@ export default function PhotoToVideoPage() {
         await sleep(jobMeta.pollIntervalMs);
       }
 
-      const pollResp = await fetch(jobMeta.pollUrl, {
-        method: 'GET',
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-
-      const pollPayload = (await pollResp.json()) as ProblemVideoJobResponse;
-      if (!pollResp.ok || !pollPayload.success) {
-        throw new Error(
-          pollPayload.error ||
-            pollPayload.errorMessage ||
-            pollPayload.details ||
-            '查询视频生成状态失败。',
-        );
-      }
+      const pollPayload = await fetchProblemVideoJobStatus(jobMeta.pollUrl, controller.signal);
 
       applyBackendProgress(pollPayload.step, pollPayload.progress);
       const progressText =
@@ -737,8 +562,8 @@ export default function PhotoToVideoPage() {
         const item: RecentVideoItem = {
           id: jobMeta.jobId,
           title: jobMeta.title,
-          date: formatDateLabel(new Date()),
-          duration: formatDuration(result.durationSec),
+          date: formatProblemVideoDateLabel(new Date()),
+          duration: formatProblemVideoDuration(result.durationSec),
           videoUrl: result.videoUrl,
           status: 'succeeded',
           subject: generationSubject,
@@ -787,7 +612,7 @@ export default function PhotoToVideoPage() {
         const message = error instanceof Error ? error.message : '恢复任务进度失败。';
 
         if (shouldClearStaleJobProgress(message)) {
-          clearProgressSnapshot();
+          clearProblemVideoProgressSnapshot();
           setStatusText('');
           setBackendStepText('');
           setStageStatusMap(buildInitialStageStatus());
@@ -848,57 +673,9 @@ export default function PhotoToVideoPage() {
         formData.append('problemText', problemText.trim());
       }
       formData.append('autoAddAuxiliaryLines', autoAddAuxiliaryLines ? 'true' : 'false');
-      const modelConfig = getCurrentModelConfig();
-      if (modelConfig.modelString) {
-        formData.append('model', modelConfig.modelString);
-      }
-      if (modelConfig.visionModelString) {
-        formData.append('visionModel', modelConfig.visionModelString);
-      }
-      if (modelConfig.ocrModelString) {
-        formData.append('ocrModel', modelConfig.ocrModelString);
-      }
-      if (modelConfig.apiKey) {
-        formData.append('apiKey', modelConfig.apiKey);
-      }
-      if (modelConfig.baseUrl) {
-        formData.append('baseUrl', modelConfig.baseUrl);
-      }
-      if (modelConfig.providerType) {
-        formData.append('providerType', modelConfig.providerType);
-      }
-      formData.append('requiresApiKey', modelConfig.requiresApiKey ? 'true' : 'false');
-      if (modelConfig.visionApiKey) {
-        formData.append('visionApiKey', modelConfig.visionApiKey);
-      }
-      if (modelConfig.visionBaseUrl) {
-        formData.append('visionBaseUrl', modelConfig.visionBaseUrl);
-      }
-      if (modelConfig.visionProviderType) {
-        formData.append('visionProviderType', modelConfig.visionProviderType);
-      }
-      formData.append('visionRequiresApiKey', modelConfig.visionRequiresApiKey ? 'true' : 'false');
-      if (modelConfig.ocrApiKey) {
-        formData.append('ocrApiKey', modelConfig.ocrApiKey);
-      }
-      if (modelConfig.ocrBaseUrl) {
-        formData.append('ocrBaseUrl', modelConfig.ocrBaseUrl);
-      }
-      if (modelConfig.ocrProviderType) {
-        formData.append('ocrProviderType', modelConfig.ocrProviderType);
-      }
-      formData.append('ocrRequiresApiKey', modelConfig.ocrRequiresApiKey ? 'true' : 'false');
+      appendProblemVideoModelConfig(formData);
 
-      const createResp = await fetch('/api/problem-video', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      });
-
-      const createPayload = (await createResp.json()) as ProblemVideoJobCreateResponse;
-      if (!createResp.ok || !createPayload.success || !createPayload.jobId) {
-        throw new Error(createPayload.error || '创建拍题讲解任务失败。');
-      }
+      const createPayload = await createProblemVideoJob(formData, controller.signal);
 
       markStageAsActive('creating_job');
       setOverallProgress((prev) => Math.max(prev, 8));
@@ -906,12 +683,13 @@ export default function PhotoToVideoPage() {
       
       const pollUrl = createPayload.pollUrl || `/api/problem-video/${createPayload.jobId}`;
       const pollIntervalMs = createPayload.pollIntervalMs || 3000;
-      createdJobMeta = {
+      const nextJobMeta: ActiveJobMeta = {
         jobId: createPayload.jobId,
         pollUrl,
         pollIntervalMs,
         title: jobTitle,
       };
+      createdJobMeta = nextJobMeta;
       
       // 关键修复：使用 flushSync 确保状态变化被同步更新并保存到 localStorage
       // 避免用户在轮询开始前刷新页面时看到过时的状态
@@ -919,11 +697,11 @@ export default function PhotoToVideoPage() {
         markStageAsActive('queueing');
         setStatusText('任务已创建，等待处理...');
         setOverallProgress((prev) => Math.max(prev, 10));
-        setActiveJob(createdJobMeta);
+        setActiveJob(nextJobMeta);
       });
 
       await pollJobUntilTerminal({
-        jobMeta: createdJobMeta,
+        jobMeta: nextJobMeta,
         controller,
         redirectOnSuccess: true,
       });
@@ -943,7 +721,7 @@ export default function PhotoToVideoPage() {
       appendRecentVideo({
         id: `failed-${createdJobMeta?.jobId || Date.now()}`,
         title: jobTitle,
-        date: formatDateLabel(new Date()),
+        date: formatProblemVideoDateLabel(new Date()),
         duration: '--',
         status: 'failed',
         subject: generationSubject,

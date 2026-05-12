@@ -34,6 +34,7 @@ class MergeAgent(BaseAgent):
         self.manim_quality = config.get("manim_quality", "-ql")
         self.render_timeout = int(config.get("render_timeout", 900))
         self.max_repair_rounds = int(config.get("max_repair_rounds", 2))
+        self.allow_degraded_output = bool(config.get("allow_degraded_output", False))
         media_root = config.get("manim_media_root")
         self.manim_media_root = (
             Path(str(media_root))
@@ -256,8 +257,16 @@ class MergeAgent(BaseAgent):
         if not render_success:
             state["messages"].append({
                 "role": "assistant",
-                "content": f"警告：Manim 渲染失败，尝试继续处理音频。错误摘要：{render_error[:180]}"
+                "content": f"Manim 渲染失败。错误摘要：{render_error[:180]}"
             })
+            if not self.allow_degraded_output:
+                project.status = "failed"
+                project.error_message = render_error or "Manim render failed"
+                project.animation_rendered = False
+                project.final_video_path = None
+                state["project"] = project
+                state["current_step"] = "merge_failed"
+                return state
 
         # 3. 合并音视频
         audio_file = project.audio_merged_file
@@ -284,6 +293,14 @@ class MergeAgent(BaseAgent):
                         "content": f"视频合成完成：{final_video}"
                     })
                 else:
+                    if not self.allow_degraded_output:
+                        project.status = "failed"
+                        project.error_message = "音频合并失败"
+                        project.animation_rendered = True
+                        project.final_video_path = None
+                        state["project"] = project
+                        state["current_step"] = "merge_failed"
+                        return state
                     project.final_video_path = str(video_file)
                     state["messages"].append({
                         "role": "assistant",

@@ -52,7 +52,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
 
   // Close dropdown when clicking outside
   const handleClickOutside = useCallback(
-    (e: MouseEvent) => {
+    (e: PointerEvent) => {
       if (themeOpen && themeRef.current && !themeRef.current.contains(e.target as Node)) {
         setThemeOpen(false);
       }
@@ -65,8 +65,8 @@ export function Header({ currentSceneTitle }: HeaderProps) {
 
   useEffect(() => {
     if (themeOpen || exportMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      document.addEventListener('pointerdown', handleClickOutside);
+      return () => document.removeEventListener('pointerdown', handleClickOutside);
     }
   }, [themeOpen, exportMenuOpen, handleClickOutside]);
 
