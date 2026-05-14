@@ -1320,7 +1320,6 @@ class TemplateCodeGenerator:
             "\u6397": "\u00b0",
             "\u865f": "^2",
             "\u8123": "\u00d7",
-            "\u8def": "\u00b7",
             "\u71d7": "A",
             "\u71d8": "B",
             "\u71d9": "C",

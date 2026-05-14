@@ -41,6 +41,7 @@ def _has_drawable_geometry(payload: Any) -> bool:
 
 def _set_failure(state: StateLike, step_name: str, message: str) -> StateLike:
 	state.setdefault("messages", [])
+	state.setdefault("metadata", {})
 	project = state.get("project")
 	if project is not None:
 		project.status = "failed"
@@ -48,6 +49,13 @@ def _set_failure(state: StateLike, step_name: str, message: str) -> StateLike:
 		state["project"] = project
 	state["current_step"] = f"{step_name}_failed"
 	state["messages"].append({"role": "assistant", "content": message})
+	state["metadata"]["fallback_level"] = "critical"
+	events = state["metadata"].setdefault("fallback_events", [])
+	events.append({
+		"stage": f"{step_name}.node_execution",
+		"message": message,
+		"retryable": False,
+	})
 	return state
 
 
@@ -92,6 +100,10 @@ def _validate_before(step_name: str, state: StateLike) -> Tuple[bool, str]:
 	elif step_name == "merge":
 		if not str(metadata.get("manim_code", "") or "").strip():
 			return False, "MergeAgent input missing: metadata.manim_code"
+	elif step_name == "pre_planning":
+		has_problem_text = bool(str(getattr(project, "problem_text", "") or "").strip())
+		if not has_problem_text and not _has_structured_geometry(metadata):
+			return False, "ProblemTypePrePlanner input missing: project.problem_text or structured geometry metadata"
 
 	return True, ""
 
@@ -130,6 +142,9 @@ def _validate_after(step_name: str, state: StateLike) -> Tuple[bool, str]:
 		if str(getattr(project, "status", "")) in {"completed", "completed_with_fallback"}:
 			if not str(getattr(project, "final_video_path", "") or "").strip():
 				return False, "MergeAgent completed without final output path"
+	elif step_name == "pre_planning":
+		if not isinstance(metadata.get("problem_constraints"), dict):
+			return False, "ProblemTypePrePlanner output missing: metadata.problem_constraints"
 
 	return True, ""
 

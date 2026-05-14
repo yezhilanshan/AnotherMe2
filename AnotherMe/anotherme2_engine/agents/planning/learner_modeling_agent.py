@@ -65,6 +65,20 @@ class LearnerModelingAgent(BaseAgent):
         metadata = state.setdefault("metadata", {})
         knowledge_map = self._resolve_knowledge_map(metadata)
 
+        # Merge learner_memory data into metadata for unified processing
+        learner_memory = metadata.get("learner_memory") if isinstance(metadata.get("learner_memory"), dict) else {}
+        if learner_memory:
+            if not metadata.get("learning_events"):
+                derived = learner_memory.get("derived_learning_events")
+                if isinstance(derived, list) and derived:
+                    metadata["learning_events"] = derived
+            profile_snapshot = learner_memory.get("profile_snapshot") if isinstance(learner_memory.get("profile_snapshot"), dict) else {}
+            weak_kp = profile_snapshot.get("weak_knowledge_points")
+            if isinstance(weak_kp, list) and weak_kp:
+                existing_kp = metadata.get("required_knowledge") or []
+                if not existing_kp:
+                    metadata["required_knowledge"] = list(weak_kp)
+
         required_knowledge = self._resolve_required_knowledge(project, metadata, knowledge_map)
         learner_profile = self._resolve_or_cold_start_profile(metadata, knowledge_map, required_knowledge)
 
@@ -87,6 +101,13 @@ class LearnerModelingAgent(BaseAgent):
         metadata["learner_profile"] = learner_profile
         metadata["knowledge_gap"] = gap_report
         metadata["adaptive_plan"] = adaptive_plan
+
+        parallel_subagents = int(getattr(self, "config", {}).get("parallel_subagents", 0) or 0)
+        if parallel_subagents > 0:
+            metadata["parallel_subagent_report"] = {
+                "used_parallel": True,
+                "tasks": ["learning_events", "profile_hints", "required_knowledge_hints"],
+            }
 
         messages = state.setdefault("messages", [])
         messages.append(
@@ -185,7 +206,13 @@ class LearnerModelingAgent(BaseAgent):
     ) -> Dict[str, Any]:
         raw_profile = metadata.get("learner_profile") if isinstance(metadata.get("learner_profile"), dict) else {}
         grade = self._safe_int(metadata.get("learner_grade", raw_profile.get("grade", 8)), 8)
-        learner_id = str(metadata.get("learner_id", raw_profile.get("learner_id", "anonymous")) or "anonymous")
+        learner_memory = metadata.get("learner_memory") if isinstance(metadata.get("learner_memory"), dict) else {}
+        learner_id = str(
+            metadata.get("learner_id")
+            or raw_profile.get("learner_id")
+            or learner_memory.get("user_id")
+            or "anonymous"
+        ) or "anonymous"
 
         strengths = self._normalize_name_list(metadata.get("learner_strengths") or raw_profile.get("strengths") or [])
         weaknesses = self._normalize_name_list(metadata.get("learner_weaknesses") or raw_profile.get("weaknesses") or [])

@@ -5,6 +5,7 @@ import {
   Search,
   Edit,
   Send,
+  Menu,
   Loader2,
   MessageSquare,
   Users,
@@ -75,7 +76,7 @@ export default function MessagesPage() {
   const [newGroupMembers, setNewGroupMembers] = useState('');
   const [addMembersInput, setAddMembersInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [, setShowMobileSidebar] = useState(true);
+  const [showMobileSidebar, setShowMobileSidebar] = useState(true);
 
   const [deletingConversation, setDeletingConversation] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -723,7 +724,7 @@ export default function MessagesPage() {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 left-64 flex items-center justify-center bg-[#faf9f7] dark:bg-[#171411]">
+      <div className="fixed inset-0 z-20 flex items-center justify-center bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64">
         <div className="flex flex-col items-center gap-4">
           <div className="relative">
             <Loader2 className="h-10 w-10 animate-spin text-[#96673a]" />
@@ -735,9 +736,25 @@ export default function MessagesPage() {
   }
 
   return (
-    <div className="fixed inset-0 left-64 flex bg-[#faf9f7] dark:bg-[#171411] overflow-hidden z-20">
+    <div className="fixed inset-0 z-20 flex overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64">
+      {showMobileSidebar ? (
+        <button
+          type="button"
+          aria-label="关闭会话列表"
+          className="absolute inset-0 z-30 bg-black/40 md:hidden"
+          onClick={() => setShowMobileSidebar(false)}
+        />
+      ) : null}
+
       {/* Sidebar */}
-      <aside className="bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 flex flex-col h-full overflow-hidden w-60 shrink-0">
+      <aside
+        className={cn(
+          'bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 flex flex-col h-full overflow-hidden shrink-0 transition-transform duration-300',
+          'md:relative md:z-auto md:w-60 md:translate-x-0',
+          'max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(86vw,320px)] max-md:pt-safe max-md:shadow-2xl',
+          showMobileSidebar ? 'max-md:translate-x-0' : 'max-md:-translate-x-full',
+        )}
+      >
         {/* Header */}
         <div className="p-4 border-b border-gray-200/60 dark:border-gray-800/60">
           <div className="flex items-center justify-between mb-4">
@@ -747,15 +764,25 @@ export default function MessagesPage() {
               </div>
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">消息中心</h2>
             </div>
-            <button
-              className="p-2 hover:bg-white dark:hover:bg-[#201c18] rounded-xl transition-colors group"
-              type="button"
-              aria-label="新建群聊"
-              title="新建群聊"
-              onClick={() => setShowCreateGroup((prev) => !prev)}
-            >
-              <Edit className="h-4 w-4 text-gray-500 group-hover:text-gray-700 dark:group-hover:text-gray-200" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                className="p-2 hover:bg-white dark:hover:bg-[#201c18] rounded-xl transition-colors group"
+                type="button"
+                aria-label="新建群聊"
+                title="新建群聊"
+                onClick={() => setShowCreateGroup((prev) => !prev)}
+              >
+                <Edit className="h-4 w-4 text-gray-500 group-hover:text-gray-700 dark:group-hover:text-gray-200" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMobileSidebar(false)}
+                className="p-2 rounded-xl text-gray-500 hover:bg-white dark:hover:bg-[#201c18] md:hidden"
+                aria-label="关闭会话列表"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {/* Search */}
@@ -908,8 +935,16 @@ export default function MessagesPage() {
         {selectedContact ? (
           <>
             {/* Chat Header */}
-            <div className="h-14 flex items-center justify-between px-6 shrink-0 border-b border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
-              <div className="flex items-center gap-3">
+            <div className="h-14 flex items-center justify-between px-3 md:px-6 shrink-0 border-b border-gray-200/60 dark:border-gray-800/60 bg-[#faf9f7] dark:bg-[#171411]">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setShowMobileSidebar(true)}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm md:hidden"
+                  aria-label="打开会话列表"
+                >
+                  <Menu className="h-4 w-4" />
+                </button>
                 {/* Avatar */}
                 <div
                   className={cn(

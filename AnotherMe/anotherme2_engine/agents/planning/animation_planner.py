@@ -73,7 +73,7 @@ class AnimationPlanner:
             merged = list(spoken_formulas)
             seen = {item for item in merged}
             for item in prioritized:
-                if item not in seen:
+                if not item in seen:
                     seen.add(item)
                     merged.append(item)
 
@@ -89,7 +89,9 @@ class AnimationPlanner:
                         continue
                     seen.add(cleaned)
                     extras.append(cleaned)
-            return (merged + extras)[:max_items]
+            result = (merged + extras)[:max_items]
+            result = self._ensure_explanatory_copy(step, result)
+            return result
 
         if prioritized:
             # 若结构化文案较少，补充从旁白/视觉中抽取到的公式片段，避免单幕信息过少。
@@ -124,6 +126,18 @@ class AnimationPlanner:
 
         return candidates[:max_items]
 
+    def _ensure_explanatory_copy(self, step: Any, items: List[str]) -> List[str]:
+        if not items:
+            return items
+        has_chinese = any(re.search(r"[一-鿿]", item) for item in items)
+        if has_chinese:
+            return items
+        hint = str(getattr(step, "narration", "") or getattr(step, "title", "") or "").strip()
+        if not hint:
+            return items
+        prefix = "要点：" if any(kw in hint for kw in ["计算", "求", "得", "等于"]) else "思路："
+        return [f"{prefix}{hint}"] + items
+
     def _extract_from_spoken_formulas(self, items: Any) -> List[str]:
         if not isinstance(items, list):
             return []
@@ -136,6 +150,8 @@ class AnimationPlanner:
                 text = str(item).strip()
             cleaned = self._normalize_display_text(text)
             if not cleaned or cleaned in seen:
+                continue
+            if re.fullmatch(r"[A-Za-z]+'?\s*=\s*\d+(?:\.\d+)?", cleaned):
                 continue
             seen.add(cleaned)
             result.append(cleaned)
@@ -212,6 +228,8 @@ class AnimationPlanner:
         if not any(token in cleaned for token in ["=", "+", "-", "√", "²", "×", "/", "cm"]):
             return ""
         if re.fullmatch(r"[A-Za-z]+'?", cleaned):
+            return ""
+        if re.fullmatch(r"[A-Za-z]+'?\s*=\s*\d+(?:\.\d+)?", cleaned):
             return ""
         return cleaned
 

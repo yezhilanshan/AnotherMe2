@@ -87,7 +87,7 @@ class AuxiliaryLineStrategyEngine:
     DISTANCE_PATTERN = re.compile(r"距离|到.*线|distance|垂线|perpendicular", re.IGNORECASE)
     TANGENT_PATTERN = re.compile(r"切线|tangent", re.IGNORECASE)
     SIMILAR_PATTERN = re.compile(r"全等|相似|congruent|similar", re.IGNORECASE)
-    ALTITUDE_PATTERN = re.compile(r"高|高线|altitude|height", re.IGNORECASE)
+    ALTITUDE_PATTERN = re.compile(r"高(?!亮)|高线|altitude|height", re.IGNORECASE)
     MIDPOINT_PATTERN = re.compile(r"中点|midpoint|平分", re.IGNORECASE)
     PARALLEL_PATTERN = re.compile(r"平行|parallel", re.IGNORECASE)
     ANGLE_BISECTOR_PATTERN = re.compile(r"角平分线|bisector", re.IGNORECASE)

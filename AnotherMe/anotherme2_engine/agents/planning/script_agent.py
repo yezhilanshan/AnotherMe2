@@ -122,6 +122,7 @@ reason 字段示例：
         geometry_graph = metadata.get("geometry_graph")
         adaptive_plan = metadata.get("adaptive_plan") if isinstance(metadata.get("adaptive_plan"), dict) else {}
         learner_profile = metadata.get("learner_profile") if isinstance(metadata.get("learner_profile"), dict) else {}
+        problem_constraints = metadata.get("problem_constraints") if isinstance(metadata.get("problem_constraints"), dict) else {}
 
         semantic_graph_text = self._format_structured_geometry_for_prompt(semantic_graph)
         drawable_scene_text = self._format_structured_geometry_for_prompt(drawable_scene)
@@ -166,6 +167,13 @@ Geometry Graph（节点/边关系图，辅助约束）：
 
     学情自适应策略（必须执行）：
     {adaptive_prompt}"""
+
+        constraints_prompt = self._build_problem_constraints_prompt(problem_constraints)
+        if constraints_prompt:
+            user_prompt += f"""
+
+    题型预分析约束（必须遵守）：
+    {constraints_prompt}"""
 
         user_prompt += """
 
@@ -299,11 +307,69 @@ Geometry Graph（节点/边关系图，辅助约束）：
 
         return "\n".join(lines)
 
+    def _build_problem_constraints_prompt(self, problem_constraints: Dict[str, Any]) -> str:
+        if not problem_constraints:
+            return ""
+
+        problem_type = str(problem_constraints.get("problem_type", "geometry_static")).strip()
+        sub_pattern = str(problem_constraints.get("sub_pattern", "")).strip()
+        fold_axis = str(problem_constraints.get("fold_axis", "")).strip()
+
+        lines = [f"- 题型分类: {problem_type}"]
+        if sub_pattern:
+            lines.append(f"- 子模式: {sub_pattern}")
+        if fold_axis:
+            lines.append(f"- 折叠轴: {fold_axis}")
+            moving = problem_constraints.get("moving_part", [])
+            fixed = problem_constraints.get("fixed_part", [])
+            if moving:
+                lines.append(f"- 运动部分（折叠后会移动的点/线）: {', '.join(moving)}")
+            if fixed:
+                lines.append(f"- 固定部分（不参与折叠）: {', '.join(fixed)}")
+            image_pairs = problem_constraints.get("image_pairs", [])
+            if image_pairs:
+                pairs_str = "; ".join(
+                    f"{p.get('source', '')}->{p.get('image', '')}"
+                    for p in image_pairs
+                    if isinstance(p, dict)
+                )
+                if pairs_str:
+                    lines.append(f"- 像点对应关系: {pairs_str}")
+            lines.append("- 折叠题动画要求：先高亮折叠轴，再执行折叠动画，像点在折叠步骤前不可见")
+
+        return "\n".join(lines)
+
     def _safe_float(self, value: Any, default: float) -> float:
         try:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _postprocess_script_steps(self, steps: List[Any]) -> List[Any]:
+        """Post-process script steps: drop leading review steps and enrich brief narrations."""
+        REVIEW_RE = re.compile(r"复习|回顾|预习|review")
+        result: List[Any] = []
+        for step in steps:
+            title = str(getattr(step, "title", "") or "")
+            narration = str(getattr(step, "narration", "") or "")
+            combined = f"{title} {narration}"
+            if not result and REVIEW_RE.search(combined):
+                continue
+            result.append(step)
+        if not result:
+            return steps
+        for step in result:
+            narration = str(getattr(step, "narration", "") or "")
+            if len(narration.strip()) < 20:
+                step.narration = (
+                    f"已知条件已标出，{narration.rstrip('。')}，"
+                    f"逐步推导，最终结论得证。"
+                )
+        new_id = 1
+        for step in result:
+            step.id = new_id
+            new_id += 1
+        return result
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """解析 LLM 返回的 JSON 响应"""

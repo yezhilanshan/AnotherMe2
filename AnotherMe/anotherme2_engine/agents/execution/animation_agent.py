@@ -1107,11 +1107,22 @@ class AnimationAgent(BaseAgent):
         metadata = state.setdefault("metadata", {})
         adaptive_plan = metadata.get("adaptive_plan") if isinstance(metadata.get("adaptive_plan"), dict) else {}
         problem_text = str(getattr(project, "problem_text", "") or "")
+        problem_constraints = metadata.get("problem_constraints") if isinstance(metadata.get("problem_constraints"), dict) else {}
 
-        problem_pattern = self.problem_pattern_classifier.classify(
-            problem_text=problem_text,
-            metadata=metadata,
-        )
+        if problem_constraints.get("version") == "v1":
+            problem_pattern = {
+                "problem_pattern": problem_constraints.get("problem_pattern", ""),
+                "sub_pattern": problem_constraints.get("sub_pattern", ""),
+                "confidence": problem_constraints.get("confidence", 0.0),
+                "requires_geometry_animation": problem_constraints.get("requires_geometry_animation", False),
+                "recommended_geometry_actions": problem_constraints.get("recommended_geometry_actions", []),
+                "source": "pre_planner",
+            }
+        else:
+            problem_pattern = self.problem_pattern_classifier.classify(
+                problem_text=problem_text,
+                metadata=metadata,
+            )
         metadata["problem_pattern"] = problem_pattern
         self._write_debug_json("problem_pattern.json", problem_pattern)
 
@@ -1138,6 +1149,12 @@ class AnimationAgent(BaseAgent):
             geometry_ir["problem_pattern"] = str(problem_pattern.get("problem_pattern", ""))
         if not str(geometry_ir.get("sub_pattern", "")).strip():
             geometry_ir["sub_pattern"] = str(problem_pattern.get("sub_pattern", ""))
+
+        # 用预计算约束补全 geometry_ir（当 OCR 漏检时兜底）
+        if problem_constraints.get("fold_axis") and not geometry_ir.get("transform", {}).get("fold_axis"):
+            geometry_ir.setdefault("transform", {})["fold_axis"] = problem_constraints["fold_axis"]
+        if problem_constraints.get("image_pairs") and not geometry_ir.get("transform", {}).get("image_pairs"):
+            geometry_ir.setdefault("transform", {})["image_pairs"] = problem_constraints["image_pairs"]
 
         teaching_ir = self.teaching_ir_planner.build_teaching_ir(
             steps=script_steps,

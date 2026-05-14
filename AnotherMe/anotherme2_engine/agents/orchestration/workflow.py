@@ -13,6 +13,7 @@ from ..execution.repair_agent import RepairAgent
 from ..execution.voice_agent import VoiceAgent
 from ..execution.merge_agent import MergeAgent
 from ..planning.learner_modeling_agent import LearnerModelingAgent
+from ..planning.problem_type_pre_planner import ProblemTypePrePlanner
 from ..perception.vision_agent import VisionAgent
 from ..perception.vision_tool import VisionTool
 from ..foundation.config import MANIM_CANVAS_CONFIG, AGENT_CONFIGS
@@ -46,6 +47,16 @@ def _detect_latex_support() -> bool:
     return True
 
 
+def _planning_join_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Fan-in node: waits for both learner_modeling and pre_planning to complete."""
+    state.setdefault("metadata", {})
+    state["current_step"] = "planning_completed"
+    state.setdefault("messages", []).append(
+        {"role": "assistant", "content": "并行规划完成：学情建模 + 题型预分析"}
+    )
+    return state
+
+
 def create_workflow(
     vision_agent: VisionAgent,
     learner_modeling_agent: LearnerModelingAgent,
@@ -54,19 +65,22 @@ def create_workflow(
     repair_agent: RepairAgent,
     voice_agent: VoiceAgent,
     merge_agent: MergeAgent,
-    vision_tool: VisionTool
+    vision_tool: VisionTool,
+    problem_type_pre_planner: Optional[ProblemTypePrePlanner] = None,
 ) -> Any:
     """
     创建 LangGraph 工作流
 
     工作流程（先生成音频，再生成动画，实现音画同步）：
-    1. Vision    ← 图片（识别题目 + Scene Graph）
-    2. Learner   ← 学情建模（知识差距分析 + 策略分发）
-    3. Script    ← 题目文字 + 图片 + 学情策略
-    4. Voice     ← 脚本（先跑，获取真实音频时长）
-    5. Animation ← 脚本 + 音频时长 + Scene Graph（按真实时长生成动画 + add_sound）
-    6. Repair    ← 自动修复常见 Manim 错误
-    7. Merge     → 输出
+    1. Vision        ← 图片（识别题目 + Scene Graph）
+    2. Learner       ← 学情建模（知识差距分析 + 策略分发）  ┐ 并行
+       PrePlanning   ← 题型预分析（折叠轴/运动部分/约束）  ┘
+    3. Join          ← 汇集并行结果
+    4. Script        ← 题目文字 + 图片 + 学情策略 + 题型约束
+    5. Voice         ← 脚本（先跑，获取真实音频时长）
+    6. Animation     ← 脚本 + 音频时长 + Scene Graph
+    7. Repair        ← 自动修复常见 Manim 错误
+    8. Merge         → 输出
     """
     builder = StateGraph(AgentState)
 
@@ -79,13 +93,29 @@ def create_workflow(
     builder.add_node("voice", cast(Any, wrap_agent_node("voice", voice_agent.process)))
     builder.add_node("merge", cast(Any, wrap_agent_node("merge", merge_agent.process)))
 
+    # 并行规划节点
+    if problem_type_pre_planner is not None:
+        builder.add_node("pre_planning", cast(Any, wrap_agent_node("pre_planning", problem_type_pre_planner.process)))
+        builder.add_node("planning_join", cast(Any, _planning_join_node))
+
     # 设置入口
     builder.set_entry_point("vision")
 
-    # 顺序流程
+    # 构建边
+    if problem_type_pre_planner is not None:
+        # 并行 fan-out: vision → [learner_modeling, pre_planning]
+        builder.add_edge("vision", "learner_modeling")
+        builder.add_edge("vision", "pre_planning")
+        # 并行 fan-in: [learner_modeling, pre_planning] → planning_join → script
+        builder.add_edge("learner_modeling", "planning_join")
+        builder.add_edge("pre_planning", "planning_join")
+        builder.add_edge("planning_join", "script")
+    else:
+        # 向后兼容：无 pre_planner 时保持线性流程
+        builder.add_edge("vision", "learner_modeling")
+        builder.add_edge("learner_modeling", "script")
+
     # voice 先于 animation，确保音频时长和路径已知
-    builder.add_edge("vision", "learner_modeling")
-    builder.add_edge("learner_modeling", "script")
     builder.add_edge("script", "voice")
     builder.add_edge("voice", "animation")
     builder.add_edge("animation", "repair")
@@ -258,6 +288,8 @@ def create_default_workflow(llm_config: Dict[str, Any],
         llm=llm
     )
 
+    problem_type_pre_planner = ProblemTypePrePlanner()
+
     workflow = create_workflow(
         vision_agent=vision_agent,
         learner_modeling_agent=learner_modeling_agent,
@@ -266,7 +298,8 @@ def create_default_workflow(llm_config: Dict[str, Any],
         repair_agent=repair_agent,
         voice_agent=voice_agent,
         merge_agent=merge_agent,
-        vision_tool=vision_tool
+        vision_tool=vision_tool,
+        problem_type_pre_planner=problem_type_pre_planner,
     )
 
     return workflow
