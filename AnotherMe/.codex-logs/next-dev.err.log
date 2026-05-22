@@ -1,0 +1,374 @@
+[browser] [2026-05-20T14:44:31.336Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T14:45:58.174Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T14:46:34.351Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T14:47:07.697Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T15:05:19.626Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T15:05:23.817Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] [2026-05-20T15:07:47.846Z] [WARN] [StageStore] No data found for stage: kTunS6NXaX (lib/logger.ts:43:5)
+[browser] The final argument passed to useEffect changed size between renders. The order and size of this array must remain constant.
+
+Previous: [false, false, , , ()=>{
+                                const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
+                                if (paused) {
+                                    discussionTTS.pause();
+                                    setIsDiscussionPaused(true);
+                                }
+                            }, ()=>{
+                                chatAreaRef.current?.resumeActiveLiveBuffer();
+                                discussionTTS.resume();
+                                setIsDiscussionPaused(false);
+                            }, true, false, false, false, false]
+Incoming: [false, false, , , ()=>{
+                                const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
+                                if (paused) {
+                                    discussionTTS.pause();
+                                    setIsDiscussionPaused(true);
+                                }
+                            }, ()=>{
+                                chatAreaRef.current?.resumeActiveLiveBuffer();
+                                discussionTTS.resume();
+                                setIsDiscussionPaused(false);
+                            }, true, false, false, false, false, ()=>{
+            // Cancel Speech Recognition if active
+            if (speechRecognitionRef.current) {
+                speechRecognitionRef.current.onresult = null; // Prevent transcription callback
+                speechRecognitionRef.current.onerror = null; // Suppress browser abort error events
+                speechRecognitionRef.current.stop();
+                speechRecognitionRef.current = null;
+                busyRef.current = false;
+                setIsRecording(false);
+                setRecordingTime(0);
+                if (timerRef.current) {
+                    clearInterval(timerRef.current);
+                    timerRef.current = null;
+                }
+                return;
+            }
+            // Cancel MediaRecorder if active
+            if (mediaRecorderRef.current && isRecording) {
+                // Stop recording without transcription
+                mediaRecorderRef.current.ondataavailable = null;
+                mediaRecorderRef.current.onstop = null;
+                mediaRecorderRef.current.stop();
+                // Stop all audio tracks
+                if (mediaRecorderRef.current.stream) {
+                    mediaRecorderRef.current.stream.getTracks().forEach({
+                        "useAudioRecorder.useCallback[cancelRecording]": (track)=>track.stop()
+                    }["useAudioRecorder.useCallback[cancelRecording]"]);
+                }
+                busyRef.current = false;
+                setIsRecording(false);
+                setRecordingTime(0);
+                if (timerRef.current) {
+                    clearInterval(timerRef.current);
+                    timerRef.current = null;
+                }
+                audioChunksRef.current = [];
+            }
+        }, ()=>{
+        if (isSendCooldown) return;
+        if (!isInputOpen) {
+            onInputActivate?.();
+        }
+        setIsInputOpen(!isInputOpen);
+        // Cancel any in-flight ASR to prevent ghost auto-sends
+        if (isVoiceOpen || isProcessing) {
+            cancelRecording();
+            setIsVoiceOpen(false);
+        }
+    }, ()=>{
+        if (isVoiceOpen) {
+            if (isRecording) {
+                stopRecording();
+            }
+            setIsVoiceOpen(false);
+        } else {
+            if (isSendCooldown || isProcessing) return;
+            onInputActivate?.();
+            setIsVoiceOpen(true);
+            setIsInputOpen(false);
+            startRecording();
+        }
+    }] 
+    at Roundtable (features/classroom/components/roundtable/index.tsx:400:43)
+    at Set.forEach (<anonymous>)
+  398 |       setIsVoiceOpen(false);
+  399 |     } else {
+> 400 |       if (isSendCooldown || isProcessing) return;
+      |                                           ^
+  401 |       onInputActivate?.();
+  402 |       setIsVoiceOpen(true);
+  403 |       setIsInputOpen(false); (features/classroom/components/roundtable/index.tsx:400:43)
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/student/400/400 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/student/400/400 resolved to private ip ["198.18.0.106"]
+[browser] [2026-05-20T15:31:20.397Z] [WARN] [StageStore] No data found for stage: mobile-smoke-stage-tablet-portrait (lib/logger.ts:43:5)
+[browser] [2026-05-20T15:31:20.398Z] [WARN] [StageStore] No data found for stage: mobile-smoke-stage-tablet-portrait (lib/logger.ts:43:5)
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+[browser] Image with src "/avatars/user.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/assist-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/teacher-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/clown-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/thinker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/curious-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/note-taker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+⨯ ./features/settings/client/settings-client.tsx:1147:38
+Expected '</', got 'ident'
+  [90m1145 |[0m                             className={cn(
+  [90m1146 |[0m                                                 {[90m/* Vision Settings */[0m}
+[31m[1m>[0m [90m1147 |[0m                                 <div className=[32m"space-y-2 border-b border-border pb-3"[0m>
+  [90m     |[0m                                      [31m[1m^^^^^^^^^[0m
+  [90m1148 |[0m                                   <h4 className=[32m"text-xs font-semibold text-foreground f...[0m
+  [90m1149 |[0m                                     <[33mEye[0m className=[32m"h-3 w-3 text-violet-500"[0m />
+  [90m1150 |[0m                                     视觉识别配置
+
+Parsing ecmascript source code failed
+
+Import traces:
+  Client Component Browser:
+    ./features/settings/client/settings-client.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./features/settings/client/settings-client.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+
+⨯ ./features/settings/client/settings-client.tsx:1147:38
+Expected '</', got 'ident'
+  [90m1145 |[0m                             className={cn(
+  [90m1146 |[0m                                                 {[90m/* Vision Settings */[0m}
+[31m[1m>[0m [90m1147 |[0m                                 <div className=[32m"space-y-2 border-b border-border pb-3"[0m>
+  [90m     |[0m                                      [31m[1m^^^^^^^^^[0m
+  [90m1148 |[0m                                   <h4 className=[32m"text-xs font-semibold text-foreground f...[0m
+  [90m1149 |[0m                                     <[33mEye[0m className=[32m"h-3 w-3 text-violet-500"[0m />
+  [90m1150 |[0m                                     视觉识别配置
+
+Parsing ecmascript source code failed
+
+Import traces:
+  Client Component Browser:
+    ./features/settings/client/settings-client.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./features/settings/client/settings-client.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+
+[browser] Uncaught Error: ./features/settings/client/settings-client.tsx:1147:38
+Expected '</', got 'ident'
+  1145 |                             className={cn(
+  1146 |                                                 {/* Vision Settings */}
+> 1147 |                                 <div className="space-y-2 border-b border-border pb-3">
+       |                                      ^^^^^^^^^
+  1148 |                                   <h4 className="text-xs font-semibold text-foreground f...
+  1149 |                                     <Eye className="h-3 w-3 text-violet-500" />
+  1150 |                                     视觉识别配置
+
+Parsing ecmascript source code failed
+
+Import traces:
+  Client Component Browser:
+    ./features/settings/client/settings-client.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Client Component Browser]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+  Client Component SSR:
+    ./features/settings/client/settings-client.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Client Component SSR]
+    ./features/settings/pages/settings/client-page.tsx [Server Component]
+    ./features/settings/pages/settings/page.tsx [Server Component]
+    ./app/(dashboard)/settings/page.tsx [Server Component]
+
+
+    at <unknown> (Error: ./features/settings/client/settings-client.tsx:1147:38)
+    at <unknown> (Error: (./features/settings/client/settings-client.tsx:1147:38)
+⨯ upstream image https://picsum.photos/seed/user/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/user1/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+[browser] Image with src "/avatars/user.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/teacher-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/assist-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/clown-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/curious-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/thinker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/note-taker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/user.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+[2026-05-20T15:50:37.467Z] [ERROR] [Verify Model] Model verification generateText failed [model="qwen:qwen3-vl-plus"]: AI_DownloadError: URL scheme must be http or https, got data:
+    at validateDownloadUrl (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:964:15)
+    at download (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1285:310)
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1318:194
+    at Array.map (<anonymous>)
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1318:114
+    at downloadAssets (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1686:35)
+    at convertToLanguageModelPrompt (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1419:36)
+    at fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4270:54)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async generateText (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4137:16)
+    at async POST (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\[root-of-the-server]__0csdjf7._.js:2439:28)
+    at async AppRouteRouteModule.do (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:40115)
+    at async AppRouteRouteModule.handle (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:47395)
+    at async responseGenerator (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16497:38)
+    at async AppRouteRouteModule.handleResponse (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:1:228552)
+    at async handleResponse (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16560:32)
+    at async Module.handler (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16614:13)
+    at async DevServer.renderToResponseWithComponentsImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1462:9)
+    at async DevServer.renderPageComponent (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1514:24)
+    at async DevServer.renderToResponseImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1564:32)
+    at async DevServer.pipeImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1044:25)
+    at async NextNodeServer.handleCatchallRenderRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\next-server.js:338:17)
+    at async DevServer.handleRequestImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:935:17)
+    at async D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:394:20
+    at async Span.traceAsyncFn (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\trace\trace.js:164:20)
+    at async DevServer.handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:390:24)
+    at async invokeRender (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:266:21)
+    at async handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:465:24)
+    at async requestHandlerImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:514:13)
+    at async Server.requestListener (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\start-server.js:225:13)
+[2026-05-20T15:50:38.778Z] [ERROR] [Verify Model] Model verification generateText failed [model="openai:gpt-4o"]: AI_APICallError: Incorrect API key provided: sk-462b5***********************c930. You can find your API key at https://platform.openai.com/account/api-keys.
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:3146:24
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async postToApi (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:3019:36)
+    at async OpenAIChatLanguageModel.doGenerate (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0rg9_@ai-sdk_openai_dist_index_mjs_0~tayp7._.js:826:77)
+    at async fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4357:52)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async _retryWithExponentialBackoff (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2624:16)
+    at async fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4316:48)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async generateText (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4137:16)
+    at async POST (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\[root-of-the-server]__0csdjf7._.js:2439:28)
+    at async AppRouteRouteModule.do (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:40115)
+    at async AppRouteRouteModule.handle (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:47395)
+    at async responseGenerator (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16497:38)
+    at async AppRouteRouteModule.handleResponse (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:1:228552)
+    at async handleResponse (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16560:32)
+    at async Module.handler (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16614:13)
+    at async DevServer.renderToResponseWithComponentsImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1462:9)
+    at async DevServer.renderPageComponent (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1514:24)
+    at async DevServer.renderToResponseImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1564:32)
+    at async DevServer.pipeImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1044:25)
+    at async NextNodeServer.handleCatchallRenderRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\next-server.js:338:17)
+    at async DevServer.handleRequestImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:935:17)
+    at async D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:394:20
+    at async Span.traceAsyncFn (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\trace\trace.js:164:20)
+    at async DevServer.handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:390:24)
+    at async invokeRender (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:266:21)
+    at async handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:465:24)
+    at async requestHandlerImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:514:13)
+    at async Server.requestListener (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\start-server.js:225:13)
+[2026-05-20T15:51:01.372Z] [ERROR] [Verify Model] Model verification generateText failed [model="qwen:qwen3-vl-plus"]: AI_DownloadError: URL scheme must be http or https, got data:
+    at validateDownloadUrl (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:964:15)
+    at download (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1285:310)
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1318:194
+    at Array.map (<anonymous>)
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1318:114
+    at downloadAssets (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1686:35)
+    at convertToLanguageModelPrompt (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:1419:36)
+    at fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4270:54)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async generateText (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4137:16)
+    at async POST (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\[root-of-the-server]__0csdjf7._.js:2439:28)
+    at async AppRouteRouteModule.do (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:40115)
+    at async AppRouteRouteModule.handle (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:47395)
+    at async responseGenerator (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16497:38)
+    at async AppRouteRouteModule.handleResponse (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:1:228552)
+    at async handleResponse (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16560:32)
+    at async Module.handler (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16614:13)
+    at async DevServer.renderToResponseWithComponentsImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1462:9)
+    at async DevServer.renderPageComponent (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1514:24)
+    at async DevServer.renderToResponseImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1564:32)
+    at async DevServer.pipeImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1044:25)
+    at async NextNodeServer.handleCatchallRenderRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\next-server.js:338:17)
+    at async DevServer.handleRequestImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:935:17)
+    at async D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:394:20
+    at async Span.traceAsyncFn (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\trace\trace.js:164:20)
+    at async DevServer.handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:390:24)
+    at async invokeRender (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:266:21)
+    at async handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:465:24)
+    at async requestHandlerImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:514:13)
+    at async Server.requestListener (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\start-server.js:225:13)
+[2026-05-20T15:51:03.315Z] [ERROR] [Verify Model] Model verification generateText failed [model="qwen:qwen3.5-plus-2026-02-15"]: AI_APICallError: The free tier of the model has been exhausted. If you wish to continue access the model on a paid basis, please disable the "use free tier only" mode in the management console.
+    at D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:3146:24
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async postToApi (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\node_modules__pnpm_07ro4bc._.js:3019:36)
+    at async OpenAIChatLanguageModel.doGenerate (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0rg9_@ai-sdk_openai_dist_index_mjs_0~tayp7._.js:826:77)
+    at async fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4357:52)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async _retryWithExponentialBackoff (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2624:16)
+    at async fn (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4316:48)
+    at async D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:2366:28
+    at async generateText (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0-aa_ai_dist_index_mjs_0d.jzb4._.js:4137:16)
+    at async POST (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\[root-of-the-server]__0csdjf7._.js:2439:28)
+    at async AppRouteRouteModule.do (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:40115)
+    at async AppRouteRouteModule.handle (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:5:47395)
+    at async responseGenerator (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16497:38)
+    at async AppRouteRouteModule.handleResponse (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js:1:228552)
+    at async handleResponse (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16560:32)
+    at async Module.handler (D:\AnotherMe-main\AnotherMe\.next\dev\server\chunks\0wyf_next_06a3mgi._.js:16614:13)
+    at async DevServer.renderToResponseWithComponentsImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1462:9)
+    at async DevServer.renderPageComponent (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1514:24)
+    at async DevServer.renderToResponseImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1564:32)
+    at async DevServer.pipeImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:1044:25)
+    at async NextNodeServer.handleCatchallRenderRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\next-server.js:338:17)
+    at async DevServer.handleRequestImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\base-server.js:935:17)
+    at async D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:394:20
+    at async Span.traceAsyncFn (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\trace\trace.js:164:20)
+    at async DevServer.handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\dev\next-dev-server.js:390:24)
+    at async invokeRender (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:266:21)
+    at async handleRequest (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:465:24)
+    at async requestHandlerImpl (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\router-server.js:514:13)
+    at async Server.requestListener (D:\AnotherMe-main\AnotherMe\node_modules\.pnpm\next@16.2.6_@babel+core@7.2_2584694bb82b59cd707747f011626719\node_modules\next\dist\server\lib\start-server.js:225:13)
+⨯ upstream image https://picsum.photos/seed/user/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/user1/100/100 resolved to private ip ["198.18.0.106"]
+[browser] Image with src "/avatars/user.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+[browser] Image with src "/avatars/teacher-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/assist-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/clown-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/thinker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/user.png" was detected as the Largest Contentful Paint (LCP). Please add the `loading="eager"` property if this image is above the fold.
+Read more: https://nextjs.org/docs/app/api-reference/components/image#loading
+[browser] Image with src "/avatars/note-taker-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] Image with src "/avatars/curious-2.png" has "fill" but is missing "sizes" prop. Please add it to improve page performance. Read more: https://nextjs.org/docs/api-reference/next/image#sizes
+[browser] App Error: ReferenceError: testingVision is not defined
+    at SettingsPage (features/settings/client/settings-client.tsx:1231:49)
+  1229 | ...                                type="button"
+  1230 | ...                                onClick={handleVerifyVisionModelOnly}
+> 1231 | ...                                disabled={testingVision}
+       |                                              ^
+  1232 | ...                                className="px-3 py-1.5 bg-muted hover:bg-muted/80 dar...
+  1233 | ...                              >
+  1234 | ...                                {testingVision ? ( (app/error.tsx:15:13)
+[browser] App Error: ReferenceError: testingVision is not defined
+    at SettingsPage (features/settings/client/settings-client.tsx:1231:49)
+  1229 | ...                                type="button"
+  1230 | ...                                onClick={handleVerifyVisionModelOnly}
+> 1231 | ...                                disabled={testingVision}
+       |                                              ^
+  1232 | ...                                className="px-3 py-1.5 bg-muted hover:bg-muted/80 dar...
+  1233 | ...                              >
+  1234 | ...                                {testingVision ? ( (app/error.tsx:15:13)
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]
+⨯ upstream image https://picsum.photos/seed/0234e643-94fa-4768-aa9e-a06a9e107166/100/100 resolved to private ip ["198.18.0.106"]

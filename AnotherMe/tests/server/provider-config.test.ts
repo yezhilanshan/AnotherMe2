@@ -60,6 +60,18 @@ describe('provider-config', () => {
       expect(resolveApiKey('anthropic')).toBe('sk-anthropic');
     });
 
+    it('recognizes DeepSeek server configuration from env vars', async () => {
+      vi.stubEnv('DEEPSEEK_API_KEY', 'sk-deepseek');
+      vi.stubEnv('DEEPSEEK_BASE_URL', 'https://deepseek.example.com/v1');
+      vi.stubEnv('DEEPSEEK_MODELS', 'deepseek-chat,deepseek-reasoner');
+      const { getServerProviders, resolveApiKey, resolveBaseUrl } =
+        await import('@/lib/server/provider-config');
+
+      expect(resolveApiKey('deepseek')).toBe('sk-deepseek');
+      expect(resolveBaseUrl('deepseek')).toBe('https://deepseek.example.com/v1');
+      expect(getServerProviders().deepseek.models).toEqual(['deepseek-chat', 'deepseek-reasoner']);
+    });
+
     it('returns empty string for unknown provider with no env var', async () => {
       const { resolveApiKey } = await import('@/lib/server/provider-config');
       expect(resolveApiKey('nonexistent-provider')).toBe('');

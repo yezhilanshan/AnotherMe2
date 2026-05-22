@@ -13,6 +13,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useSpeechRecognitionCleanup } from '@/lib/hooks/use-speech-recognition-cleanup';
 import { useSettingsStore } from '@/lib/store/settings';
 import {
   TTS_PROVIDERS,
@@ -145,6 +146,8 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
   const browserPreviewCancelRef = useRef<(() => void) | null>(null);
   const ttsTestRequestIdRef = useRef(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Vendor-prefixed API
+  const speechRecognitionRef = useRef<any>(null);
 
   const asrProvider = ASR_PROVIDERS[asrProviderId] ?? ASR_PROVIDERS['openai-whisper'];
 
@@ -239,11 +242,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
     }
   }, [asrProviderId, asrLanguage, setASRLanguage]);
 
-  useEffect(() => {
-    return () => {
-      stopTTSPreview();
-    };
-  }, [stopTTSPreview]);
+  useSpeechRecognitionCleanup(mediaRecorderRef, speechRecognitionRef, stopTTSPreview);
 
   // Clear ASR test status when provider changes (derived state pattern)
   const [prevASRProviderId, setPrevASRProviderId] = useState(asrProviderId);
@@ -278,6 +277,7 @@ export function AudioSettings({ onSave }: AudioSettingsProps = {}) {
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Vendor-prefixed API without standard typings
         const recognition = new (SpeechRecognitionCtor as new () => any)();
+        speechRecognitionRef.current = recognition;
         recognition.lang = asrLanguage || 'zh-CN';
         recognition.onresult = (event: {
           results: {

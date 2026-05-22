@@ -238,12 +238,14 @@ export async function POST(req: NextRequest) {
                   },
                 ],
                 maxOutputTokens: modelInfo?.outputWindow,
+                abortSignal: req.signal,
               }
             : {
                 model: languageModel,
                 system: prompts.system,
                 prompt: prompts.user,
                 maxOutputTokens: modelInfo?.outputWindow,
+                abortSignal: req.signal,
               };
 
           let parsedOutlines: SceneOutline[] = [];

@@ -274,6 +274,13 @@ export interface LLMRetryOptions {
 
 const DEFAULT_VALIDATE = (text: string) => text.trim().length > 0;
 
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
+}
+
 /**
  * Unified wrapper around `generateText`.
  *
@@ -295,8 +302,12 @@ export async function callLLM<T extends GenerateTextParams>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let lastResult: GenerateTextResult<any, any> | undefined;
   let lastError: unknown;
+  // AI SDK's generateText accepts abortSignal at runtime but the exported type omits it
+  const abortSignal: AbortSignal | undefined = (params as Record<string, unknown>)
+    .abortSignal as AbortSignal | undefined;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    abortSignal?.throwIfAborted();
     try {
       // Resolve effective thinking config: per-call > global env > undefined
       const effectiveThinking = thinking ?? getGlobalThinkingConfig();
@@ -321,6 +332,7 @@ export async function callLLM<T extends GenerateTextParams>(
       return result;
     } catch (error) {
       lastError = error;
+      if (isAbortError(error)) throw error;
 
       if (attempt < maxAttempts) {
         log.warn(`[${source}] Call failed (attempt ${attempt}/${maxAttempts}), retrying...`, error);

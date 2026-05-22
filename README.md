@@ -62,7 +62,7 @@ Prerequisites:
 
 - Node.js 20.9 or newer.
 - pnpm 10.x.
-- Python 3.10 or newer; Python 3.11 is recommended and is what the Docker setup uses.
+- Python 3.10 or newer; Python 3.11/3.12 is recommended and is what the Docker setup uses.
 - `uv` for the Python gateway and worker.
 
 If pnpm is missing after installing Node.js, enable it with:
@@ -70,6 +70,9 @@ If pnpm is missing after installing Node.js, enable it with:
 - `corepack enable`
 
 If uv is missing, install it from <https://docs.astral.sh/uv/> or use your Python package manager.
+
+On Windows, Manim dependencies may not build under Python 3.13+. Install Python 3.11/3.12 or
+set `ANOTHERME2_PYTHON_CMD` to a 3.11/3.12 interpreter.
 
 Steps:
 

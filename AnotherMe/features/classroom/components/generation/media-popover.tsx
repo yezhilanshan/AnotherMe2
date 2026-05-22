@@ -42,6 +42,15 @@ interface MediaPopoverProps {
   onSettingsOpen: (section: SettingsSection) => void;
 }
 
+function dedupeModelItems<T extends { id: string; name: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
+}
+
 // ─── Provider icon maps ───
 const IMAGE_PROVIDER_ICONS: Record<string, string> = {
   seedream: '/logos/doubao.svg',
@@ -191,10 +200,12 @@ export function MediaPopover({ onSettingsOpen }: MediaPopoverProps) {
           groupName: p.name,
           groupIcon: IMAGE_PROVIDER_ICONS[p.id],
           available: true,
-          items: [...p.models, ...(imageProvidersConfig[p.id]?.customModels || [])].map((m) => ({
-            id: m.id,
-            name: m.name,
-          })),
+          items: dedupeModelItems(
+            [...p.models, ...(imageProvidersConfig[p.id]?.customModels || [])].map((m) => ({
+              id: m.id,
+              name: m.name,
+            })),
+          ),
         })),
     [imageProvidersConfig],
   );
@@ -208,10 +219,12 @@ export function MediaPopover({ onSettingsOpen }: MediaPopoverProps) {
           groupName: p.name,
           groupIcon: VIDEO_PROVIDER_ICONS[p.id],
           available: true,
-          items: [...p.models, ...(videoProvidersConfig[p.id]?.customModels || [])].map((m) => ({
-            id: m.id,
-            name: m.name,
-          })),
+          items: dedupeModelItems(
+            [...p.models, ...(videoProvidersConfig[p.id]?.customModels || [])].map((m) => ({
+              id: m.id,
+              name: m.name,
+            })),
+          ),
         })),
     [videoProvidersConfig],
   );
@@ -421,9 +434,40 @@ export function MediaPopover({ onSettingsOpen }: MediaPopoverProps) {
               enabled={ttsEnabled}
               onToggle={setTTSEnabled}
             >
-              <p className="text-[11px] text-muted-foreground/60">
-                {t('settings.ttsVoiceConfigHint')}
-              </p>
+              <GroupedSelect
+                groups={ttsGroups}
+                selectedGroupId={ttsProviderId}
+                selectedItemId={ttsVoice || 'default'}
+                onSelect={(gid, iid) => {
+                  setTTSProvider(gid as TTSProviderId);
+                  setTTSVoice(iid);
+                }}
+              />
+              <div className="flex items-center gap-2">
+                <Slider
+                  value={[ttsSpeed]}
+                  min={ttsSpeedRange?.min ?? 0.5}
+                  max={ttsSpeedRange?.max ?? 2}
+                  step={0.05}
+                  onValueChange={([value]) => setTTSSpeed(value)}
+                  className="flex-1"
+                />
+                <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
+                  {ttsSpeed.toFixed(2)}
+                </span>
+                <button
+                  type="button"
+                  title={previewing ? t('common.stop') : t('common.preview')}
+                  onClick={handlePreview}
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  {previewing ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Play className="size-3.5" />
+                  )}
+                </button>
+              </div>
             </TabPanel>
           )}
 

@@ -69,6 +69,7 @@ export interface SettingsState {
       apiKey: string;
       baseUrl: string;
       enabled: boolean;
+      modelId?: string;
       isServerConfigured?: boolean;
       serverBaseUrl?: string;
     }
@@ -116,6 +117,7 @@ export interface SettingsState {
       apiKey: string;
       baseUrl: string;
       enabled: boolean;
+      modelId?: string;
       isServerConfigured?: boolean;
       serverBaseUrl?: string;
     }
@@ -207,7 +209,7 @@ export interface SettingsState {
   setPDFProvider: (providerId: PDFProviderId) => void;
   setPDFProviderConfig: (
     providerId: PDFProviderId,
-    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean }>,
+    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean; modelId: string }>,
   ) => void;
 
   // Image Generation actions
@@ -244,7 +246,7 @@ export interface SettingsState {
   setWebSearchProvider: (providerId: WebSearchProviderId) => void;
   setWebSearchProviderConfig: (
     providerId: WebSearchProviderId,
-    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean }>,
+    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean; modelId: string }>,
   ) => void;
 
   // Server provider actions

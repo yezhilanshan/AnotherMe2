@@ -52,6 +52,7 @@ export interface ChatAreaRef {
   startDiscussion: (request: DiscussionRequest) => Promise<void>;
   startLecture: (sceneId: string) => Promise<string>;
   addLectureMessage: (sessionId: string, action: Action, actionIndex: number) => void;
+  addReaction: (type: import('@/lib/types/chat').UserReaction['type'], targetAgentId?: string) => void;
   getIsStreaming: () => boolean;
   getActiveSessionType: () => string | null;
   getLectureMessageId: (sessionId: string) => string | null;
@@ -100,6 +101,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       expandedSessionIds,
       isStreaming,
       toolTraces,
+      addReaction,
       createSession,
       endSession,
       endActiveSession,
@@ -165,6 +167,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       startDiscussion,
       startLecture,
       addLectureMessage,
+      addReaction,
       getIsStreaming: () => isStreaming,
       getActiveSessionType: () => activeSessionType,
       getLectureMessageId,

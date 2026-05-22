@@ -22,15 +22,66 @@ export interface ChartOptionPayload {
   stack?: boolean;
 }
 
+function toFiniteNumber(value: unknown): number {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : 0;
+}
+
+export function normalizeChartData(
+  type: ChartType,
+  rawData: Partial<ChartData> | null | undefined,
+): ChartData {
+  const rawSeries = Array.isArray(rawData?.series) ? (rawData.series as unknown[]) : [];
+  const series = rawSeries
+    .filter((item): item is unknown[] => Array.isArray(item))
+    .map((item) => item.map(toFiniteNumber));
+  const labels = Array.isArray(rawData?.labels) ? rawData.labels.map((item) => String(item)) : [];
+  const legends = Array.isArray(rawData?.legends)
+    ? rawData.legends.map((item) => String(item))
+    : [];
+
+  const firstSeries = series[0] ?? [];
+  const fallbackLength =
+    firstSeries.length || Math.max(...series.map((item) => item.length), labels.length, 1);
+  const normalizedLabels =
+    labels.length > 0
+      ? labels
+      : Array.from({ length: fallbackLength }, (_, index) => `Item ${index + 1}`);
+
+  if (series.length === 0) {
+    const emptySeries = Array.from({ length: normalizedLabels.length }, () => 0);
+    return {
+      labels: normalizedLabels,
+      legends: legends.length > 0 ? legends : ['Series 1'],
+      series: [emptySeries],
+    };
+  }
+
+  if (type === 'scatter' && series.length === 1) {
+    return {
+      labels: normalizedLabels,
+      legends: legends.length > 0 ? legends : ['X', 'Y'],
+      series: [series[0], series[0]],
+    };
+  }
+
+  return {
+    labels: normalizedLabels,
+    legends: series.map((_, index) => legends[index] || `Series ${index + 1}`),
+    series,
+  };
+}
+
 export const getChartOption = ({
   type,
-  data,
+  data: rawData,
   themeColors,
   textColor,
   lineColor,
   lineSmooth,
   stack,
 }: ChartOptionPayload): EChartOption | null => {
+  const data = normalizeChartData(type, rawData);
   const textStyle = textColor
     ? {
         color: textColor,

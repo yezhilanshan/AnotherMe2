@@ -133,10 +133,16 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
   }, [modelForm, editingModelIndex, customModels, selectedProviderId, setImageProviderConfig]);
 
   const handleDeleteModel = (index: number) => {
+    const deletedModelId = customModels[index]?.id;
     const newCustomModels = customModels.filter((_, i) => i !== index);
     setImageProviderConfig(selectedProviderId, {
       customModels: newCustomModels,
     });
+    // If the deleted model was the currently selected one, reset to first remaining or empty
+    if (deletedModelId && imageModelId === deletedModelId) {
+      const fallback = newCustomModels[0]?.id ?? '';
+      _setImageModelId(fallback);
+    }
   };
 
   return (
@@ -268,6 +274,31 @@ export function ImageSettings({ selectedProviderId }: ImageSettingsProps) {
 
       {/* Model list */}
       <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
+        <div className="space-y-2.5 mb-4">
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+            {t('settings.modelName')}
+          </Label>
+          <Input
+            name={`image-model-${selectedProviderId}`}
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="输入模型名"
+            value={imageModelId || ''}
+            onChange={(e) => _setImageModelId(e.target.value)}
+            className="h-11 rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,253,250,0.95)] text-sm text-[rgba(46,39,33,0.92)] placeholder:text-[rgba(115,102,88,0.5)] focus:border-[rgba(193,154,110,0.6)] focus:ring-2 focus:ring-[rgba(193,154,110,0.12)]"
+            list={`image-models-${selectedProviderId}`}
+          />
+          <datalist id={`image-models-${selectedProviderId}`}>
+            {builtInModels.map((model) => (
+              <option key={model.id} value={model.id} />
+            ))}
+            {customModels.map((model, index) => (
+              <option key={`custom-${index}`} value={model.id} />
+            ))}
+          </datalist>
+        </div>
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
             {t('settings.models')}

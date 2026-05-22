@@ -8,6 +8,7 @@ import type {
   ChatMessageMetadata,
   DirectorState,
   StreamEvent,
+  UserReaction,
 } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/features/classroom/components/roundtable';
 import type { Action, SpotlightAction, DiscussionAction } from '@/lib/types/action';
@@ -104,6 +105,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(new Set());
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolTraces, setToolTraces] = useState<ToolExecutionTrace[]>([]);
+  const [userReactions, setUserReactions] = useState<UserReaction[]>([]);
+  const userReactionsRef = useRef<UserReaction[]>([]);
+  useEffect(() => {
+    userReactionsRef.current = userReactions;
+  }, [userReactions]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<ChatSession[]>(sessions);
@@ -219,6 +225,24 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     },
     [],
   );
+
+  /**
+   * Add a user reaction during a discussion. Accumulated reactions are sent
+   * with the next request so the Director can adjust its strategy.
+   */
+  const addReaction = useCallback(
+    (type: UserReaction['type'], targetAgentId?: string) => {
+      setUserReactions((prev) => [...prev, { type, timestamp: Date.now(), targetAgentId }]);
+    },
+    [],
+  );
+
+  /**
+   * Clear accumulated user reactions (e.g., when starting a new discussion).
+   */
+  const clearReactions = useCallback(() => {
+    setUserReactions([]);
+  }, []);
 
   const clearLiveSessionAfterError = useCallback((sessionId: string, message: string) => {
     const now = Date.now();
@@ -670,6 +694,89 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         ? parseInt(settingsState.maxTurns, 10) || defaultMaxTurns
         : defaultMaxTurns;
 
+      // ── Server-driven mode: single request, server runs full director loop ──
+      if (requestTemplate.config.serverDriven) {
+        loopDoneDataRef.current = null;
+
+        const freshState = useStageStore.getState();
+        const freshStoreState = {
+          stage: freshState.stage,
+          scenes: freshState.scenes,
+          currentSceneId: freshState.currentSceneId,
+          mode: freshState.mode,
+          whiteboardOpen: useCanvasStore.getState().whiteboardOpen,
+        };
+
+        const persistencePayload = requestTemplate.persistence
+          ? {
+              ...requestTemplate.persistence,
+              sessionId:
+                aiSessionIdByChatSessionRef.current.get(sessionId) ||
+                requestTemplate.persistence.sessionId,
+            }
+          : undefined;
+
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...requestTemplate,
+            storeState: freshStoreState,
+            persistence: persistencePayload,
+            userReactions: userReactionsRef.current,
+            config: { ...requestTemplate.config, serverDriven: true, maxTurns },
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API error: ${response.status} - ${errorText}`);
+        }
+
+        const aiSessionId = response.headers.get('x-ai-session-id')?.trim();
+        if (aiSessionId) {
+          aiSessionIdByChatSessionRef.current.set(sessionId, aiSessionId);
+        }
+
+        const buffer = createBufferForSession(sessionId, sessionType);
+        await processSSEStream(response, sessionId, buffer, controller.signal);
+
+        try {
+          await buffer.waitUntilDrained();
+        } catch {
+          // Buffer disposed — abort or session end
+        }
+
+        if (!controller.signal.aborted) {
+          const doneData = loopDoneDataRef.current as {
+            directorState?: DirectorState;
+            totalAgents: number;
+            agentHadContent?: boolean;
+            cueUserReceived: boolean;
+          } | null;
+
+          const wasCueUser = doneData?.cueUserReceived ?? false;
+          if (!wasCueUser) {
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.id === sessionId
+                  ? { ...s, status: 'completed' as SessionStatus, updatedAt: Date.now() }
+                  : s,
+              ),
+            );
+            onStopSessionRef.current?.();
+          }
+
+          const aiSessId = aiSessionIdByChatSessionRef.current.get(sessionId);
+          if (aiSessId) {
+            void enqueueLearningExtract(aiSessId, 'max_turns');
+          }
+        }
+        return;
+      }
+
+      // ── Client-driven mode: per-turn HTTP loop ──
       let directorState: DirectorState | undefined = undefined;
       let turnCount = 0;
       let currentMessages = requestTemplate.messages;
@@ -713,6 +820,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             storeState: freshStoreState,
             directorState,
             persistence: persistencePayload,
+            userReactions: userReactionsRef.current,
           }),
           signal: controller.signal,
         });
@@ -1161,6 +1269,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType: session.type,
+              serverDriven: agentIds.length > 1,
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -1415,6 +1524,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType,
+              serverDriven: agentIds.length > 1,
               ...tutorToolConfig,
             },
             userProfile: {
@@ -1478,6 +1588,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const startDiscussion = useCallback(
     async (request: DiscussionRequest): Promise<void> => {
       log.info(`[ChatArea] Starting discussion: "${request.topic}"`);
+      clearReactions(); // Reset reactions for new discussion
       // Explicitly clear buffer-pause intent (also cleared transitively via endSession,
       // but being explicit guards against future refactors)
       livePausedRef.current = false;
@@ -1569,6 +1680,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               discussionTopic: request.topic,
               discussionPrompt: request.prompt,
               triggerAgentId: agentId,
+              serverDriven: agentIds.length > 1,
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -1830,6 +1942,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     expandedSessionIds,
     isStreaming,
     toolTraces,
+    userReactions,
+    addReaction,
+    clearReactions,
     createSession,
     endSession,
     endActiveSession,

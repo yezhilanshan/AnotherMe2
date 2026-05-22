@@ -2,8 +2,11 @@
 
 import { useEffect, useRef, useMemo } from 'react';
 import tinycolor from 'tinycolor2';
+import { createLogger } from '@/lib/logger';
 import type { ChartData, ChartOptions, ChartType } from '@/lib/types/slides';
 import { getChartOption } from './chartOption';
+
+const log = createLogger('Chart');
 
 import * as echarts from 'echarts/core';
 import { BarChart, LineChart, PieChart, ScatterChart, RadarChart } from 'echarts/charts';
@@ -68,18 +71,23 @@ export function Chart({
     return () => {
       if (!chartInstance.current) return;
 
-      const option = getChartOption({
-        type,
-        data,
-        themeColors,
-        textColor,
-        lineColor,
-        lineSmooth: options?.lineSmooth || false,
-        stack: options?.stack || false,
-      });
+      try {
+        const option = getChartOption({
+          type,
+          data,
+          themeColors,
+          textColor,
+          lineColor,
+          lineSmooth: options?.lineSmooth || false,
+          stack: options?.stack || false,
+        });
 
-      if (option) {
-        chartInstance.current.setOption(option, true);
+        if (option) {
+          chartInstance.current.setOption(option, true);
+        }
+      } catch (error) {
+        log.warn('Failed to update chart option:', error);
+        chartInstance.current.clear();
       }
     };
   }, [type, data, themeColors, textColor, lineColor, options]);

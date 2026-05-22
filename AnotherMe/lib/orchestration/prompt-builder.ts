@@ -67,19 +67,36 @@ function buildPeerContextSection(
   const peers = agentResponses.filter((r) => r.agentName !== currentAgentName);
   if (peers.length === 0) return '';
 
-  const peerLines = peers.map((r) => `- ${r.agentName}: "${r.contentPreview}"`).join('\n');
+  // Separate the last speaker from earlier speakers
+  const lastSpeaker = peers[peers.length - 1];
+  const earlierSpeakers = peers.slice(0, -1);
+
+  const lastSpeakerSection = `
+# Last Speaker (YOUR PRIMARY TASK: RESPOND TO THIS)
+${lastSpeaker.agentName} said: "${lastSpeaker.contentPreview}"
+
+You are ${currentAgentName}. You MUST respond directly to ${lastSpeaker.agentName}:
+- Address their specific point: agree and extend, challenge respectfully, or ask a clarifying question
+- Do NOT start a new, unrelated topic — build on what ${lastSpeaker.agentName} just said
+- If you introduce new content, explicitly connect it to ${lastSpeaker.agentName}'s point`;
+
+  const earlierSection =
+    earlierSpeakers.length > 0
+      ? `
+# Earlier Speakers (also do not repeat)
+${earlierSpeakers.map((r) => `- ${r.agentName}: "${r.contentPreview}"`).join('\n')}
+
+Do NOT repeat what these speakers said either. Focus your response on the LAST speaker.`
+      : '';
 
   return `
-# This Round's Context (CRITICAL — READ BEFORE RESPONDING)
-The following agents have already spoken in this discussion round:
-${peerLines}
+${lastSpeakerSection}${earlierSection}
 
-You are ${currentAgentName}, responding AFTER the agents above. You MUST:
-1. NOT repeat greetings or introductions — they have already been made
-2. NOT restate what previous speakers already explained
-3. Add NEW value from YOUR unique perspective as ${currentAgentName}
-4. Build on, question, or extend what was said — do not echo it
-5. If you agree with a previous point, say so briefly and then ADD something new
+# Response Rules
+1. NO greetings or introductions — they have already been made
+2. NO restating what previous speakers explained — they already said it
+3. Add NEW value: a different angle, a follow-up question, a concrete example, or a challenge
+4. Keep it conversational — this is a dialogue, not a monologue
 `;
 }
 
@@ -836,9 +853,20 @@ function buildStateContext(storeState: StatelessChatRequest['storeState']): stri
 /**
  * OpenAI message format (used by director)
  */
-interface OpenAIMessage {
+export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+const AGENT_PREFIX_RE = /^\[([^\]\n]{1,80})\]:\s*([\s\S]*)$/;
+
+function parseAgentPrefixedMessage(content: string): { agentName: string; content: string } | null {
+  const match = AGENT_PREFIX_RE.exec(content.trim());
+  if (!match) return null;
+  return {
+    agentName: match[1].trim(),
+    content: match[2].trim(),
+  };
 }
 
 /**
@@ -862,16 +890,47 @@ export function summarizeConversation(
 
   const recent = messages.slice(-maxMessages);
   const lines = recent.map((msg) => {
-    const roleLabel =
-      msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : 'System';
+    const agentMessage = msg.role === 'user' ? parseAgentPrefixedMessage(msg.content) : null;
+    const roleLabel = agentMessage
+      ? `Agent: ${agentMessage.agentName}`
+      : msg.role === 'user'
+        ? 'Student (Human)'
+        : msg.role === 'assistant'
+          ? 'Assistant'
+          : 'System';
+    const rawContent = agentMessage?.content ?? msg.content;
     const content =
-      msg.content.length > maxContentLength
-        ? msg.content.slice(0, maxContentLength) + '...'
-        : msg.content;
+      rawContent.length > maxContentLength
+        ? rawContent.slice(0, maxContentLength) + '...'
+        : rawContent;
     return `[${roleLabel}] ${content}`;
   });
 
   return lines.join('\n');
+}
+
+/**
+ * Return the most recent genuine human message, skipping peer-agent turns that
+ * are encoded as user messages with a "[AgentName]:" prefix.
+ */
+export function extractLastHumanMessage(
+  messages: OpenAIMessage[],
+  maxContentLength = 500,
+): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    if (parseAgentPrefixedMessage(msg.content)) continue;
+
+    const content = msg.content.trim();
+    if (!content) continue;
+
+    return content.length > maxContentLength
+      ? content.slice(0, maxContentLength) + '...'
+      : content;
+  }
+
+  return null;
 }
 
 // ==================== Message Conversion ====================

@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       speed: ttsSpeed ?? 1.0,
       apiKey,
       baseUrl,
+      abortSignal: req.signal,
     };
 
     log.info(

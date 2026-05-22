@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { ASR_PROVIDERS } from '@/lib/audio/constants';
 import { createLogger } from '@/lib/logger';
 
@@ -31,6 +31,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Web Speech API not typed
   const speechRecognitionRef = useRef<any>(null);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
   // Synchronous lock to prevent rapid re-entry (React state updates are async)
   const busyRef = useRef(false);
 
@@ -40,6 +41,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       setIsProcessing(true);
 
       try {
+        transcriptionAbortRef.current?.abort();
+        const controller = new AbortController();
+        transcriptionAbortRef.current = controller;
         const formData = new FormData();
         formData.append('audio', audioBlob, 'recording.webm');
 
@@ -71,6 +75,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         const response = await fetch('/api/transcription', {
           method: 'POST',
           body: formData,
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -81,9 +86,11 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         const result = await response.json();
         onTranscription?.(result.text);
       } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
         log.error('Transcription error:', error);
         onError?.(error instanceof Error ? error.message : '语音识别失败，请重试');
       } finally {
+        transcriptionAbortRef.current = null;
         setIsProcessing(false);
         setRecordingTime(0);
       }
@@ -311,6 +318,34 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       audioChunksRef.current = [];
     }
   }, [isRecording]);
+
+  useEffect(() => {
+    return () => {
+      transcriptionAbortRef.current?.abort();
+      if (speechRecognitionRef.current) {
+        speechRecognitionRef.current.onresult = null;
+        speechRecognitionRef.current.onerror = null;
+        speechRecognitionRef.current.onend = null;
+        speechRecognitionRef.current.stop();
+        speechRecognitionRef.current = null;
+      }
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.ondataavailable = null;
+        mediaRecorderRef.current.onstop = null;
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
+        mediaRecorderRef.current.stream?.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      audioChunksRef.current = [];
+      busyRef.current = false;
+    };
+  }, []);
 
   return {
     isRecording,

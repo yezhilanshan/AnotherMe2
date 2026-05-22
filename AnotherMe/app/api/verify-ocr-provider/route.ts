@@ -3,7 +3,12 @@ import { generateText } from 'ai';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModel } from '@/lib/server/resolve-model';
+import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 import { PROVIDERS } from '@/lib/ai/providers';
+import {
+  testProviderConnectivity,
+  parseGenerationError,
+} from '@/lib/server/connectivity-test';
 
 /**
  * Models that don't support standard chat completions and need
@@ -20,18 +25,23 @@ interface MinerUHealthResponse {
 
 async function verifyMinerU(baseUrl: string): Promise<{ ok: boolean; message: string }> {
   try {
-    // Try to connect to MinerU health endpoint
     const healthUrl = `${baseUrl.replace(/\/$/, '')}/health`;
+
+    const ssrfError = validateUrlForSSRF(healthUrl);
+    if (ssrfError) {
+      return { ok: false, message: ssrfError };
+    }
+
     const response = await fetch(healthUrl, {
       method: 'GET',
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
     });
 
     if (!response.ok) {
       return { ok: false, message: `MinerU 服务返回错误: ${response.status}` };
     }
 
-    const data = await response.json() as MinerUHealthResponse;
+    const data = (await response.json()) as MinerUHealthResponse;
     return {
       ok: true,
       message: `MinerU 连接成功${data.version ? ` (版本: ${data.version})` : ''}`,
@@ -62,7 +72,6 @@ async function verifySpecializedOcrModel(
   _model: string,
 ): Promise<{ ok: boolean; message: string }> {
   try {
-    // Resolve the correct base URL for this provider
     const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
     const endpoint = (baseUrl || provider?.defaultBaseUrl || '').replace(/\/$/, '');
 
@@ -71,6 +80,12 @@ async function verifySpecializedOcrModel(
     }
 
     const modelsUrl = `${endpoint}/models`;
+
+    const ssrfError = validateUrlForSSRF(modelsUrl);
+    if (ssrfError) {
+      return { ok: false, message: ssrfError };
+    }
+
     const response = await fetch(modelsUrl, {
       method: 'GET',
       headers: {
@@ -97,6 +112,31 @@ async function verifySpecializedOcrModel(
   }
 }
 
+/**
+ * Detect the correct provider from the model name.
+ * When a user types a model like "qwen-vl-ocr-latest" but has a different
+ * provider selected (e.g., "openai"), this auto-detects the right provider.
+ */
+function detectProviderFromModel(
+  model: string,
+): { providerId: string; providerType: string; requiresApiKey: boolean } | null {
+  for (const [pid, config] of Object.entries(PROVIDERS)) {
+    if (config.models.some((m) => m.id === model)) {
+      return {
+        providerId: pid,
+        providerType: config.type,
+        requiresApiKey: config.requiresApiKey,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Verify standard OCR provider using lightweight /models endpoint.
+ * Falls back to text-only generateText if /models is not supported.
+ * No images are sent — API key validation is sufficient.
+ */
 async function verifyStandardProvider(
   providerId: string,
   apiKey: string,
@@ -105,8 +145,37 @@ async function verifyStandardProvider(
   providerType?: string,
   requiresApiKey?: boolean,
 ): Promise<{ ok: boolean; message: string }> {
+  // Resolve provider config
+  const provider = PROVIDERS[providerId as keyof typeof PROVIDERS];
+  const effectiveProviderType = providerType || provider?.type || 'openai';
+  const effectiveBaseUrl = baseUrl || provider?.defaultBaseUrl || '';
+
+  // Step 1: Try lightweight /models endpoint
+  const connectivityResult = await testProviderConnectivity({
+    providerType: effectiveProviderType,
+    providerId,
+    apiKey,
+    baseUrl: effectiveBaseUrl,
+  });
+
+  if (connectivityResult.ok) {
+    return { ok: true, message: '连接成功' };
+  }
+
+  // If auth failed, report immediately
+  if (
+    connectivityResult.message.includes('API key is invalid') ||
+    connectivityResult.message.includes('rate limit')
+  ) {
+    return { ok: false, message: 'API key 无效或已过期' };
+  }
+
+  // Step 2: Fallback — text-only generateText (no image)
+  log.info(
+    `[${providerId}] /models endpoint failed for OCR, falling back to generateText`,
+  );
+
   try {
-    // Directly resolve model and send a test message (avoids server-side fetch to relative URL)
     let languageModel;
     try {
       const result = resolveModel({
@@ -127,7 +196,7 @@ async function verifyStandardProvider(
 
     const { text } = await generateText({
       model: languageModel,
-      messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
+      messages: [{ role: 'user' as const, content: 'Say "OK" if you can hear me.' }],
     });
 
     if (text.trim()) {
@@ -136,35 +205,9 @@ async function verifyStandardProvider(
     return { ok: false, message: '模型返回空响应' };
   } catch (error) {
     log.error(`OCR provider verification failed [provider="${providerId}"]:`, error);
-    const msg = error instanceof Error ? error.message : '连接测试失败';
-    if (msg.includes('401') || msg.includes('Unauthorized')) {
-      return { ok: false, message: 'API key 无效或已过期' };
-    }
-    if (msg.includes('ENOTFOUND') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT')) {
-      return { ok: false, message: '无法连接到 API 服务器，请检查 Base URL' };
-    }
-    return { ok: false, message: msg };
+    const { message } = parseGenerationError(error);
+    return { ok: false, message };
   }
-}
-
-/**
- * Detect the correct provider from the model name.
- * When a user types a model like "qwen-vl-ocr-latest" but has a different
- * provider selected (e.g., "openai"), this auto-detects the right provider.
- */
-function detectProviderFromModel(
-  model: string,
-): { providerId: string; providerType: string; requiresApiKey: boolean } | null {
-  for (const [pid, config] of Object.entries(PROVIDERS)) {
-    if (config.models.some((m) => m.id === model)) {
-      return {
-        providerId: pid,
-        providerType: config.type,
-        requiresApiKey: config.requiresApiKey,
-      };
-    }
-  }
-  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -215,7 +258,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const result = await verifyStandardProvider(providerId, apiKey || '', baseUrl || '', model, providerType, requiresApiKey);
+    const result = await verifyStandardProvider(
+      providerId,
+      apiKey || '',
+      baseUrl || '',
+      model,
+      providerType,
+      requiresApiKey,
+    );
     if (result.ok) {
       return apiSuccess({ message: result.message });
     } else {

@@ -47,6 +47,63 @@ import type {
 import { createLogger } from '@/lib/logger';
 const log = createLogger('Generation');
 
+const AI_PARSE_MAX_ATTEMPTS = 2;
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
+}
+
+async function callAIWithParseRetry<T>(
+  label: string,
+  aiCall: () => Promise<string>,
+  parse: (response: string) => T | null,
+  validate: (value: T | null) => value is T,
+): Promise<T | null> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= AI_PARSE_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await aiCall();
+      const parsed = parse(response);
+
+      if (validate(parsed)) {
+        if (attempt > 1) {
+          log.info(`${label} recovered on retry ${attempt}/${AI_PARSE_MAX_ATTEMPTS}`);
+        }
+        return parsed;
+      }
+
+      lastError = new Error('parsed response failed validation');
+      log.warn(`${label} parse attempt ${attempt}/${AI_PARSE_MAX_ATTEMPTS} failed validation`);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      lastError = error;
+      log.warn(`${label} parse attempt ${attempt}/${AI_PARSE_MAX_ATTEMPTS} failed:`, error);
+    }
+  }
+
+  log.error(`${label} failed after ${AI_PARSE_MAX_ATTEMPTS} attempts:`, lastError);
+  return null;
+}
+
+async function generateActionsWithRetry(
+  label: string,
+  sceneType: SceneOutline['type'],
+  aiCall: () => Promise<string>,
+): Promise<Action[]> {
+  const actions = await callAIWithParseRetry<Action[]>(
+    label,
+    aiCall,
+    (response) => parseActionsFromStructuredOutput(response, sceneType),
+    (value): value is Action[] => Array.isArray(value) && value.length > 0,
+  );
+
+  return actions ?? [];
+}
+
 // ==================== Stage 2: Full Scenes (Two-Step) ====================
 
 /**
@@ -66,7 +123,8 @@ export async function generateFullScenes(
 ): Promise<GenerationResult<string[]>> {
   const api = createStageAPI(store);
   const totalScenes = sceneOutlines.length;
-  let completedCount = 0;
+  let processedCount = 0;
+  let successCount = 0;
 
   callbacks?.onProgress?.({
     currentStage: 3,
@@ -84,20 +142,29 @@ export async function generateFullScenes(
         const sceneId = await generateSingleScene(outline, api, aiCall);
 
         // Update progress (not atomic, but sufficient for UI display)
-        completedCount++;
+        processedCount++;
+        successCount++;
         callbacks?.onProgress?.({
           currentStage: 3,
-          overallProgress: 66 + Math.floor((completedCount / totalScenes) * 34),
-          stageProgress: Math.floor((completedCount / totalScenes) * 100),
-          statusMessage: `已完成 ${completedCount}/${totalScenes} 个场景`,
-          scenesGenerated: completedCount,
+          overallProgress: 66 + Math.floor((processedCount / totalScenes) * 34),
+          stageProgress: Math.floor((processedCount / totalScenes) * 100),
+          statusMessage: `已处理 ${processedCount}/${totalScenes} 个场景，成功 ${successCount} 个`,
+          scenesGenerated: successCount,
           totalScenes,
         });
 
         return { success: true, sceneId, index };
       } catch (error) {
-        completedCount++;
+        processedCount++;
         callbacks?.onError?.(`Failed to generate scene ${outline.title}: ${error}`);
+        callbacks?.onProgress?.({
+          currentStage: 3,
+          overallProgress: 66 + Math.floor((processedCount / totalScenes) * 34),
+          stageProgress: Math.floor((processedCount / totalScenes) * 100),
+          statusMessage: `已处理 ${processedCount}/${totalScenes} 个场景，成功 ${successCount} 个`,
+          scenesGenerated: successCount,
+          totalScenes,
+        });
         return { success: false, sceneId: null, index };
       }
     }),
@@ -558,10 +625,15 @@ async function generateSlideContent(
     log.debug(`Vision images: ${visionImages.map((img) => img.id).join(', ')}`);
   }
 
-  const response = await aiCall(prompts.system, prompts.user, visionImages);
-  const generatedData = parseJsonResponse<GeneratedSlideData>(response);
+  const generatedData = await callAIWithParseRetry<GeneratedSlideData>(
+    `Slide content "${outline.title}"`,
+    () => aiCall(prompts.system, prompts.user, visionImages),
+    (response) => parseJsonResponse<GeneratedSlideData>(response),
+    (value): value is GeneratedSlideData =>
+      Boolean(value && value.elements && Array.isArray(value.elements)),
+  );
 
-  if (!generatedData || !generatedData.elements || !Array.isArray(generatedData.elements)) {
+  if (!generatedData) {
     log.error(`Failed to parse AI response for: ${outline.title}`);
     return null;
   }
@@ -653,10 +725,14 @@ async function generateQuizContent(
   }
 
   log.debug(`Generating quiz content for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
-  const generatedQuestions = parseJsonResponse<QuizQuestion[]>(response);
+  const generatedQuestions = await callAIWithParseRetry<QuizQuestion[]>(
+    `Quiz content "${outline.title}"`,
+    () => aiCall(prompts.system, prompts.user),
+    (response) => parseJsonResponse<QuizQuestion[]>(response),
+    (value): value is QuizQuestion[] => Array.isArray(value),
+  );
 
-  if (!generatedQuestions || !Array.isArray(generatedQuestions)) {
+  if (!generatedQuestions) {
     log.error(`Failed to parse AI response for: ${outline.title}`);
     return null;
   }
@@ -752,9 +828,13 @@ async function generateInteractiveContent(
 
     if (modelPrompts) {
       log.info(`Step 1: Scientific modeling for: ${outline.title}`);
-      const modelResponse = await aiCall(modelPrompts.system, modelPrompts.user);
-      const parsed = parseJsonResponse<ScientificModel>(modelResponse);
-      if (parsed && parsed.core_formulas) {
+      const parsed = await callAIWithParseRetry<ScientificModel>(
+        `Interactive scientific model "${outline.title}"`,
+        () => aiCall(modelPrompts.system, modelPrompts.user),
+        (response) => parseJsonResponse<ScientificModel>(response),
+        (value): value is ScientificModel => Boolean(value && value.core_formulas),
+      );
+      if (parsed) {
         scientificModel = parsed;
         log.info(
           `Scientific model: ${parsed.core_formulas.length} formulas, ${parsed.constraints?.length || 0} constraints`,
@@ -801,9 +881,12 @@ async function generateInteractiveContent(
   }
 
   log.info(`Step 2: Generating HTML for: ${outline.title}`);
-  const htmlResponse = await aiCall(htmlPrompts.system, htmlPrompts.user);
-  // Extract HTML from response
-  const rawHtml = extractHtml(htmlResponse);
+  const rawHtml = await callAIWithParseRetry<string>(
+    `Interactive HTML "${outline.title}"`,
+    () => aiCall(htmlPrompts.system, htmlPrompts.user),
+    extractHtml,
+    (value): value is string => Boolean(value),
+  );
   if (!rawHtml) {
     log.error(`Failed to extract HTML from response for: ${outline.title}`);
     return null;
@@ -869,7 +952,7 @@ async function generatePBLSceneContent(
  * Extract HTML document from AI response.
  * Tries to find <!DOCTYPE html>...</html> first, then falls back to code block extraction.
  */
-function extractHtml(response: string): string | null {
+export function extractHtml(response: string): string | null {
   // Strategy 1: Find complete HTML document
   const doctypeStart = response.indexOf('<!DOCTYPE html>');
   const htmlTagStart = response.indexOf('<html');
@@ -880,18 +963,29 @@ function extractHtml(response: string): string | null {
     if (htmlEnd !== -1) {
       return response.substring(start, htmlEnd + 7);
     }
+
+    return response.substring(start).trim();
   }
 
   // Strategy 2: Extract from code block
-  const codeBlockMatch = response.match(/```(?:html)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch) {
-    const content = codeBlockMatch[1].trim();
+  const completeCodeBlockMatch = response.match(/```(?:html)?\s*([\s\S]*?)```/);
+  if (completeCodeBlockMatch) {
+    const content = completeCodeBlockMatch[1].trim();
     if (content.includes('<html') || content.includes('<!DOCTYPE')) {
       return content;
     }
   }
 
-  // Strategy 3: If response itself looks like HTML
+  // Strategy 3: Tolerate truncated fenced HTML responses with no closing fence
+  const unterminatedCodeBlockMatch = response.match(/```(?:html)?\s*([\s\S]*)$/);
+  if (unterminatedCodeBlockMatch) {
+    const content = unterminatedCodeBlockMatch[1].trim();
+    if (content.includes('<html') || content.includes('<!DOCTYPE')) {
+      return content;
+    }
+  }
+
+  // Strategy 4: If response itself looks like HTML
   const trimmed = response.trim();
   if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
     return trimmed;
@@ -937,8 +1031,11 @@ export async function generateSceneActions(
       return generateDefaultSlideActions(outline, content.elements);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
-    const actions = parseActionsFromStructuredOutput(response, outline.type);
+    const actions = await generateActionsWithRetry(
+      `Slide actions "${outline.title}"`,
+      outline.type,
+      () => aiCall(prompts.system, prompts.user),
+    );
 
     if (actions.length > 0) {
       // Validate and fill in Action IDs
@@ -965,8 +1062,11 @@ export async function generateSceneActions(
       return generateDefaultQuizActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
-    const actions = parseActionsFromStructuredOutput(response, outline.type);
+    const actions = await generateActionsWithRetry(
+      `Quiz actions "${outline.title}"`,
+      outline.type,
+      () => aiCall(prompts.system, prompts.user),
+    );
 
     if (actions.length > 0) {
       return processActions(actions, [], agents);
@@ -992,8 +1092,11 @@ export async function generateSceneActions(
       return generateDefaultInteractiveActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
-    const actions = parseActionsFromStructuredOutput(response, outline.type);
+    const actions = await generateActionsWithRetry(
+      `Interactive actions "${outline.title}"`,
+      outline.type,
+      () => aiCall(prompts.system, prompts.user),
+    );
 
     if (actions.length > 0) {
       return processActions(actions, [], agents);
@@ -1019,8 +1122,11 @@ export async function generateSceneActions(
       return generateDefaultPBLActions(outline);
     }
 
-    const response = await aiCall(prompts.system, prompts.user);
-    const actions = parseActionsFromStructuredOutput(response, outline.type);
+    const actions = await generateActionsWithRetry(
+      `PBL actions "${outline.title}"`,
+      outline.type,
+      () => aiCall(prompts.system, prompts.user),
+    );
 
     if (actions.length > 0) {
       return processActions(actions, [], agents);
@@ -1076,15 +1182,39 @@ function formatElementsForPrompt(elements: PPTElement[]): string {
 /**
  * Format question list for AI reference
  */
-function formatQuestionsForPrompt(questions: QuizQuestion[]): string {
+export function formatQuestionsForPrompt(questions: QuizQuestion[]): string {
   return questions
     .map((q, i) => {
       const optionsText = q.options
-        ? `Options: ${q.options.map((o) => `${o.value}. ${o.label}`).join(', ')}`
+        ? `Options: ${q.options.map(formatQuestionOptionForPrompt).join(', ')}`
         : '';
       return `Q${i + 1} (${q.type}): ${q.question}\n${optionsText}`;
     })
     .join('\n\n');
+}
+
+function formatQuestionOptionForPrompt(option: unknown, index: number): string {
+  const fallbackValue = String.fromCharCode(65 + index);
+
+  if (typeof option === 'string') {
+    return `${fallbackValue}. ${option}`;
+  }
+
+  if (option && typeof option === 'object') {
+    const record = option as Record<string, unknown>;
+    const label =
+      typeof record.label === 'string'
+        ? record.label
+        : typeof record.text === 'string'
+          ? record.text
+          : typeof record.name === 'string'
+            ? record.name
+            : String(record.value ?? fallbackValue);
+    const value = typeof record.value === 'string' ? record.value : fallbackValue;
+    return `${value}. ${label}`;
+  }
+
+  return `${fallbackValue}. ${String(option ?? '')}`;
 }
 
 /**

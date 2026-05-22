@@ -342,11 +342,6 @@ export default function StatisticsPage() {
               <Brain className="h-5 w-5 text-[#E0573D]" />
               学生画像
             </h2>
-            <p className="text-xs text-muted-foreground mt-1">
-              {learningProfile
-                ? '来自后端学生画像接口（/v1/students/{user_id}/profile）'
-                : '未获取到后端画像，请检查网关连接和学习记录。'}
-            </p>
           </div>
           <span className="text-xs font-medium text-muted-foreground bg-muted px-3 py-1 rounded-full">
             画像更新时间：{profileUpdatedAt}
@@ -420,7 +415,7 @@ export default function StatisticsPage() {
 
                   {studentProfile.backendWeakSubjects.length > 0 ? (
                     <div className="pt-2">
-                      <p className="text-xs font-semibold text-foreground mb-2">后端识别薄弱学科</p>
+                      <p className="text-xs font-semibold text-foreground mb-2">后端识别薄弱知识点</p>
                       <div className="flex flex-wrap gap-2">
                         {studentProfile.backendWeakSubjects.slice(0, 6).map((subject) => (
                           <span
@@ -473,13 +468,13 @@ export default function StatisticsPage() {
                     </p>
                   </div>
                   <div className="bg-muted p-2.5">
-                    <p className="text-[11px] text-muted-foreground">窗口内已解决</p>
+                    <p className="text-[11px] text-muted-foreground">近期已解决</p>
                     <p className="text-base font-bold text-foreground">
                       {studentProfile.solvedRecords}
                     </p>
                   </div>
                   <div className="bg-muted p-2.5">
-                    <p className="text-[11px] text-muted-foreground">窗口内困惑</p>
+                    <p className="text-[11px] text-muted-foreground">近期疑难点</p>
                     <p className="text-base font-bold text-foreground">
                       {studentProfile.confusionRecords}
                     </p>
@@ -500,7 +495,7 @@ export default function StatisticsPage() {
                         {' '}
                         {studentProfile.learningRecordCount}
                       </span>
-                      条 AI 问答抽取记录（{studentProfile.learningSource}）。
+                      条 AI 问答抽取记录。
                     </p>
                   ) : null}
                   {studentProfile.weakAbilities.length > 0 ? (

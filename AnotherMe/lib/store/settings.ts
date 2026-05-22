@@ -5,7 +5,13 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { ASR_PROVIDERS, DEFAULT_TTS_VOICES } from '@/lib/audio/constants';
+import { PROVIDERS } from '@/lib/ai/providers';
+import { ASR_PROVIDERS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
+import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
+import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
+import type { ProviderId } from '@/lib/ai/providers';
+import type { ASRProviderId, TTSProviderId } from '@/lib/audio/types';
+import type { ImageProviderId, VideoProviderId } from '@/lib/media/types';
 import type { WebSearchProviderId } from '@/lib/web-search/types';
 import { createLogger } from '@/lib/logger';
 import { createFetchServerProvidersAction } from '@/lib/store/settings/server-sync';
@@ -31,6 +37,62 @@ export { PLAYBACK_SPEEDS } from '@/lib/store/settings/types';
 export type { PlaybackSpeed, SettingsState } from '@/lib/store/settings/types';
 
 const log = createLogger('Settings');
+
+function pickModelId(
+  currentModelId: string | undefined,
+  models: Array<{ id: string }> | undefined,
+): string {
+  if (currentModelId && models?.some((model) => model.id === currentModelId)) {
+    return currentModelId;
+  }
+  return models?.[0]?.id || '';
+}
+
+function pickLLMModelId(
+  providerId: ProviderId,
+  currentModelId: string | undefined,
+  providersConfig: SettingsState['providersConfig'],
+): string {
+  const config = providersConfig[providerId];
+  return (
+    pickModelId(currentModelId, config?.models) ||
+    config?.serverModels?.[0] ||
+    PROVIDERS[providerId]?.models?.[0]?.id ||
+    ''
+  );
+}
+
+function pickTTSModelId(providerId: TTSProviderId, currentModelId?: string): string {
+  return (
+    pickModelId(currentModelId, TTS_PROVIDERS[providerId]?.models) ||
+    TTS_PROVIDERS[providerId]?.defaultModelId ||
+    ''
+  );
+}
+
+function pickASRModelId(providerId: ASRProviderId, currentModelId?: string): string {
+  return (
+    pickModelId(currentModelId, ASR_PROVIDERS[providerId]?.models) ||
+    ASR_PROVIDERS[providerId]?.defaultModelId ||
+    ''
+  );
+}
+
+function pickImageModelId(providerId: ImageProviderId, currentModelId?: string): string {
+  return (
+    pickModelId(currentModelId, IMAGE_PROVIDERS[providerId]?.models) ||
+    IMAGE_PROVIDERS[providerId]?.models?.[0]?.id ||
+    ''
+  );
+}
+
+function pickVideoModelId(providerId: VideoProviderId, currentModelId?: string): string {
+  return (
+    pickModelId(currentModelId, VIDEO_PROVIDERS[providerId]?.models) ||
+    VIDEO_PROVIDERS[providerId]?.models?.[0]?.id ||
+    ''
+  );
+}
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -96,15 +158,37 @@ export const useSettingsStore = create<SettingsState>()(
         ...defaultWebSearchConfig,
 
         // Actions
-        setProvider: (providerId) => set({ providerId }),
-        setModel: (providerId, modelId) => set({ providerId, modelId }),
-        setVisionProvider: (providerId) => set({ visionProviderId: providerId }),
+        setProvider: (providerId) =>
+          set((state) => ({
+            providerId,
+            modelId: pickLLMModelId(providerId, state.modelId, state.providersConfig),
+          })),
+        setModel: (providerId, modelId) =>
+          set((state) => ({
+            providerId,
+            modelId: pickLLMModelId(providerId, modelId, state.providersConfig),
+          })),
+        setVisionProvider: (providerId) =>
+          set((state) => ({
+            visionProviderId: providerId,
+            visionModelId: pickLLMModelId(providerId, state.visionModelId, state.providersConfig),
+          })),
         setVisionModel: (providerId, modelId) =>
-          set({ visionProviderId: providerId, visionModelId: modelId }),
+          set((state) => ({
+            visionProviderId: providerId,
+            visionModelId: pickLLMModelId(providerId, modelId, state.providersConfig),
+          })),
         setVisionModelId: (modelId) => set({ visionModelId: modelId }),
-        setOcrProvider: (providerId) => set({ ocrProviderId: providerId }),
+        setOcrProvider: (providerId) =>
+          set((state) => ({
+            ocrProviderId: providerId,
+            ocrModelId: pickLLMModelId(providerId, state.ocrModelId, state.providersConfig),
+          })),
         setOcrModel: (providerId, modelId) =>
-          set({ ocrProviderId: providerId, ocrModelId: modelId }),
+          set((state) => ({
+            ocrProviderId: providerId,
+            ocrModelId: pickLLMModelId(providerId, modelId, state.providersConfig),
+          })),
         setOcrModelId: (modelId) => set({ ocrModelId: modelId }),
         setOcrEngine: (engine) => set({ ocrEngine: engine }),
 
@@ -150,6 +234,16 @@ export const useSettingsStore = create<SettingsState>()(
             return {
               ttsProviderId: providerId,
               ...(shouldUpdateVoice && { ttsVoice: DEFAULT_TTS_VOICES[providerId] }),
+              ttsProvidersConfig: {
+                ...state.ttsProvidersConfig,
+                [providerId]: {
+                  ...state.ttsProvidersConfig[providerId],
+                  modelId: pickTTSModelId(
+                    providerId,
+                    state.ttsProvidersConfig[providerId]?.modelId,
+                  ),
+                },
+              },
             };
           }),
 
@@ -166,6 +260,16 @@ export const useSettingsStore = create<SettingsState>()(
             return {
               asrProviderId: providerId,
               ...(isLanguageValid ? {} : { asrLanguage: supportedLanguages[0] || 'auto' }),
+              asrProvidersConfig: {
+                ...state.asrProvidersConfig,
+                [providerId]: {
+                  ...state.asrProvidersConfig[providerId],
+                  modelId: pickASRModelId(
+                    providerId,
+                    state.asrProvidersConfig[providerId]?.modelId,
+                  ),
+                },
+              },
             };
           }),
 
@@ -208,7 +312,11 @@ export const useSettingsStore = create<SettingsState>()(
           })),
 
         // Image Generation actions
-        setImageProvider: (providerId) => set({ imageProviderId: providerId }),
+        setImageProvider: (providerId) =>
+          set((state) => ({
+            imageProviderId: providerId,
+            imageModelId: pickImageModelId(providerId, state.imageModelId),
+          })),
         setImageModelId: (modelId) => set({ imageModelId: modelId }),
 
         setImageProviderConfig: (providerId, config) =>
@@ -223,7 +331,11 @@ export const useSettingsStore = create<SettingsState>()(
           })),
 
         // Video Generation actions
-        setVideoProvider: (providerId) => set({ videoProviderId: providerId }),
+        setVideoProvider: (providerId) =>
+          set((state) => ({
+            videoProviderId: providerId,
+            videoModelId: pickVideoModelId(providerId, state.videoModelId),
+          })),
         setVideoModelId: (modelId) => set({ videoModelId: modelId }),
 
         setVideoProviderConfig: (providerId, config) =>

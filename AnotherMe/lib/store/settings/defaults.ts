@@ -60,9 +60,9 @@ export const getDefaultAudioConfig = () => ({
 export const getDefaultPDFConfig = () => ({
   pdfProviderId: 'unpdf' as PDFProviderId,
   pdfProvidersConfig: {
-    unpdf: { apiKey: '', baseUrl: '', enabled: true },
-    mineru: { apiKey: '', baseUrl: '', enabled: false },
-  } as Record<PDFProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
+    unpdf: { apiKey: '', baseUrl: '', modelId: '', enabled: true },
+    mineru: { apiKey: '', baseUrl: '', modelId: '', enabled: false },
+  } as Record<PDFProviderId, { apiKey: string; baseUrl: string; modelId: string; enabled: boolean }>,
 });
 
 // Initialize default Image config
@@ -97,6 +97,6 @@ export const getDefaultVideoConfig = () => ({
 export const getDefaultWebSearchConfig = () => ({
   webSearchProviderId: 'tavily' as WebSearchProviderId,
   webSearchProvidersConfig: {
-    tavily: { apiKey: '', baseUrl: '', enabled: true },
-  } as Record<WebSearchProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
+    tavily: { apiKey: '', baseUrl: '', modelId: '', enabled: true },
+  } as Record<WebSearchProviderId, { apiKey: string; baseUrl: string; modelId: string; enabled: boolean }>,
 });

@@ -17,18 +17,25 @@ function isPrivate172(hostname: string): boolean {
  * Supports standard dotted decimal, short form, decimal, octal, and hexadecimal formats.
  */
 function parseIpAddress(hostname: string): { type: 'ipv4' | 'ipv6' | 'unknown'; isPrivate: boolean } {
+  const normalizedHostname = normalizeHostnameForSecurity(hostname);
+
   // IPv6 address
-  if (hostname.includes(':')) {
-    return checkIpv6Address(hostname);
+  if (normalizedHostname.includes(':')) {
+    return checkIpv6Address(normalizedHostname);
   }
 
   // Try to parse as IPv4 in various formats
-  const ipv4Result = parseIpv4Address(hostname);
+  const ipv4Result = parseIpv4Address(normalizedHostname);
   if (ipv4Result) {
     return { type: 'ipv4', isPrivate: ipv4Result.isPrivate };
   }
 
   return { type: 'unknown', isPrivate: false };
+}
+
+function normalizeHostnameForSecurity(hostname: string): string {
+  const trimmed = hostname.trim().toLowerCase();
+  return trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
 }
 
 /**
@@ -192,6 +199,16 @@ function checkIpv6Address(hostname: string): { type: 'ipv6'; isPrivate: boolean 
     }
   }
 
+  const ipv4MappedHexMatch = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(normalized);
+  if (ipv4MappedHexMatch) {
+    const high = parseInt(ipv4MappedHexMatch[1], 16);
+    const low = parseInt(ipv4MappedHexMatch[2], 16);
+    if (high >= 0 && high <= 0xffff && low >= 0 && low <= 0xffff) {
+      const octets = [(high >>> 8) & 255, high & 255, (low >>> 8) & 255, low & 255];
+      return { type: 'ipv6', isPrivate: isPrivateIpv4(octets) };
+    }
+  }
+
   // IPv4-compatible IPv6: ::/96 (deprecated but still check)
   const ipv4CompatibleMatch = /^::(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/i.exec(normalized);
   if (ipv4CompatibleMatch) {
@@ -265,7 +282,7 @@ export function validateUrlForSSRF(url: string): string | null {
     return null;
   }
 
-  const hostname = parsed.hostname.toLowerCase();
+  const hostname = normalizeHostnameForSecurity(parsed.hostname);
 
   // Check blocked hostnames
   if (BLOCKED_HOSTNAMES.has(hostname)) {
@@ -294,8 +311,7 @@ export function validateUrlForSSRF(url: string): string | null {
     hostname.startsWith('192.168.') ||
     hostname.startsWith('169.254.') ||
     isPrivate172(hostname) ||
-    hostname.startsWith('fd') ||
-    hostname.startsWith('fe80')
+    hostname.startsWith('fe80:')
   ) {
     return 'Local/private network URLs are not allowed';
   }

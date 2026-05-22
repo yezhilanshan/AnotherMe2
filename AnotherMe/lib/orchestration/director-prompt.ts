@@ -7,6 +7,7 @@
 
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { createLogger } from '@/lib/logger';
+import { extractLastHumanMessage, type OpenAIMessage } from './prompt-builder';
 
 const log = createLogger('DirectorPrompt');
 
@@ -59,6 +60,8 @@ export function buildDirectorPrompt(
   whiteboardLedger?: WhiteboardActionRecord[],
   userProfile?: { nickname?: string; bio?: string },
   whiteboardOpen?: boolean,
+  openAIMessages?: OpenAIMessage[],
+  userReactions?: import('@/lib/types/chat').UserReaction[],
 ): string {
   const agentList = agents
     .map((a) => `- id: "${a.id}", name: "${a.name}", role: ${a.role}, priority: ${a.priority}`)
@@ -76,6 +79,7 @@ export function buildDirectorPrompt(
       : 'None yet.';
 
   const isDiscussion = !!discussionContext;
+  const openStudentQuestionSection = buildOpenStudentQuestionSection(openAIMessages);
 
   const discussionSection = isDiscussion
     ? `\n# Discussion Mode
@@ -110,7 +114,7 @@ ${respondedList}
 
 # Conversation Context
 ${conversationSummary}
-${discussionSection}${whiteboardSection}${studentProfileSection}
+${openStudentQuestionSection}${discussionSection}${whiteboardSection}${studentProfileSection}${buildUserReactionsSection(userReactions)}
 # Rules
 ${rule1}
 2. After the teacher, consider whether a student agent would add value (ask a follow-up question, crack a joke, take notes, offer a different perspective).
@@ -125,16 +129,142 @@ ${rule1}
 # Routing Quality (CRITICAL)
 - ROLE DIVERSITY: Do NOT dispatch two agents of the same role consecutively. After a teacher speaks, the next should be a student or assistant — not another teacher-like response. After an assistant rephrases, dispatch a student who asks a question, not another assistant who also rephrases.
 - CONTENT DEDUP: Read the "Agents Who Already Spoke" previews carefully. If an agent already explained a concept thoroughly, do NOT dispatch another agent to explain the same concept. Instead, dispatch an agent who will ASK a question, CHALLENGE an assumption, CONNECT to another topic, or TAKE NOTES.
-- DISCUSSION PROGRESSION: Each new agent should advance the conversation. Good progression: explain → question → deeper explanation → different perspective → summary. Bad progression: explain → re-explain → rephrase → paraphrase.
+- DISCUSSION PROGRESSION: The next agent should RESPOND to the last speaker, not start a new topic. Good: teacher explains → student asks about the explanation → teacher clarifies → student gives an example. Bad: teacher explains → student starts unrelated question → teacher re-explains from scratch.
 - GREETING RULE: If any agent has already greeted the students, no subsequent agent should greet again. Check the previews for greetings.
 
 # Output Format
-You MUST output ONLY a JSON object, nothing else:
+You MUST first output your reasoning inside <thinking> tags, then output a JSON decision.
+
+<thinking>
+- Summarize what the last speaker said
+- Identify which agents haven't spoken yet and what value they could add
+- Check for unanswered student questions or unresolved topics
+- Decide: which agent should speak next, or USER, or END
+</thinking>
 {"next_agent":"<agent_id>"}
 or
 {"next_agent":"USER"}
 or
-{"next_agent":"END"}`;
+{"next_agent":"END"}
+
+IMPORTANT: Always include the <thinking> block before the JSON. The JSON must be the last line.`;
+}
+
+export function buildOpenStudentQuestionSection(messages?: OpenAIMessage[]): string {
+  const lastHumanMessage = messages ? extractLastHumanMessage(messages) : null;
+  if (!lastHumanMessage) return '';
+
+  return `
+# Latest Student Message Still Needing Attention
+${lastHumanMessage}
+
+Do not output END if this message asks a question, challenges an explanation, or requests clarification and no later human message resolves it.
+`;
+}
+
+/**
+ * Build a user reactions section for the director prompt.
+ * Shows recent user feedback so the Director can adjust strategy.
+ */
+function buildUserReactionsSection(
+  reactions?: import('@/lib/types/chat').UserReaction[],
+): string {
+  if (!reactions || reactions.length === 0) return '';
+
+  const recent = reactions.slice(-5);
+  const lines = recent.map((r) => {
+    switch (r.type) {
+      case 'confused':
+        return '- Student is CONFUSED — does not understand';
+      case 'too_fast':
+        return '- Student says pace is TOO FAST';
+      case 'agree':
+        return '- Student AGREES with the discussion';
+      case 'want_example':
+        return '- Student wants a concrete EXAMPLE';
+      case 'boring':
+        return '- Student finds it BORING — needs a change';
+      default:
+        return `- Student reaction: ${r.type}`;
+    }
+  });
+
+  return `
+# Student Reactions (IMPORTANT — adjust your strategy)
+${lines.join('\n')}
+Guidance: If confused → slow down, simplify, give examples. If too fast → fewer agents, shorter responses. If wants example → dispatch an agent to illustrate. If boring → change perspective or approach.
+`;
+}
+
+/**
+ * Build a summary prompt for the teacher agent to generate a structured
+ * discussion summary before the session ends.
+ */
+export function buildSummaryPrompt(
+  agentResponses: AgentTurnSummary[],
+  discussionContext?: { topic: string; prompt?: string } | null,
+  whiteboardLedger?: WhiteboardActionRecord[],
+): string {
+  const discussionReview =
+    agentResponses.length > 0
+      ? agentResponses
+          .map((r) => {
+            const wbSummary = summarizeAgentWhiteboardActions(r.whiteboardActions);
+            const wbPart = wbSummary ? ` [Whiteboard: ${wbSummary}]` : '';
+            return `- ${r.agentName} (${r.agentId}): "${r.contentPreview}"${wbPart}`;
+          })
+          .join('\n')
+      : 'No agents spoke yet.';
+
+  const topicSection = discussionContext
+    ? `\nDiscussion Topic: "${discussionContext.topic}"${discussionContext.prompt ? `\nGuiding Prompt: "${discussionContext.prompt}"` : ''}`
+    : '';
+
+  const whiteboardSection =
+    whiteboardLedger && whiteboardLedger.length > 0
+      ? `\nWhiteboard Content:\n${buildWhiteboardContentSummary(whiteboardLedger)}`
+      : '';
+
+  return `You are the teacher in a multi-agent classroom. The discussion is about to end. Your job is to provide a structured summary of what was covered.
+
+# Discussion Content
+${discussionReview}${topicSection}${whiteboardSection}
+
+# Your Task
+Generate a concise summary of this discussion. Structure your response as follows:
+1. Key Takeaways — the most important points covered (2-5 bullet points)
+2. Unanswered Questions — any student questions or topics that weren't fully addressed
+3. Next Steps — what the student should study or practice next
+
+Keep the summary concise and student-friendly. Write in the same language as the discussion.
+Do NOT use actions (whiteboard, spotlight, etc.) — only produce text.`;
+}
+
+/**
+ * Build a text summary of whiteboard content from the ledger.
+ */
+function buildWhiteboardContentSummary(ledger: WhiteboardActionRecord[]): string {
+  const parts: string[] = [];
+  for (const record of ledger) {
+    switch (record.actionName) {
+      case 'wb_draw_text':
+        parts.push(`- Text: "${String(record.params.content || '').slice(0, 50)}"`);
+        break;
+      case 'wb_draw_latex':
+        parts.push(`- Formula: "${String(record.params.latex || '').slice(0, 50)}"`);
+        break;
+      case 'wb_draw_chart':
+        parts.push(`- Chart: ${record.params.chartType || 'bar'} chart`);
+        break;
+      case 'wb_draw_table':
+        parts.push(`- Table: ${(record.params.data as unknown[][])?.length || 0} rows`);
+        break;
+      case 'wb_clear':
+        parts.push('- Whiteboard was cleared');
+        break;
+    }
+  }
+  return parts.length > 0 ? parts.join('\n') : 'No significant content.';
 }
 
 /**
@@ -249,12 +379,17 @@ Contributors: ${contributors.length > 0 ? contributors.join(', ') : 'none'}${cro
  * Parse the director's decision from its response
  *
  * @param content - Raw LLM response content
- * @returns Parsed decision with nextAgentId and shouldEnd flag
+ * @returns Parsed decision with nextAgentId, shouldEnd flag, and reasoning
  */
 export function parseDirectorDecision(content: string): {
   nextAgentId: string | null;
   shouldEnd: boolean;
+  reasoning: string;
 } {
+  // Extract reasoning from <thinking>...</thinking> tags
+  const thinkingMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/);
+  const reasoning = thinkingMatch ? thinkingMatch[1].trim() : '';
+
   try {
     // Try to extract JSON from the response
     const jsonMatch = content.match(/\{[\s\S]*?"next_agent"[\s\S]*?\}/);
@@ -263,15 +398,15 @@ export function parseDirectorDecision(content: string): {
       const nextAgent = parsed.next_agent;
 
       if (!nextAgent || nextAgent === 'END') {
-        return { nextAgentId: null, shouldEnd: true };
+        return { nextAgentId: null, shouldEnd: true, reasoning };
       }
 
-      return { nextAgentId: nextAgent, shouldEnd: false };
+      return { nextAgentId: nextAgent, shouldEnd: false, reasoning };
     }
   } catch (_e) {
     log.warn('[Director] Failed to parse decision:', content.slice(0, 200));
   }
 
   // Default: end the round if we can't parse
-  return { nextAgentId: null, shouldEnd: true };
+  return { nextAgentId: null, shouldEnd: true, reasoning };
 }

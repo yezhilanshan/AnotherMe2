@@ -235,6 +235,17 @@ import type { LearningContext } from '@/lib/types/learning-context';
 import type { TutorToolName, TutorToolConfig } from '@/lib/types/tutor-tools';
 
 /**
+ * User reaction during a multi-agent discussion.
+ * Lightweight feedback that the Director can use to adjust strategy.
+ */
+export interface UserReaction {
+  type: 'confused' | 'too_fast' | 'agree' | 'want_example' | 'boring';
+  timestamp: number;
+  /** Optional: which agent's response triggered this reaction */
+  targetAgentId?: string;
+}
+
+/**
  * Accumulated director state passed between per-agent requests.
  * Client-maintained — backend is stateless.
  */
@@ -295,6 +306,19 @@ export interface StatelessChatRequest {
      * @default false (保持向后兼容)
      */
     useAgenticPipeline?: boolean;
+    /**
+     * Server-driven mode: server runs the full director loop internally.
+     * When true, the client sends one request and the server handles
+     * all director→agent cycles, streaming events over a single SSE connection.
+     * @default false
+     */
+    serverDriven?: boolean;
+    /**
+     * Maximum number of director→agent turns for server-driven mode.
+     * Ignored when serverDriven is false (client controls the loop).
+     * @default 10 for multi-agent, 1 for single-agent
+     */
+    maxTurns?: number;
   };
   /** Accumulated director state from previous per-agent requests */
   directorState?: DirectorState;
@@ -307,6 +331,8 @@ export interface StatelessChatRequest {
   learningContext?: LearningContext;
   /** Latest diagnostic session data from the frontend (merged into learning context server-side) */
   diagnosticSession?: import('@/lib/types/learning-context').DiagnosticSessionSnapshot | null;
+  /** User reactions accumulated during the current discussion (sent with each request) */
+  userReactions?: UserReaction[];
   /** OpenAI-compatible API credentials */
   apiKey: string;
   baseUrl?: string;
@@ -377,7 +403,7 @@ export type StatelessEvent =
     }
   | {
       type: 'thinking';
-      data: { stage: 'director' | 'agent_loading'; agentId?: string };
+      data: { stage: 'director' | 'agent_loading'; agentId?: string; reasoning?: string };
     }
   | { type: 'cue_user'; data: { fromAgentId?: string; prompt?: string } }
   | {

@@ -149,6 +149,7 @@ export function buildCompleteScene(
       theme: defaultTheme,
       elements: content.elements,
       background: content.background,
+      schemaVersion: 1,
     };
 
     return {

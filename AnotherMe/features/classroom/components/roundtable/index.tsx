@@ -28,7 +28,10 @@ import { PresentationSpeechOverlay } from '@/features/classroom/components/round
 import { AvatarDisplay } from '@/components/ui/avatar-display';
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
-import { DEFAULT_TEACHER_AVATAR, DEFAULT_USER_AVATAR } from '@/features/classroom/components/roundtable/constants';
+import {
+  DEFAULT_TEACHER_AVATAR,
+  DEFAULT_USER_AVATAR,
+} from '@/features/classroom/components/roundtable/constants';
 import type { DiscussionAction } from '@/lib/types/action';
 import type { EngineMode, PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
@@ -374,7 +377,7 @@ export function Roundtable({
     setIsInputOpen(false);
   };
 
-  const handleToggleInput = () => {
+  const handleToggleInput = useCallback(() => {
     if (isSendCooldown) return;
     if (!isInputOpen) {
       onInputActivate?.();
@@ -385,9 +388,9 @@ export function Roundtable({
       cancelRecording();
       setIsVoiceOpen(false);
     }
-  };
+  }, [cancelRecording, isInputOpen, isProcessing, isSendCooldown, isVoiceOpen, onInputActivate]);
 
-  const handleToggleVoice = () => {
+  const handleToggleVoice = useCallback(() => {
     if (isVoiceOpen) {
       if (isRecording) {
         stopRecording();
@@ -400,7 +403,15 @@ export function Roundtable({
       setIsInputOpen(false);
       startRecording();
     }
-  };
+  }, [
+    isProcessing,
+    isRecording,
+    isSendCooldown,
+    isVoiceOpen,
+    onInputActivate,
+    startRecording,
+    stopRecording,
+  ]);
 
   // Keyboard shortcuts for roundtable interaction (#255)
   // T = toggle text input, V = toggle voice input, Escape = dismiss panels,
@@ -470,6 +481,9 @@ export function Roundtable({
     isVoiceOpen,
     isRecording,
     isProcessing,
+    cancelRecording,
+    handleToggleInput,
+    handleToggleVoice,
   ]);
 
   const isPresentationInteractionActive = isInputOpen || isVoiceOpen || isRecording || isProcessing;
@@ -793,12 +807,6 @@ export function Roundtable({
                       />
                     </div>
                   )}
-                  {/* DEBUG: 强制显示工具选择器用于调试 */}
-                  {(!tutorToolState || !onTutorToolStateChange) && (
-                    <div className="border-t border-red-200/30 dark:border-red-800/30 px-3 py-2 bg-red-50/50 dark:bg-red-900/20">
-                      <p className="text-xs text-red-500">DEBUG: tutorToolState={String(!!tutorToolState)}, onTutorToolStateChange={String(!!onTutorToolStateChange)}</p>
-                    </div>
-                  )}
                 </div>
               </motion.div>
             )}
@@ -1083,10 +1091,10 @@ export function Roundtable({
   return (
     <div
       className={cn(
-        'h-[192px] w-full flex flex-col relative z-10 transition-all duration-300',
+        'h-[160px] md:h-[192px] w-full flex flex-col relative z-10 transition-all duration-300 max-md:rounded-t-[26px] max-md:shadow-[0_-18px_50px_rgba(15,23,42,0.10)] max-md:overflow-hidden',
         isPresenting && !controlsVisible
           ? 'border-t border-transparent bg-transparent backdrop-blur-none'
-          : 'border-t border-gray-100 dark:border-gray-800 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md',
+          : 'border-t border-white/80 dark:border-gray-800 bg-white/75 dark:bg-gray-900/80 backdrop-blur-xl',
       )}
     >
       {/* ── Toolbar strip — merged from CanvasArea ── */}
@@ -1103,7 +1111,7 @@ export function Roundtable({
         {/* Left: Teacher identity */}
         <div
           className={cn(
-            'w-[90px] shrink-0 flex flex-col border-r border-gray-100/50 dark:border-gray-700/50 bg-white/40 dark:bg-gray-900/40 overflow-visible relative transition-opacity duration-300',
+            'hidden w-[90px] shrink-0 flex-col border-r border-gray-100/50 dark:border-gray-700/50 bg-white/40 dark:bg-gray-900/40 overflow-visible relative transition-opacity duration-300 md:flex',
             isPresenting && !controlsVisible && 'opacity-0 pointer-events-none',
           )}
         >
@@ -1228,7 +1236,7 @@ export function Roundtable({
         </div>
 
         {/* Center: Interaction stage */}
-        <div className="flex-1 relative mx-3 mb-2">
+        <div className="flex-1 relative mx-2 mb-2 min-w-0 md:mx-3">
           {/* End flash banner (Issue 3) */}
           <AnimatePresence>
             {endFlashVisible && (
@@ -1262,7 +1270,7 @@ export function Roundtable({
                 if (isRecording || isProcessing) cancelRecording();
               }
             }}
-            className="relative w-full h-full rounded-[2.5rem] bg-gradient-to-b from-white/40 to-white/80 dark:from-gray-800/40 dark:to-gray-800/80 backdrop-blur-xl border border-white/50 dark:border-gray-700/50 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] flex flex-col justify-center px-6 overflow-hidden group transition-all duration-700 cursor-default"
+            className="relative w-full h-full rounded-3xl md:rounded-[2.5rem] bg-gradient-to-b from-white/40 to-white/85 dark:from-gray-800/40 dark:to-gray-800/80 backdrop-blur-xl border border-white/60 dark:border-gray-700/50 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] flex flex-col justify-center px-3 md:px-6 overflow-hidden group transition-all duration-700 cursor-default"
           >
             {/* Text input box */}
             <AnimatePresence>
@@ -1310,12 +1318,12 @@ export function Roundtable({
                             : 'bg-purple-600 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 shadow-purple-200 dark:shadow-purple-900/50',
                         )}
                       >
-                      {isSendCooldown ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Send className="w-4 h-4" />
-                      )}
-                    </button>
+                        {isSendCooldown ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Send className="w-4 h-4" />
+                        )}
+                      </button>
                     </div>
 
                     {/* 工具栏 - 参考 DeepTutor 放在输入框下方 */}
@@ -1327,12 +1335,6 @@ export function Roundtable({
                           disabled={isSendCooldown}
                           size="sm"
                         />
-                      </div>
-                    )}
-                    {/* DEBUG: 强制显示工具选择器用于调试 */}
-                    {(!tutorToolState || !onTutorToolStateChange) && (
-                      <div className="border-t border-red-200/30 dark:border-red-800/30 px-3 py-2 bg-red-50/50 dark:bg-red-900/20">
-                        <p className="text-xs text-red-500">DEBUG: tutorToolState={String(!!tutorToolState)}, onTutorToolStateChange={String(!!onTutorToolStateChange)}</p>
                       </div>
                     )}
                   </div>
@@ -1615,7 +1617,7 @@ export function Roundtable({
                         onPlayPause?.();
                       }}
                       className={cn(
-                        'relative px-4 pt-2 pb-3 rounded-2xl text-[15px] leading-relaxed transition-all border w-[min(420px,calc(100%-3rem))] group/bubble flex flex-col max-h-[110px]',
+                        'relative px-3 pt-2 pb-3 md:px-4 rounded-2xl text-[13px] md:text-[15px] leading-relaxed transition-all border w-[min(420px,calc(100%-1rem))] md:w-[min(420px,calc(100%-3rem))] group/bubble flex flex-col max-h-[72px] md:max-h-[110px]',
                         bubbleRole === 'teacher' ? 'pl-4 pr-10' : 'pl-4 pr-10',
                         bubbleRole === 'user'
                           ? 'bg-purple-600/95 dark:bg-purple-500/95 backdrop-blur-sm border-purple-400/40 dark:border-purple-300/40 text-white rounded-br-sm shadow-md shadow-purple-300/30 dark:shadow-purple-800/30'
@@ -1818,7 +1820,7 @@ export function Roundtable({
         {/* Right: Participants area */}
         <div
           className={cn(
-            'w-[140px] shrink-0 flex flex-col py-3 border-l border-gray-100/50 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-900/30 overflow-visible transition-opacity duration-300',
+            'w-[122px] md:w-[140px] shrink-0 flex flex-col py-2 md:py-3 border-l border-gray-100/50 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-900/30 overflow-visible transition-opacity duration-300',
             isPresenting && !controlsVisible && 'opacity-0 pointer-events-none',
           )}
         >
@@ -2092,7 +2094,7 @@ export function Roundtable({
             >
               <div
                 className={cn(
-                  'relative w-16 h-16 rounded-full transition-all duration-300 flex items-center justify-center',
+                  'relative w-12 h-12 md:w-16 md:h-16 rounded-full transition-all duration-300 flex items-center justify-center',
                   activeRole === 'user' || isInputOpen || isCueUser
                     ? 'scale-105'
                     : 'opacity-50 grayscale-[0.2] scale-95 group-hover:opacity-100 group-hover:grayscale-0 group-hover:scale-100',
@@ -2108,7 +2110,7 @@ export function Roundtable({
                         : 'border-white dark:border-gray-700 group-hover:border-purple-200 dark:group-hover:border-purple-600',
                   )}
                 />
-                <div className="w-14 h-14 rounded-full bg-gray-50 dark:bg-gray-800 overflow-hidden relative z-10 shadow-sm border border-gray-50 dark:border-gray-700 text-2xl">
+                <div className="w-10 h-10 md:w-14 md:h-14 rounded-full bg-gray-50 dark:bg-gray-800 overflow-hidden relative z-10 shadow-sm border border-gray-50 dark:border-gray-700 text-xl md:text-2xl">
                   <AvatarDisplay src={userAvatar} alt={t('roundtable.you')} />
                 </div>
                 <div className="absolute top-0 right-0 w-5 h-5 bg-white dark:bg-gray-800 rounded-full flex items-center justify-center shadow-md border border-gray-100 dark:border-gray-700 z-20">

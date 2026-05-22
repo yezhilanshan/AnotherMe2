@@ -18,6 +18,8 @@ export interface Stage {
   description?: string;
   createdAt: number;
   updatedAt: number;
+  /** Schema version for migration support. Absent = version 0. */
+  schemaVersion?: number;
   // Stage metadata
   language?: string;
   style?: string;

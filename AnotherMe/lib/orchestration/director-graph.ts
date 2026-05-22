@@ -4,6 +4,8 @@
  * Unified graph topology (same for single and multi-agent):
  *
  *   START → director ──(end)──→ END
+ *              │          │
+ *              │          └─(summary)──→ summarize ──→ END
  *              │
  *              └─(next)→ agent_generate ──→ director (loop)
  *
@@ -11,7 +13,12 @@
  *   - Single agent: pure code logic (no LLM). Dispatches the agent on
  *     turn 0, then cues the user on subsequent turns.
  *   - Multi agent: LLM-based decision (with code fast-paths for turn 0
- *     trigger agent and turn limits).
+ *     trigger agent and turn limits). Includes reasoning chain in
+ *     <thinking> tags before the JSON decision.
+ *
+ * Summary node: when the director decides END in a multi-agent discussion,
+ * the summarize node generates a structured summary via the teacher agent
+ * before the session ends.
  *
  * Uses LangGraph's custom stream mode: each node pushes StatelessEvent
  * chunks via config.writer() for real-time SSE delivery.
@@ -33,7 +40,7 @@ import {
   summarizeConversation,
   convertMessagesToOpenAI,
 } from './prompt-builder';
-import { buildDirectorPrompt, parseDirectorDecision } from './director-prompt';
+import { buildDirectorPrompt, parseDirectorDecision, buildSummaryPrompt } from './director-prompt';
 import { getEffectiveActions } from './tool-schemas';
 import type { AgentTurnSummary, WhiteboardActionRecord } from './director-prompt';
 import { parseStructuredChunk, createParserState, finalizeParser } from './stateless-generate';
@@ -61,6 +68,8 @@ const OrchestratorState = Annotation.Root({
   systemPromptAddendum: Annotation<string | null>,
   userProfile: Annotation<{ nickname?: string; bio?: string } | null>,
   learningContext: Annotation<StatelessChatRequest['learningContext'] | null>,
+  /** User reactions accumulated during the current discussion */
+  userReactions: Annotation<import('@/lib/types/chat').UserReaction[]>,
   /** Request-scoped agent configs for generated agents (not in the default registry) */
   agentConfigOverrides: Annotation<Record<string, AgentConfig>>,
 
@@ -76,6 +85,7 @@ const OrchestratorState = Annotation.Root({
     default: () => [],
   }),
   shouldEnd: Annotation<boolean>,
+  needsSummary: Annotation<boolean>,
   totalActions: Annotation<number>,
 });
 
@@ -119,6 +129,11 @@ async function directorNode(
 
   // ── Turn limit check (applies to both single & multi) ──
   if (state.turnCount >= state.maxTurns) {
+    // Route to summary if agents spoke in multi-agent mode
+    if (state.agentResponses.length > 0 && !isSingleAgent) {
+      log.info(`[Director] Turn limit reached (${state.turnCount}/${state.maxTurns}) → routing to summary`);
+      return { needsSummary: true };
+    }
     log.info(`[Director] Turn limit reached (${state.turnCount}/${state.maxTurns}), ending`);
     return { shouldEnd: true };
   }
@@ -180,22 +195,37 @@ async function directorNode(
     state.whiteboardLedger,
     state.userProfile || undefined,
     state.storeState.whiteboardOpen,
+    openaiMessages,
+    state.userReactions,
   );
 
   const adapter = new AISdkLangGraphAdapter(state.languageModel, state.thinkingConfig ?? undefined);
 
   try {
     const result = await adapter._generate(
-      [new SystemMessage(prompt), new HumanMessage('Decide which agent should speak next.')],
+      [
+        new SystemMessage(prompt),
+        new HumanMessage(
+          'Analyze the situation and decide which agent should speak next. Output your reasoning in <thinking> tags, then the JSON decision.',
+        ),
+      ],
       { signal: config.signal } as Record<string, unknown>,
     );
 
     const content = result.generations[0]?.text || '';
-    log.info(`[Director] Raw decision: ${content}`);
-
     const decision = parseDirectorDecision(content);
 
+    if (decision.reasoning) {
+      log.info(`[Director] Reasoning: ${decision.reasoning}`);
+    }
+    log.info(`[Director] Raw decision: ${content.slice(0, 300)}`);
+
     if (decision.shouldEnd || !decision.nextAgentId) {
+      // Route to summary node if agents spoke in a multi-agent discussion
+      if (state.agentResponses.length > 0 && state.availableAgentIds.length > 1) {
+        log.info('[Director] Decision: END → routing to summary first');
+        return { needsSummary: true };
+      }
       log.info('[Director] Decision: END');
       return { shouldEnd: true };
     }
@@ -212,12 +242,19 @@ async function directorNode(
     const agentExists = agents.some((a) => a.id === decision.nextAgentId);
     if (!agentExists) {
       log.warn(`[Director] Unknown agent "${decision.nextAgentId}", ending`);
+      if (state.agentResponses.length > 0 && state.availableAgentIds.length > 1) {
+        return { needsSummary: true };
+      }
       return { shouldEnd: true };
     }
 
     write({
       type: 'thinking',
-      data: { stage: 'agent_loading', agentId: decision.nextAgentId },
+      data: {
+        stage: 'agent_loading',
+        agentId: decision.nextAgentId,
+        reasoning: decision.reasoning || undefined,
+      },
     });
 
     log.info(`[Director] Decision: dispatch agent "${decision.nextAgentId}"`);
@@ -231,7 +268,10 @@ async function directorNode(
   }
 }
 
-function directorCondition(state: OrchestratorStateType): 'agent_generate' | typeof END {
+function directorCondition(
+  state: OrchestratorStateType,
+): 'agent_generate' | 'summarize' | typeof END {
+  if (state.needsSummary) return 'summarize';
   return state.shouldEnd ? END : 'agent_generate';
 }
 
@@ -491,6 +531,101 @@ async function agentGenerateNode(
   };
 }
 
+// ==================== Summarize Node ====================
+
+/**
+ * Summarize node — generates a structured discussion summary via the teacher agent.
+ * Runs after the director decides END in a multi-agent discussion.
+ */
+async function summarizeNode(
+  state: OrchestratorStateType,
+  config: LangGraphRunnableConfig,
+): Promise<Partial<OrchestratorStateType>> {
+  // Find the teacher agent, or fall back to the first available
+  const teacherId =
+    state.availableAgentIds.find((id) => {
+      const agent = resolveAgent(state, id);
+      return agent?.role === 'teacher';
+    }) || state.availableAgentIds[0];
+
+  if (!teacherId) {
+    return { shouldEnd: true };
+  }
+
+  const agentConfig = resolveAgent(state, teacherId);
+  if (!agentConfig) {
+    return { shouldEnd: true };
+  }
+
+  const rawWrite = config.writer as (chunk: StatelessEvent) => void;
+  const write = (chunk: StatelessEvent) => {
+    try {
+      rawWrite(chunk);
+    } catch {
+      /* controller closed after abort */
+    }
+  };
+
+  const messageId = `summary-${teacherId}-${Date.now()}`;
+
+  write({
+    type: 'agent_start',
+    data: {
+      messageId,
+      agentId: teacherId,
+      agentName: agentConfig.name,
+      agentAvatar: agentConfig.avatar,
+      agentColor: agentConfig.color,
+    },
+  });
+
+  // Build summary prompt
+  const summaryPrompt = buildSummaryPrompt(
+    state.agentResponses,
+    state.discussionContext,
+    state.whiteboardLedger,
+  );
+
+  const adapter = new AISdkLangGraphAdapter(state.languageModel, state.thinkingConfig ?? undefined);
+  const lcMessages = [
+    new SystemMessage(summaryPrompt),
+    new HumanMessage('Please provide a structured summary of this discussion.'),
+  ];
+
+  let fullText = '';
+
+  try {
+    for await (const chunk of adapter.streamGenerate(lcMessages, {
+      signal: config.signal,
+    })) {
+      if (chunk.type === 'delta') {
+        const text = chunk.content.replace(/^>+\s?/gm, '');
+        if (text) {
+          fullText += text;
+          write({
+            type: 'text_delta',
+            data: { content: text, messageId },
+          });
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+    log.error('[Summarize] Error:', error);
+  }
+
+  write({
+    type: 'agent_end',
+    data: { messageId, agentId: teacherId },
+  });
+
+  log.info(`[Summarize] Summary generated (${fullText.length} chars) by ${agentConfig.name}`);
+
+  return { shouldEnd: true };
+}
+
 // ==================== Graph Construction ====================
 
 /**
@@ -498,6 +633,8 @@ async function agentGenerateNode(
  *
  * Topology:
  *   START → director ──(end)──→ END
+ *              │          │
+ *              │          └─(summary)──→ summarize ──→ END
  *              │
  *              └─(next)→ agent_generate ──→ director (loop)
  */
@@ -505,12 +642,15 @@ export function createOrchestrationGraph() {
   const graph = new StateGraph(OrchestratorState)
     .addNode('director', directorNode)
     .addNode('agent_generate', agentGenerateNode)
+    .addNode('summarize', summarizeNode)
     .addEdge(START, 'director')
     .addConditionalEdges('director', directorCondition, {
       agent_generate: 'agent_generate',
+      summarize: 'summarize',
       [END]: END,
     })
-    .addEdge('agent_generate', 'director');
+    .addEdge('agent_generate', 'director')
+    .addEdge('summarize', END);
 
   return graph.compile();
 }
@@ -552,7 +692,12 @@ export function buildInitialState(
     messages: request.messages,
     storeState: request.storeState,
     availableAgentIds: request.config.agentIds,
-    maxTurns: turnCount + 1, // Allow exactly one more director→agent cycle
+    maxTurns: request.config.serverDriven
+      ? Math.min(
+          request.config.maxTurns ?? (request.config.agentIds.length <= 1 ? 1 : 10),
+          20,
+        )
+      : turnCount + 1, // Allow exactly one more director→agent cycle
     languageModel,
     thinkingConfig: thinkingConfig ?? null,
     discussionContext,
@@ -560,12 +705,14 @@ export function buildInitialState(
     systemPromptAddendum: request.config.systemPromptAddendum?.trim() || null,
     userProfile: request.userProfile || null,
     learningContext: request.learningContext || null,
+    userReactions: request.userReactions ?? [],
     agentConfigOverrides,
     currentAgentId: null,
     turnCount,
     agentResponses: incoming?.agentResponses ?? [],
     whiteboardLedger: incoming?.whiteboardLedger ?? [],
     shouldEnd: false,
+    needsSummary: false,
     totalActions: 0,
   };
 }

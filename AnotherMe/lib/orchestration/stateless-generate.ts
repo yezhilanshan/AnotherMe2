@@ -324,7 +324,7 @@ export async function* statelessGenerate(
     `[StatelessGenerate] Starting orchestration for agents: ${request.config.agentIds.join(', ')}`,
   );
   log.info(
-    `[StatelessGenerate] Message count: ${request.messages.length}, turnCount: ${request.directorState?.turnCount ?? 0}`,
+    `[StatelessGenerate] Message count: ${request.messages.length}, turnCount: ${request.directorState?.turnCount ?? 0}, serverDriven: ${request.config.serverDriven ?? false}`,
   );
 
   try {
@@ -418,6 +418,11 @@ export async function* statelessGenerate(
     log.info(
       `[StatelessGenerate] Completed. Agents: ${totalAgents}, Actions: ${totalActions}, hadContent: ${agentHadContent}, turnCount: ${directorState.turnCount}`,
     );
+    if (request.config.serverDriven) {
+      log.info(
+        `[StatelessGenerate] Server-driven mode: ${directorState.turnCount} turns completed (maxTurns: ${request.config.maxTurns ?? 'default'})`,
+      );
+    }
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       yield { type: 'error', data: { message: 'Request interrupted' } };

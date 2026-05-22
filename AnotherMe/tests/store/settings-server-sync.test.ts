@@ -435,6 +435,25 @@ describe('fetchServerProviders — provider availability sync', () => {
     expect(store.getState().modelId).toBe('gpt-4o');
   });
 
+  it('sets a valid default model when switching text provider directly', async () => {
+    const store = await getStore();
+
+    store.getState().setModel('openai', 'gpt-4o');
+    store.getState().setProvider('anthropic');
+
+    expect(store.getState().providerId).toBe('anthropic');
+    expect(store.getState().modelId).toBe('claude-sonnet-4-6');
+  });
+
+  it('sets a valid default model when switching image provider directly', async () => {
+    const store = await getStore();
+
+    store.getState().setImageProvider('qwen-image');
+
+    expect(store.getState().imageProviderId).toBe('qwen-image');
+    expect(store.getState().imageModelId).toBe('qwen-image-max');
+  });
+
   // ---- Error handling ----
 
   it('does not modify state when fetch returns non-ok response', async () => {

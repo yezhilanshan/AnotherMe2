@@ -48,6 +48,7 @@ import type { Scene, Stage } from '@/lib/types/stage';
 import type { LearningContext } from '@/lib/types/learning-context';
 
 const log = createLogger('Classroom');
+const DEFAULT_SCENE_GENERATION_CONCURRENCY = 2;
 
 export interface GenerateClassroomInput {
   requirement: string;
@@ -60,6 +61,7 @@ export interface GenerateClassroomInput {
   agentMode?: 'default' | 'generate';
   pedagogy_profile?: PedagogyProfileInput;
   learningContext?: LearningContext;
+  authUserId?: string;
   modelConfig?: {
     modelString?: string;
     model?: string;
@@ -143,6 +145,35 @@ function fallbackQualityReport(): QualityGateReport {
   };
 }
 
+function getSceneGenerationConcurrency(): number {
+  const raw = Number(
+    process.env.CLASSROOM_SCENE_GENERATION_CONCURRENCY || DEFAULT_SCENE_GENERATION_CONCURRENCY,
+  );
+  if (!Number.isFinite(raw)) return DEFAULT_SCENE_GENERATION_CONCURRENCY;
+  return Math.max(1, Math.min(4, Math.floor(raw)));
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => runWorker());
+  await Promise.all(workers);
+  return results;
+}
+
 async function generateLegacyOutlines(params: {
   requirements: UserRequirements;
   pdfText?: string;
@@ -177,9 +208,12 @@ export async function generateClassroom(
   options: {
     baseUrl: string;
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
+    signal?: AbortSignal;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
+  const throwIfAborted = () => options.signal?.throwIfAborted();
+  throwIfAborted();
 
   await options.onProgress?.({
     step: 'initializing',
@@ -188,7 +222,12 @@ export async function generateClassroom(
     scenesGenerated: 0,
   });
 
-  const { model: languageModel, modelInfo, modelString, apiKey } = resolveModel({
+  const {
+    model: languageModel,
+    modelInfo,
+    modelString,
+    apiKey,
+  } = resolveModel({
     modelString: input.modelConfig?.modelString || input.modelConfig?.model,
     apiKey: input.modelConfig?.apiKey,
     baseUrl: input.modelConfig?.baseUrl,
@@ -215,6 +254,7 @@ export async function generateClassroom(
           { role: 'user', content: userPrompt },
         ],
         maxOutputTokens: modelInfo?.outputWindow,
+        abortSignal: options.signal,
       },
       'generate-classroom',
     );
@@ -230,6 +270,7 @@ export async function generateClassroom(
           { role: 'user', content: userPrompt },
         ],
         maxOutputTokens: 256,
+        abortSignal: options.signal,
       },
       'web-search-query-rewrite',
     );
@@ -265,6 +306,7 @@ export async function generateClassroom(
     const tavilyKey = resolveWebSearchApiKey();
     if (tavilyKey) {
       try {
+        throwIfAborted();
         const searchQuery = await buildSearchQuery(requirement, pdfText, searchQueryAiCall);
 
         log.info('Running web search for classroom generation', {
@@ -277,6 +319,7 @@ export async function generateClassroom(
         const searchResult = await searchWithTavily({
           query: searchQuery.query,
           apiKey: tavilyKey,
+          signal: options.signal,
         });
         researchContext = formatSearchResultsAsContext(searchResult);
         if (researchContext) {
@@ -290,6 +333,7 @@ export async function generateClassroom(
     }
   }
 
+  throwIfAborted();
   await options.onProgress?.({
     step: 'generating_outlines',
     progress: 15,
@@ -412,68 +456,107 @@ export async function generateClassroom(
     agentIds: agents.map((agent) => agent.id),
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    schemaVersion: 1,
   };
 
   const store = createInMemoryStore(stage);
   const api = createStageAPI(store);
 
   log.info('Stage 2: Generating scene content and actions...');
+  let completedScenePlans = 0;
+  const sceneGenerationConcurrency = getSceneGenerationConcurrency();
+
+  const scenePlans = await mapWithConcurrency(
+    outlines,
+    sceneGenerationConcurrency,
+    async (outline, index) => {
+      throwIfAborted();
+      const safeOutline = applyOutlineFallbacks(outline, true);
+      const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
+
+      await options.onProgress?.({
+        step: 'generating_scenes',
+        progress: Math.max(progressStart, 31),
+        message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
+        scenesGenerated: completedScenePlans,
+        totalScenes: outlines.length,
+      });
+
+      const content = await generateSceneContent(
+        safeOutline,
+        aiCall,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        agents,
+      );
+      throwIfAborted();
+      if (!content) {
+        log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
+        completedScenePlans += 1;
+        return null;
+      }
+
+      const sceneMathGuidance = buildSceneMathGuidance({
+        analysis: requirementAnalysis,
+        sceneOrder: index + 1,
+        totalScenes: outlines.length,
+      });
+      const actions = await generateSceneActions(
+        safeOutline,
+        content,
+        aiCall,
+        undefined,
+        agents,
+        sceneMathGuidance,
+      );
+      throwIfAborted();
+      log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
+
+      completedScenePlans += 1;
+      const progressEnd =
+        30 + Math.floor((completedScenePlans / Math.max(outlines.length, 1)) * 60);
+      await options.onProgress?.({
+        step: 'generating_scenes',
+        progress: Math.min(progressEnd, 90),
+        message: `Generated scene plan ${completedScenePlans}/${outlines.length}`,
+        scenesGenerated: completedScenePlans,
+        totalScenes: outlines.length,
+      });
+
+      return {
+        index,
+        outline: safeOutline,
+        content,
+        actions,
+      };
+    },
+  );
+
   let generatedScenes = 0;
+  const totalScenePlans = scenePlans.filter(Boolean).length;
+  for (const scenePlan of scenePlans) {
+    throwIfAborted();
+    if (!scenePlan) continue;
 
-  for (const [index, outline] of outlines.entries()) {
-    const safeOutline = applyOutlineFallbacks(outline, true);
-    const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
-
-    await options.onProgress?.({
-      step: 'generating_scenes',
-      progress: Math.max(progressStart, 31),
-      message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
-      scenesGenerated: generatedScenes,
-      totalScenes: outlines.length,
-    });
-
-    const content = await generateSceneContent(
-      safeOutline,
-      aiCall,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      agents,
+    const sceneId = createSceneWithActions(
+      scenePlan.outline,
+      scenePlan.content,
+      scenePlan.actions,
+      api,
     );
-    if (!content) {
-      log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
-      continue;
-    }
-
-    const sceneMathGuidance = buildSceneMathGuidance({
-      analysis: requirementAnalysis,
-      sceneOrder: index + 1,
-      totalScenes: outlines.length,
-    });
-    const actions = await generateSceneActions(
-      safeOutline,
-      content,
-      aiCall,
-      undefined,
-      agents,
-      sceneMathGuidance,
-    );
-    log.info(`Scene "${safeOutline.title}": ${actions.length} actions`);
-
-    const sceneId = createSceneWithActions(safeOutline, content, actions, api);
     if (!sceneId) {
-      log.warn(`Skipping scene "${safeOutline.title}" — scene creation failed`);
+      log.warn(`Skipping scene "${scenePlan.outline.title}" — scene creation failed`);
       continue;
     }
 
     generatedScenes += 1;
-    const progressEnd = 30 + Math.floor(((index + 1) / Math.max(outlines.length, 1)) * 60);
     await options.onProgress?.({
       step: 'generating_scenes',
-      progress: Math.min(progressEnd, 90),
-      message: `Generated ${generatedScenes}/${outlines.length} scenes`,
+      progress: 90,
+      message: `Created ${generatedScenes}/${totalScenePlans} scenes`,
       scenesGenerated: generatedScenes,
       totalScenes: outlines.length,
     });
@@ -497,7 +580,22 @@ export async function generateClassroom(
     });
 
     try {
-      const mediaMap = await generateMediaForClassroom(outlines, stageId, options.baseUrl);
+      const mediaMap = await generateMediaForClassroom(outlines, stageId, options.baseUrl, {
+        enableImageGeneration: Boolean(input.enableImageGeneration),
+        enableVideoGeneration: Boolean(input.enableVideoGeneration),
+        abortSignal: options.signal,
+        onProgress: async (mediaProgress) => {
+          const progress =
+            90 + Math.floor((mediaProgress.completed / Math.max(mediaProgress.total, 1)) * 4);
+          await options.onProgress?.({
+            step: 'generating_media',
+            progress: Math.min(progress, 94),
+            message: mediaProgress.message,
+            scenesGenerated: scenes.length,
+            totalScenes: outlines.length,
+          });
+        },
+      });
       replaceMediaPlaceholders(scenes, mediaMap);
       log.info(`Media generation complete: ${Object.keys(mediaMap).length} files`);
     } catch (err) {
@@ -516,7 +614,20 @@ export async function generateClassroom(
     });
 
     try {
-      await generateTTSForClassroom(scenes, stageId, options.baseUrl);
+      await generateTTSForClassroom(scenes, stageId, options.baseUrl, {
+        abortSignal: options.signal,
+        onProgress: async (ttsProgress) => {
+          const progress =
+            94 + Math.floor((ttsProgress.completed / Math.max(ttsProgress.total, 1)) * 4);
+          await options.onProgress?.({
+            step: 'generating_tts',
+            progress: Math.min(progress, 98),
+            message: ttsProgress.message,
+            scenesGenerated: scenes.length,
+            totalScenes: outlines.length,
+          });
+        },
+      });
       log.info('TTS generation complete');
     } catch (err) {
       log.warn('TTS generation phase failed, continuing:', err);

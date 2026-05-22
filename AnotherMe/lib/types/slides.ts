@@ -781,6 +781,8 @@ export interface Slide {
   turningMode?: TurningMode;
   sectionTag?: SectionTag;
   type?: SlideType;
+  /** Schema version for migration support. Absent = version 0. */
+  schemaVersion?: number;
 }
 
 /**

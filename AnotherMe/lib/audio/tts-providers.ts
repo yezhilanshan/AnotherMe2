@@ -189,6 +189,7 @@ async function generateOpenAITTS(
       voice: config.voice,
       speed: config.speed || 1.0,
     }),
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {
@@ -230,6 +231,7 @@ async function generateAzureTTS(
       'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
     },
     body: ssml,
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {
@@ -263,6 +265,7 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
       volume: 1.0,
       response_format: 'wav',
     }),
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {
@@ -313,6 +316,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
         rate, // Speech rate from -500 to 500
       },
     }),
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {
@@ -329,7 +333,7 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
 
   // Download audio from URL
   const audioUrl = data.output.audio.url;
-  const audioResponse = await fetch(audioUrl);
+  const audioResponse = await fetch(audioUrl, { signal: config.abortSignal });
 
   if (!audioResponse.ok) {
     throw new Error(`Failed to download audio from URL: ${audioResponse.statusText}`);
@@ -379,6 +383,7 @@ async function generateMiniMaxTTS(
       },
       language_boost: 'auto',
     }),
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {
@@ -443,6 +448,7 @@ async function generateElevenLabsTTS(
           speed: clampedSpeed,
         },
       }),
+      signal: config.abortSignal,
     },
   );
 
@@ -521,6 +527,7 @@ async function generateDoubaoTTS(
         audio_params: { format: 'mp3', sample_rate: 24000, speech_rate: speechRate },
       },
     }),
+    signal: config.abortSignal,
   });
 
   if (!response.ok) {

@@ -102,6 +102,7 @@ export async function POST(req: NextRequest) {
               },
             ],
             maxOutputTokens: modelInfo?.outputWindow,
+            abortSignal: req.signal,
           },
           'scene-actions',
         );
@@ -113,6 +114,7 @@ export async function POST(req: NextRequest) {
           system: systemPrompt,
           prompt: userPrompt,
           maxOutputTokens: modelInfo?.outputWindow,
+          abortSignal: req.signal,
         },
         'scene-actions',
       );

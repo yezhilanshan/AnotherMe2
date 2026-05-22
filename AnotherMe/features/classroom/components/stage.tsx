@@ -9,6 +9,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { SceneSidebar } from './stage/scene-sidebar';
 import { CanvasArea } from '@/features/classroom/components/canvas/canvas-area';
 import { Roundtable } from '@/features/classroom/components/roundtable';
+import { ReactionBar } from '@/features/classroom/components/roundtable/reaction-bar';
 import { PlaybackEngine, computePlaybackView } from '@/lib/playback';
 import type { EngineMode, TriggerEvent, Effect } from '@/lib/playback';
 import { ActionEngine } from '@/lib/action/engine';
@@ -941,20 +942,18 @@ export function Stage({
 
   // Calculate scene viewer height (keep space only for roundtable in playback mode)
   const sceneViewerHeight = (() => {
-    const roundtableHeight = mode === 'playback' && !isPresenting ? 192 : 0;
+    const roundtableHeight = mode === 'playback' && !isPresenting ? (isMobile ? 160 : 192) : 0;
     return `calc(100% - ${roundtableHeight}px)`;
   })();
   const chatDisplayWidth =
-    isMobile && typeof window !== 'undefined'
-      ? Math.min(window.innerWidth, 430)
-      : chatAreaWidth;
+    isMobile && typeof window !== 'undefined' ? Math.min(window.innerWidth, 430) : chatAreaWidth;
   const chatDisplayCollapsed = isMobile ? !mobileChatDrawerOpen : chatAreaCollapsed;
 
   return (
     <div
       ref={stageRef}
       className={cn(
-        'flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900',
+        'flex-1 flex overflow-hidden bg-[#f6f4f0] dark:bg-gray-950 relative',
         isPresenting && !controlsVisible && 'cursor-none',
       )}
     >
@@ -964,7 +963,7 @@ export function Stage({
         onCollapseChange={setSidebarCollapsed}
         onSceneSelect={gatedSceneSwitch}
         onRetryOutline={onRetryOutline}
-        className="hidden md:flex"
+        className="hidden md:flex md:absolute md:inset-y-3 md:left-3 md:z-40 md:rounded-3xl md:border md:border-white/70 md:shadow-[0_24px_80px_rgba(15,23,42,0.14)] md:dark:border-white/10"
       />
 
       {mobileSceneDrawerOpen && (
@@ -1176,6 +1175,14 @@ export function Stage({
               tutorToolState={tutorToolState}
               onTutorToolStateChange={setTutorToolState}
             />
+            {/* Reaction Bar — floating at the bottom during active discussion */}
+            {chatIsStreaming && chatSessionType === 'discussion' && (
+              <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2">
+                <ReactionBar
+                  onReaction={(type) => chatAreaRef.current?.addReaction(type)}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1201,7 +1208,7 @@ export function Stage({
             setChatAreaCollapsed(collapsed);
           }
         }}
-        className="max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-mobile-screen max-md:max-w-full max-md:pt-safe"
+        className="md:absolute md:inset-y-3 md:right-3 md:z-40 md:h-[calc(100%-1.5rem)] md:rounded-3xl md:border md:border-white/70 md:shadow-[0_24px_80px_rgba(15,23,42,0.14)] md:dark:border-white/10 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:z-50 max-md:h-[78dvh] max-md:max-w-full max-md:rounded-t-[28px] max-md:border-t max-md:border-white/70 max-md:shadow-[0_-24px_70px_rgba(15,23,42,0.25)]"
         activeBubbleId={activeBubbleId}
         onActiveBubble={(id) => setActiveBubbleId(id)}
         currentSceneId={currentSceneId}

@@ -101,7 +101,7 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
       {/* Base URL + API Key Configuration (for remote providers like MinerU) */}
       {(needsRemoteConfig || isServerConfigured) && (
         <div className="space-y-4 rounded-[28px] border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.84)] p-5 shadow-[0_18px_40px_rgba(99,71,28,0.05)]">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">{t('settings.pdfBaseUrl')}</Label>
               <div className="flex gap-2">
@@ -171,6 +171,27 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
                   {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+                {t('settings.modelName')}
+              </Label>
+              <Input
+                name={`pdf-model-${selectedProviderId}`}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="输入模型名（可选）"
+                value={providerConfig?.modelId || ''}
+                onChange={(e) =>
+                  setPDFProviderConfig(selectedProviderId, {
+                    modelId: e.target.value,
+                  })
+                }
+                className="h-11 rounded-2xl border-[rgba(151,118,75,0.16)] bg-white/88 text-sm"
+              />
             </div>
           </div>
 

@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
               },
             ],
             maxOutputTokens: modelInfo?.outputWindow,
+            abortSignal: req.signal,
           },
           'scene-content',
         );
@@ -109,6 +110,7 @@ export async function POST(req: NextRequest) {
           system: systemPrompt,
           prompt: userPrompt,
           maxOutputTokens: modelInfo?.outputWindow,
+          abortSignal: req.signal,
         },
         'scene-content',
       );

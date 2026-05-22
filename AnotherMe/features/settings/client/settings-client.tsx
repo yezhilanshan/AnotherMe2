@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   User,
   Bell,
@@ -33,6 +33,8 @@ import {
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { AVATAR_OPTIONS, useUserProfileStore } from '@/lib/store/user-profile';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -180,11 +182,11 @@ export default function SettingsPage() {
     if (!providerIds.includes(selectedProviderId) && providerIds.length > 0) {
       setSelectedProviderId(providerIds[0]);
     }
-    if (!visionProviderIds.includes(selectedVisionProviderId) && visionProviderIds.length > 0) {
-      setSelectedVisionProviderId(visionProviderIds[0]);
+    if (!providerIds.includes(selectedVisionProviderId) && providerIds.length > 0) {
+      setSelectedVisionProviderId(providerIds[0]);
     }
-    if (!visionProviderIds.includes(selectedOcrProviderId) && visionProviderIds.length > 0) {
-      setSelectedOcrProviderId(visionProviderIds[0]);
+    if (!providerIds.includes(selectedOcrProviderId) && providerIds.length > 0) {
+      setSelectedOcrProviderId(providerIds[0]);
     }
   }, [
     providerIds,
@@ -319,8 +321,24 @@ export default function SettingsPage() {
 
   const selectedProvider = providersConfig[selectedProviderId];
   const selectedModels = selectedProvider?.models || [];
+  const selectedVisionProvider = providersConfig[selectedVisionProviderId];
+  const selectedVisionModels = selectedVisionProvider?.models || [];
   const selectedOcrProvider = providersConfig[selectedOcrProviderId];
   const selectedOcrModels = selectedOcrProvider?.models || [];
+
+  const ensureModelInProvider = useCallback(
+    (targetProviderId: ProviderId, modelValue: string) => {
+      const trimmed = modelValue.trim();
+      if (!trimmed) return;
+      const current = providersConfig[targetProviderId];
+      const existingModels = current?.models || [];
+      if (existingModels.some((model) => model.id === trimmed)) return;
+      setProviderConfig(targetProviderId, {
+        models: [...existingModels, { id: trimmed, name: trimmed }],
+      });
+    },
+    [providersConfig, setProviderConfig],
+  );
 
   const handleSaveProfile = () => {
     setNickname(profileDraft.nickname.trim());
@@ -349,16 +367,7 @@ export default function SettingsPage() {
       selectedOcrProviderId,
       ocrBaseUrlDraft,
     );
-    const targetModelIds = new Set([
-      ...(targetProvider.models?.map((model) => model.id) || []),
-      ...(targetProvider.serverModels || []),
-    ]);
-    const selectedModelId =
-      inferredProviderId === selectedProviderId
-        ? modelIdDraft.trim()
-        : modelIdDraft.trim() && targetModelIds.has(modelIdDraft.trim())
-          ? modelIdDraft.trim()
-          : '';
+    const selectedModelId = modelIdDraft.trim();
     const targetModelId =
       selectedModelId || targetProvider.models?.[0]?.id || targetProvider.serverModels?.[0] || '';
     const targetVisionModelId =
@@ -372,6 +381,10 @@ export default function SettingsPage() {
     const targetOcrModelId =
       ocrModelIdDraft.trim() ||
       resolveDefaultOcrModel(inferredOcrProviderId, ocrBaseUrlDraft, targetVisionModelId);
+
+    ensureModelInProvider(inferredProviderId, selectedModelId);
+    ensureModelInProvider(inferredVisionProviderId, visionModelIdDraft);
+    ensureModelInProvider(inferredOcrProviderId, ocrModelIdDraft);
 
     setProviderConfig(inferredProviderId, {
       apiKey: apiKeyDraft.trim(),
@@ -391,7 +404,7 @@ export default function SettingsPage() {
     setModel(inferredProviderId, targetModelId);
     setVisionModel(inferredVisionProviderId, targetVisionModelId);
     setOcrModel(inferredOcrProviderId, targetOcrModelId);
-    setOcrEngine(ocrEngine);
+    setOcrEngine('llm');
     setAiSaved(true);
     window.setTimeout(() => setAiSaved(false), 1500);
   };
@@ -407,17 +420,10 @@ export default function SettingsPage() {
       }
       const inferredProviderId = inferProviderIdFromConnection(selectedProviderId, baseUrlDraft);
       const verifyProvider = providersConfig[inferredProviderId] || selectedProvider;
-      const verifyModelIds = new Set([
-        ...(verifyProvider.models?.map((model) => model.id) || []),
-        ...(verifyProvider.serverModels || []),
-      ]);
-      const verifyDraftModelId =
-        inferredProviderId === selectedProviderId
-          ? modelIdDraft.trim()
-          : modelIdDraft.trim() && verifyModelIds.has(modelIdDraft.trim())
-            ? modelIdDraft.trim()
-            : '';
-      const verifyModelId = verifyDraftModelId || verifyProvider.models?.[0]?.id;
+      const verifyModelId =
+        modelIdDraft.trim() ||
+        verifyProvider.models?.[0]?.id ||
+        verifyProvider.serverModels?.[0];
       if (!verifyModelId) {
         return { ok: false, text: '没有可测试的文本模型' };
       }
@@ -456,17 +462,10 @@ export default function SettingsPage() {
       if (!visionProvider) {
         return { ok: false, text: '未选择视觉模型提供商' };
       }
-      const visionModelIds = new Set([
-        ...(visionProvider.models?.map((model) => model.id) || []),
-        ...(visionProvider.serverModels || []),
-      ]);
-      const visionDraftModelId =
-        inferredVisionProviderId === selectedVisionProviderId
-          ? visionModelIdDraft.trim()
-          : visionModelIdDraft.trim() && visionModelIds.has(visionModelIdDraft.trim())
-            ? visionModelIdDraft.trim()
-            : '';
-      const visionModel = visionDraftModelId || visionProvider.models?.[0]?.id;
+      const visionModel =
+        visionModelIdDraft.trim() ||
+        visionProvider.models?.[0]?.id ||
+        visionProvider.serverModels?.[0];
       if (!visionModel) {
         return { ok: false, text: '没有可测试的视觉模型' };
       }
@@ -477,10 +476,11 @@ export default function SettingsPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             apiKey: visionApiKeyDraft.trim() || apiKeyDraft.trim(),
-            baseUrl: visionBaseUrlDraft.trim() || baseUrlDraft.trim(),
-            model: `${inferredVisionProviderId}:${visionModel}`,
-            providerType: visionProvider.type,
-            requiresApiKey: visionProvider.requiresApiKey,
+          baseUrl: visionBaseUrlDraft.trim() || baseUrlDraft.trim(),
+          model: `${inferredVisionProviderId}:${visionModel}`,
+          providerType: visionProvider.type,
+          requiresApiKey: visionProvider.requiresApiKey,
+          isVision: true,
           }),
         });
         const payload = (await resp.json()) as { success: boolean; error?: string };
@@ -514,11 +514,14 @@ export default function SettingsPage() {
           body: JSON.stringify({
             providerId: inferredOcrProviderId,
             apiKey: ocrApiKeyDraft.trim() || apiKeyDraft.trim(),
-            baseUrl: ocrBaseUrlDraft.trim() || baseUrlDraft.trim(),
-            model: ocrModelIdDraft.trim() || ocrProvider.models?.[0]?.id,
-            providerType: ocrProvider.type,
-            requiresApiKey: ocrProvider.requiresApiKey,
-          }),
+          baseUrl: ocrBaseUrlDraft.trim() || baseUrlDraft.trim(),
+          model:
+            ocrModelIdDraft.trim() ||
+            ocrProvider.models?.[0]?.id ||
+            ocrProvider.serverModels?.[0],
+          providerType: ocrProvider.type,
+          requiresApiKey: ocrProvider.requiresApiKey,
+        }),
         });
         const payload = (await resp.json()) as {
           success?: boolean;
@@ -850,551 +853,459 @@ export default function SettingsPage() {
                 </motion.div>
               </div>
 
-              {/* Main Content Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                {/* Left Column - Provider Selection & Settings */}
-                <div className="lg:col-span-8 space-y-3">
-                  {/* Compact Provider Selector */}
-                  <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
-                        <Settings className="h-4 w-4 text-violet-500" />
-                        选择模型提供商
-                      </h3>
-                      <span className="text-xs text-muted-foreground">
-                        {providerIds.length} 个可用
-                      </span>
+              {/* Top Cards: System Overview, More Config, Tips */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Compact Stats */}
+                <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl p-4 text-white">
+                  <h3 className="font-semibold mb-3 text-sm flex items-center gap-1.5">
+                    <Zap className="h-3.5 w-3.5" />
+                    系统概览
+                  </h3>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="text-center">
+                      <div className="text-xl font-bold">{providerIds.length}</div>
+                      <div className="text-[10px] text-violet-100">提供商</div>
                     </div>
-                    {/* Horizontal scrollable provider tabs */}
-                    <div className="flex flex-wrap gap-2">
-                      {providerIds.map((id, index) => {
-                        const item = providersConfig[id];
-                        const active = selectedProviderId === id;
-                        return (
-                          <motion.button
-                            key={id}
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ delay: index * 0.03 }}
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            type="button"
-                            onClick={() => setSelectedProviderId(id)}
-                            className={cn(
-                              'flex items-center gap-2 px-3 py-2 rounded-lg border transition-all duration-200',
-                              active
-                                ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-sm'
-                                : 'border-border bg-card hover:border-primary/30 hover:shadow-sm',
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                'w-2 h-2 rounded-full',
-                                active
-                                  ? 'bg-violet-500'
-                                  : item?.isServerConfigured
-                                    ? 'bg-green-400'
-                                    : 'bg-gray-300',
-                              )}
-                            />
-                            <span
-                              className={cn(
-                                'text-sm font-medium',
-                                active ? 'text-violet-700 dark:text-violet-300' : 'text-foreground',
-                              )}
-                            >
-                              {item?.name || id}
-                            </span>
-                            {active && (
-                              <motion.div
-                                initial={{ scale: 0 }}
-                                animate={{ scale: 1 }}
-                                className="ml-1"
-                              >
-                                <CheckCircle2 className="h-3.5 w-3.5 text-violet-500" />
-                              </motion.div>
-                            )}
-                          </motion.button>
-                        );
-                      })}
+                    <div className="text-center border-x border-white/20">
+                      <div className="text-xl font-bold">{serverConfiguredCount}</div>
+                      <div className="text-[10px] text-violet-100">已配置</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-bold">{backendModelCount}</div>
+                      <div className="text-[10px] text-violet-100">模型数</div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Connection Settings with Tabs */}
-                  <div className="bg-card rounded-xl p-4 border border-border shadow-sm">
-                    <div className="flex items-center gap-2 mb-4">
-                      <div className="p-1.5 bg-violet-100 dark:bg-violet-900/30 rounded-lg">
-                        <Server className="h-4 w-4 text-violet-600" />
-                      </div>
-                      <h3 className="font-semibold text-foreground text-sm">
-                        {selectedProvider?.name || selectedProviderId} 连接设置
-                      </h3>
+                {/* Quick Actions */}
+                <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-3 border border-border">
+                  <h3 className="font-semibold text-foreground mb-2 text-xs flex items-center gap-1.5">
+                    <Settings className="h-3.5 w-3.5 text-amber-500" />
+                    更多配置
+                  </h3>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      {
+                        label: 'TTS',
+                        section: 'tts' as const,
+                        icon: Volume2,
+                        color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600',
+                      },
+                      {
+                        label: 'ASR',
+                        section: 'asr' as const,
+                        icon: Mic,
+                        color: 'bg-green-100 dark:bg-green-900/30 text-green-600',
+                      },
+                      {
+                        label: 'PDF',
+                        section: 'pdf' as const,
+                        icon: FileText,
+                        color: 'bg-red-100 dark:bg-red-900/30 text-red-600',
+                      },
+                      {
+                        label: 'Image',
+                        section: 'image' as const,
+                        icon: ImageIcon,
+                        color: 'bg-pink-100 dark:bg-pink-900/30 text-pink-600',
+                      },
+                      {
+                        label: 'Video',
+                        section: 'video' as const,
+                        icon: Video,
+                        color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600',
+                      },
+                      {
+                        label: '搜索',
+                        section: 'web-search' as const,
+                        icon: Globe,
+                        color: 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-600',
+                      },
+                    ].map((item) => (
+                      <motion.button
+                        key={item.label}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        type="button"
+                        onClick={() => openAdvancedSettings(item.section)}
+                        className="flex flex-col items-center gap-1 p-2 rounded-lg bg-card border border-border hover:border-primary/30 hover:shadow-sm transition-all"
+                      >
+                        <div className={cn('p-1 rounded-md', item.color)}>
+                          <item.icon className="h-3 w-3" />
+                        </div>
+                        <span className="text-[10px] font-medium text-foreground">
+                          {item.label}
+                        </span>
+                      </motion.button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Compact Help Card */}
+                <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-xl p-3 border border-amber-100 dark:border-amber-800">
+                  <div className="flex items-start gap-2">
+                    <div className="p-1.5 bg-amber-100 dark:bg-amber-800 rounded-lg shrink-0">
+                      <Sparkles className="h-3 w-3 text-amber-600" />
                     </div>
+                    <div>
+                      <h4 className="font-semibold text-amber-900 dark:text-amber-300 text-xs">
+                        提示
+                      </h4>
+                      <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 leading-relaxed">
+                        每个模型可独立配置提供商、模型名和 Base URL。模型名可手动输入，支持自定义模型。点击测试连接可验证所有配置。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-                    {/* Compact Form Layout */}
-                    <div className="space-y-3">
-                      {/* API Key & Base URL in one row on larger screens */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                            <Shield className="h-3 w-3 text-gray-400" />
-                            API Key
-                          </label>
-                          <div className="relative">
-                            <input
-                              type={showApiKey ? 'text' : 'password'}
-                              value={apiKeyDraft}
-                              onChange={(e) => setApiKeyDraft(e.target.value)}
-                              placeholder="请输入 API Key"
-                              className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowApiKey((v) => !v)}
-                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              {showApiKey ? (
-                                <EyeOff className="h-3.5 w-3.5" />
-                              ) : (
-                                <Eye className="h-3.5 w-3.5" />
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                            <Globe className="h-3 w-3 text-gray-400" />
-                            Base URL
-                          </label>
-                          <input
-                            type="url"
-                            value={baseUrlDraft}
-                            onChange={(e) => setBaseUrlDraft(e.target.value)}
-                            placeholder={selectedProvider?.defaultBaseUrl || '可选'}
-                            className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
-                          />
-                        </div>
-                      </div>
+              {/* Three Model Config Cards */}
+              <div className="space-y-3">
+                {/* Text Model */}
+                <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="p-1.5 bg-violet-100 dark:bg-violet-900/30 rounded-lg">
+                      <Sparkles className="h-4 w-4 text-violet-600" />
+                    </div>
+                    <h3 className="font-semibold text-foreground text-sm">文本模型</h3>
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">必选</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground">提供商</label>
+                      <Select
+                        value={selectedProviderId}
+                        onValueChange={(v) => setSelectedProviderId(v as ProviderId)}
+                      >
+                        <SelectTrigger className="h-10 rounded-lg border-border bg-background text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-lg">
+                          {providerIds.map((id) => (
+                            <SelectItem key={id} value={id} className="text-sm">
+                              {providersConfig[id]?.name || id}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground">模型名</label>
+                      <Input
+                        value={modelIdDraft}
+                        onChange={(e) => setModelIdDraft(e.target.value)}
+                        placeholder={selectedModels[0]?.id || '输入模型名'}
+                        className="h-10 rounded-lg border-border bg-background text-sm"
+                        list="text-model-suggestions"
+                      />
+                      <datalist id="text-model-suggestions">
+                        {selectedModels.map((model) => (
+                          <option key={model.id} value={model.id} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                        <Globe className="h-3 w-3 text-gray-400" />
+                        Base URL
+                      </label>
+                      <Input
+                        type="url"
+                        value={baseUrlDraft}
+                        onChange={(e) => setBaseUrlDraft(e.target.value)}
+                        placeholder={selectedProvider?.defaultBaseUrl || '可选'}
+                        className="h-10 rounded-lg border-border bg-background text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-1.5">
+                    <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                      <Shield className="h-3 w-3 text-gray-400" />
+                      API Key
+                    </label>
+                    <div className="relative max-w-md">
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        value={apiKeyDraft}
+                        onChange={(e) => setApiKeyDraft(e.target.value)}
+                        placeholder="请输入 API Key"
+                        className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
 
-                      {/* Model Selection */}
+                {/* Vision Model */}
+                <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                      <Eye className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <h3 className="font-semibold text-foreground text-sm">视觉模型</h3>
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">必选</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground">提供商</label>
+                      <Select
+                        value={selectedVisionProviderId}
+                        onValueChange={(v) => setSelectedVisionProviderId(v as ProviderId)}
+                      >
+                        <SelectTrigger className="h-10 rounded-lg border-border bg-background text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-lg">
+                          {providerIds.map((id) => (
+                            <SelectItem key={id} value={id} className="text-sm">
+                              {providersConfig[id]?.name || id}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground">模型名</label>
+                      <Input
+                        value={visionModelIdDraft}
+                        onChange={(e) => setVisionModelIdDraft(e.target.value)}
+                        placeholder={selectedVisionModels[0]?.id || '输入视觉模型名'}
+                        className="h-10 rounded-lg border-border bg-background text-sm"
+                        list="vision-model-suggestions"
+                      />
+                      <datalist id="vision-model-suggestions">
+                        {selectedVisionModels.map((model) => (
+                          <option key={model.id} value={model.id} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                        <Globe className="h-3 w-3 text-gray-400" />
+                        Base URL
+                      </label>
+                      <Input
+                        type="url"
+                        value={visionBaseUrlDraft}
+                        onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
+                        placeholder={selectedVisionProvider?.defaultBaseUrl || '可选'}
+                        className="h-10 rounded-lg border-border bg-background text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-1.5">
+                    <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                      <Shield className="h-3 w-3 text-gray-400" />
+                      API Key
+                    </label>
+                    <div className="relative max-w-md">
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        value={visionApiKeyDraft}
+                        onChange={(e) => setVisionApiKeyDraft(e.target.value)}
+                        placeholder="留空则使用文本模型的 API Key"
+                        className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey((v) => !v)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* OCR Model */}
+                <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-4 border border-border">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="p-1.5 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
+                      <FileText className="h-4 w-4 text-emerald-600" />
+                    </div>
+                    <h3 className="font-semibold text-foreground text-sm">OCR 模型</h3>
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">必选</span>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="space-y-1.5">
-                        <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                          <Sparkles className="h-3 w-3 text-gray-400" />
-                          文本模型
-                        </label>
-                        <input
-                          type="text"
-                          list={`models-${selectedProviderId}`}
-                          value={modelIdDraft}
-                          onChange={(e) => setModelIdDraft(e.target.value)}
-                          placeholder={selectedModels[0]?.id || '请输入模型 ID'}
-                          className="w-full px-3 py-2 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                        <label className="text-xs font-medium text-foreground">提供商</label>
+                        <Select
+                          value={selectedOcrProviderId}
+                          onValueChange={(v) => setSelectedOcrProviderId(v as ProviderId)}
+                        >
+                          <SelectTrigger className="h-10 rounded-lg border-border bg-background text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-lg">
+                            {providerIds.map((id) => (
+                              <SelectItem key={id} value={id} className="text-sm">
+                                {providersConfig[id]?.name || id}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground">模型名</label>
+                        <Input
+                          value={ocrModelIdDraft}
+                          onChange={(e) => setOcrModelIdDraft(e.target.value)}
+                          placeholder={selectedOcrModels[0]?.id || '输入 OCR 模型名'}
+                          className="h-10 rounded-lg border-border bg-background text-sm"
+                          list="ocr-model-suggestions"
                         />
-                        <datalist id={`models-${selectedProviderId}`}>
-                          {selectedModels.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.name || model.id}
-                            </option>
+                        <datalist id="ocr-model-suggestions">
+                          {selectedOcrModels.map((model) => (
+                            <option key={model.id} value={model.id} />
                           ))}
                         </datalist>
                       </div>
-
-                      {/* Collapsible Advanced Settings */}
-                      <div className="border border-border rounded-lg overflow-hidden">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                          <Globe className="h-3 w-3 text-gray-400" />
+                          Base URL
+                        </label>
+                        <Input
+                          type="url"
+                          value={ocrBaseUrlDraft}
+                          onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
+                          placeholder={selectedOcrProvider?.defaultBaseUrl || '可选'}
+                          className="h-10 rounded-lg border-border bg-background text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                        <Shield className="h-3 w-3 text-gray-400" />
+                        API Key
+                      </label>
+                      <div className="relative max-w-md">
+                        <input
+                          type={showApiKey ? 'text' : 'password'}
+                          value={ocrApiKeyDraft}
+                          onChange={(e) => setOcrApiKeyDraft(e.target.value)}
+                          placeholder="留空则使用文本模型的 API Key"
+                          className="w-full px-3 py-2 pr-10 bg-muted border border-border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all outline-none text-foreground text-sm"
+                        />
                         <button
                           type="button"
-                          onClick={() => setShowVisionOcrSettings(!showVisionOcrSettings)}
-                          className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/50 hover:bg-muted transition-colors"
+                          onClick={() => setShowApiKey((v) => !v)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-muted-foreground hover:text-foreground transition-colors"
                         >
-                          <div className="flex items-center gap-2">
-                            <Eye className="h-3.5 w-3.5 text-violet-500" />
-                            <span className="text-xs font-medium text-foreground">
-                              视觉识别 & OCR 配置
-                            </span>
-                          </div>
-                          <ChevronRight
-                            className={cn(
-                              'h-4 w-4 text-muted-foreground transition-transform duration-200',
-                              showVisionOcrSettings ? 'rotate-90' : '',
-                            )}
-                          />
+                          {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                         </button>
-                        <AnimatePresence>
-                          {showVisionOcrSettings && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: 'auto', opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              transition={{ duration: 0.2 }}
-                              className="overflow-hidden"
-                            >
-                              <div className="p-3 space-y-4">
-                                {/* Vision Settings */}
-                                <div className="space-y-2 border-b border-border pb-3">
-                                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                                    <Eye className="h-3 w-3 text-violet-500" />
-                                    视觉识别配置
-                                  </h4>
-                                  {/* Vision Provider & Model */}
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <select
-                                      value={selectedVisionProviderId}
-                                      onChange={(e) =>
-                                        setSelectedVisionProviderId(e.target.value as ProviderId)
-                                      }
-                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                    >
-                                      {visionProviderIds.map((id) => (
-                                        <option key={id} value={id}>
-                                          {providersConfig[id]?.name || id}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <input
-                                      type="text"
-                                      list={`models-vision-${selectedVisionProviderId}`}
-                                      value={visionModelIdDraft}
-                                      onChange={(e) => setVisionModelIdDraft(e.target.value)}
-                                      placeholder="视觉模型"
-                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                    />
-                                  </div>
-                                  {/* Vision API Key & Base URL */}
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                    <div className="relative">
-                                      <input
-                                        type={showApiKey ? 'text' : 'password'}
-                                        value={visionApiKeyDraft}
-                                        onChange={(e) => setVisionApiKeyDraft(e.target.value)}
-                                        placeholder="视觉 API Key（可选）"
-                                        className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => setShowApiKey((v) => !v)}
-                                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-                                      >
-                                        {showApiKey ? (
-                                          <EyeOff className="h-3 w-3" />
-                                        ) : (
-                                          <Eye className="h-3 w-3" />
-                                        )}
-                                      </button>
-                                    </div>
-                                    <input
-                                      type="url"
-                                      value={visionBaseUrlDraft}
-                                      onChange={(e) => setVisionBaseUrlDraft(e.target.value)}
-                                      placeholder="视觉 Base URL（可选）"
-                                      className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                    />
-                                  </div>
-                                </div>
-                                {/* OCR Settings */}
-                                <div className="space-y-2">
-                                  <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                                    <FileText className="h-3 w-3 text-violet-500" />
-                                    OCR 识别配置
-                                  </h4>
-                                  {/* OCR Engine Selector */}
-                                  <select
-                                    value={ocrEngine}
-                                    onChange={(e) =>
-                                      setOcrEngine(e.target.value as 'llm' | 'paddleocr')
-                                    }
-                                    className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm w-full"
-                                  >
-                                    <option value="llm">LLM OCR (云端)</option>
-                                    <option value="paddleocr">PaddleOCR (本地)</option>
-                                  </select>
-                                  {/* OCR Provider & Model - Only show for LLM OCR */}
-                                  {ocrEngine === 'llm' && (
-                                    <>
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <select
-                                          value={selectedOcrProviderId}
-                                          onChange={(e) =>
-                                            setSelectedOcrProviderId(e.target.value as ProviderId)
-                                          }
-                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                        >
-                                          {visionProviderIds.map((id) => (
-                                            <option key={id} value={id}>
-                                              {providersConfig[id]?.name || id}
-                                            </option>
-                                          ))}
-                                        </select>
-                                        <input
-                                          type="text"
-                                          list={`models-ocr-${selectedOcrProviderId}`}
-                                          value={ocrModelIdDraft}
-                                          onChange={(e) => setOcrModelIdDraft(e.target.value)}
-                                          placeholder="OCR 模型"
-                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                        />
-                                        <datalist id={`models-ocr-${selectedOcrProviderId}`}>
-                                          {selectedOcrModels.map((model) => (
-                                            <option key={model.id} value={model.id}>
-                                              {model.name || model.id}
-                                            </option>
-                                          ))}
-                                        </datalist>
-                                      </div>
-                                      {/* OCR API Key & Base URL */}
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                        <div className="relative">
-                                          <input
-                                            type={showApiKey ? 'text' : 'password'}
-                                            value={ocrApiKeyDraft}
-                                            onChange={(e) => setOcrApiKeyDraft(e.target.value)}
-                                            placeholder="OCR API Key（可选）"
-                                            className="w-full px-2.5 py-2 pr-8 bg-background border border-border rounded-lg text-sm"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => setShowApiKey((v) => !v)}
-                                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
-                                          >
-                                            {showApiKey ? (
-                                              <EyeOff className="h-3 w-3" />
-                                            ) : (
-                                              <Eye className="h-3 w-3" />
-                                            )}
-                                          </button>
-                                        </div>
-                                        <input
-                                          type="url"
-                                          value={ocrBaseUrlDraft}
-                                          onChange={(e) => setOcrBaseUrlDraft(e.target.value)}
-                                          placeholder="OCR Base URL（可选）"
-                                          className="px-2.5 py-2 bg-background border border-border rounded-lg text-sm"
-                                        />
-                                      </div>
-                                    </>
-                                  )}
-                                  {ocrEngine === 'paddleocr' && (
-                                    <div className="text-xs text-muted-foreground px-2 py-1 bg-muted/50 rounded">
-                                      PaddleOCR 是本地 OCR 引擎，无需配置 API
-                                      Key。请确保服务器已安装并启动 PaddleOCR 服务。
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
 
-                    {/* Action Buttons */}
-                    <div className="flex flex-wrap gap-2 pt-3 mt-3 border-t border-border">
-                      <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        type="button"
-                        onClick={handleSaveAiPreference}
-                        className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm inline-flex items-center gap-1.5"
-                      >
-                        {aiSaved ? (
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                        ) : (
-                          <Save className="h-3.5 w-3.5" />
-                        )}
-                        {aiSaved ? '已保存' : '保存设置'}
-                      </motion.button>
-                      <motion.button
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        type="button"
-                        onClick={handleVerifyProvider}
-                        disabled={testing}
-                        className="px-4 py-2 bg-muted hover:bg-muted/80 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 disabled:opacity-70"
-                      >
-                        {testing ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Zap className="h-3.5 w-3.5" />
-                        )}
-                        测试连接
-                      </motion.button>
-                    </div>
+              {/* Action Buttons */}
+              <div className="bg-card rounded-xl p-4 border border-border shadow-sm">
+                <div className="flex flex-wrap gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    onClick={handleSaveAiPreference}
+                    className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-all shadow-sm inline-flex items-center gap-1.5"
+                  >
+                    {aiSaved ? (
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5" />
+                    )}
+                    {aiSaved ? '已保存' : '保存设置'}
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    onClick={handleVerifyProvider}
+                    disabled={testing}
+                    className="px-5 py-2.5 bg-muted hover:bg-muted/80 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 text-sm font-medium rounded-lg transition-all inline-flex items-center gap-1.5 disabled:opacity-70"
+                  >
+                    {testing ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="h-3.5 w-3.5" />
+                    )}
+                    测试连接
+                  </motion.button>
+                </div>
 
-                    {/* Test Results */}
-                    {(testResults.text || testResults.vision || testResults.ocr) && (
-                      <div className="mt-3 space-y-2">
-                        {/* Text Model Result */}
-                        {testResults.text && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className={cn(
-                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
-                              testResults.text.ok
-                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
-                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
-                            )}
-                          >
-                            {testResults.text.ok ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
-                            ) : (
-                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                            )}
-                            <span className="font-medium">文本模型:</span>
-                            {testResults.text.text}
-                          </motion.div>
+                {/* Test Results */}
+                {(testResults.text || testResults.vision || testResults.ocr) && (
+                  <div className="mt-3 space-y-2">
+                    {testResults.text && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                          testResults.text.ok
+                            ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                            : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
                         )}
-                        {/* Vision Model Result */}
-                        {testResults.vision && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className={cn(
-                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
-                              testResults.vision.ok
-                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
-                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
-                            )}
-                          >
-                            {testResults.vision.ok ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
-                            ) : (
-                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                            )}
-                            <span className="font-medium">视觉模型:</span>
-                            {testResults.vision.text}
-                          </motion.div>
+                      >
+                        {testResults.text.ok ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
                         )}
-                        {/* OCR Model Result */}
-                        {testResults.ocr && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className={cn(
-                              'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
-                              testResults.ocr.ok
-                                ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
-                                : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
-                            )}
-                          >
-                            {testResults.ocr.ok ? (
-                              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
-                            ) : (
-                              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                            )}
-                            <span className="font-medium">OCR 模型:</span>
-                            {testResults.ocr.text}
-                          </motion.div>
+                        <span className="font-medium">文本模型:</span>
+                        {testResults.text.text}
+                      </motion.div>
+                    )}
+                    {testResults.vision && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                          testResults.vision.ok
+                            ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                            : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
                         )}
-                      </div>
+                      >
+                        {testResults.vision.ok ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                        )}
+                        <span className="font-medium">视觉模型:</span>
+                        {testResults.vision.text}
+                      </motion.div>
+                    )}
+                    {testResults.ocr && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          'px-3 py-2 rounded-lg flex items-center gap-2 text-xs',
+                          testResults.ocr.ok
+                            ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                            : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300',
+                        )}
+                      >
+                        {testResults.ocr.ok ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                        )}
+                        <span className="font-medium">OCR 模型:</span>
+                        {testResults.ocr.text}
+                      </motion.div>
                     )}
                   </div>
-                </div>
-
-                {/* Right Column - Stats & Quick Actions */}
-                <div className="lg:col-span-4 space-y-3">
-                  {/* Compact Stats */}
-                  <div className="bg-gradient-to-br from-violet-500 to-purple-600 rounded-xl p-4 text-white">
-                    <h3 className="font-semibold mb-3 text-sm flex items-center gap-1.5">
-                      <Zap className="h-3.5 w-3.5" />
-                      系统概览
-                    </h3>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="text-center">
-                        <div className="text-xl font-bold">{providerIds.length}</div>
-                        <div className="text-[10px] text-violet-100">提供商</div>
-                      </div>
-                      <div className="text-center border-x border-white/20">
-                        <div className="text-xl font-bold">{serverConfiguredCount}</div>
-                        <div className="text-[10px] text-violet-100">已配置</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xl font-bold">{backendModelCount}</div>
-                        <div className="text-[10px] text-violet-100">模型数</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Quick Actions */}
-                  <div className="bg-gradient-to-br from-gray-50 to-white dark:from-slate-800/50 dark:to-slate-900/50 rounded-xl p-3 border border-border">
-                    <h3 className="font-semibold text-foreground mb-2 text-xs flex items-center gap-1.5">
-                      <Settings className="h-3.5 w-3.5 text-amber-500" />
-                      更多配置
-                    </h3>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {[
-                        {
-                          label: 'TTS',
-                          section: 'tts' as const,
-                          icon: Volume2,
-                          color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600',
-                        },
-                        {
-                          label: 'ASR',
-                          section: 'asr' as const,
-                          icon: Mic,
-                          color: 'bg-green-100 dark:bg-green-900/30 text-green-600',
-                        },
-                        {
-                          label: 'PDF',
-                          section: 'pdf' as const,
-                          icon: FileText,
-                          color: 'bg-red-100 dark:bg-red-900/30 text-red-600',
-                        },
-                        {
-                          label: 'Image',
-                          section: 'image' as const,
-                          icon: ImageIcon,
-                          color: 'bg-pink-100 dark:bg-pink-900/30 text-pink-600',
-                        },
-                        {
-                          label: 'Video',
-                          section: 'video' as const,
-                          icon: Video,
-                          color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-600',
-                        },
-                        {
-                          label: '搜索',
-                          section: 'web-search' as const,
-                          icon: Globe,
-                          color: 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-600',
-                        },
-                      ].map((item) => (
-                        <motion.button
-                          key={item.label}
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          type="button"
-                          onClick={() => openAdvancedSettings(item.section)}
-                          className="flex flex-col items-center gap-1 p-2 rounded-lg bg-card border border-border hover:border-primary/30 hover:shadow-sm transition-all"
-                        >
-                          <div className={cn('p-1 rounded-md', item.color)}>
-                            <item.icon className="h-3 w-3" />
-                          </div>
-                          <span className="text-[10px] font-medium text-foreground">
-                            {item.label}
-                          </span>
-                        </motion.button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Compact Help Card */}
-                  <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-xl p-3 border border-amber-100 dark:border-amber-800">
-                    <div className="flex items-start gap-2">
-                      <div className="p-1.5 bg-amber-100 dark:bg-amber-800 rounded-lg shrink-0">
-                        <Sparkles className="h-3 w-3 text-amber-600" />
-                      </div>
-                      <div>
-                        <h4 className="font-semibold text-amber-900 dark:text-amber-300 text-xs">
-                          提示
-                        </h4>
-                        <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 leading-relaxed">
-                          配置 API Key 后自动保存。点击测试连接可验证配置。
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
             </motion.div>
           ) : null}

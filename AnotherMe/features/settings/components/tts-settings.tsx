@@ -241,6 +241,35 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
               />
             </div>
           </div>
+
+          <div className="mt-4 space-y-2.5">
+            <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+              {t('settings.modelName')}
+            </Label>
+            <Input
+              name={`tts-model-${selectedProviderId}`}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder={ttsProvider.defaultModelId || '输入模型名'}
+              value={ttsProvidersConfig[selectedProviderId]?.modelId || ttsProvider.defaultModelId}
+              onChange={(e) =>
+                setTTSProviderConfig(selectedProviderId, {
+                  modelId: e.target.value,
+                })
+              }
+              className="h-11 rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,253,250,0.95)] text-sm text-[rgba(46,39,33,0.92)] placeholder:text-[rgba(115,102,88,0.5)] focus:border-[rgba(193,154,110,0.6)] focus:ring-2 focus:ring-[rgba(193,154,110,0.12)]"
+              list={`tts-models-${selectedProviderId}`}
+            />
+            {ttsProvider.models.length > 0 && (
+              <datalist id={`tts-models-${selectedProviderId}`}>
+                {ttsProvider.models.map((model) => (
+                  <option key={model.id} value={model.id} />
+                ))}
+              </datalist>
+            )}
+          </div>
           
           {/* Request URL Preview */}
           {(() => {

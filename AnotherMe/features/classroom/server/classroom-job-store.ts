@@ -12,12 +12,17 @@ import {
   writeJsonFileAtomic,
 } from '@/lib/server/classroom-storage';
 
-export type ClassroomGenerationJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+export type ClassroomGenerationJobStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled';
 
 export interface ClassroomGenerationJob {
   id: string;
   status: ClassroomGenerationJobStatus;
-  step: ClassroomGenerationStep | 'queued' | 'failed';
+  step: ClassroomGenerationStep | 'queued' | 'failed' | 'canceled';
   progress: number;
   message: string;
   createdAt: string;
@@ -149,6 +154,7 @@ export async function updateClassroomGenerationJob(
     if (!existing) {
       throw new Error(`Classroom generation job not found: ${jobId}`);
     }
+    if (existing.status === 'canceled') return existing;
 
     const updated: ClassroomGenerationJob = {
       ...existing,
@@ -169,6 +175,7 @@ export async function markClassroomGenerationJobRunning(
     if (!existing) {
       throw new Error(`Classroom generation job not found: ${jobId}`);
     }
+    if (existing.status === 'canceled') return existing;
 
     const updated: ClassroomGenerationJob = {
       ...existing,
@@ -187,13 +194,26 @@ export async function updateClassroomGenerationJobProgress(
   jobId: string,
   progress: ClassroomGenerationProgress,
 ): Promise<ClassroomGenerationJob> {
-  return updateClassroomGenerationJob(jobId, {
-    status: 'running',
-    step: progress.step,
-    progress: progress.progress,
-    message: progress.message,
-    scenesGenerated: progress.scenesGenerated,
-    totalScenes: progress.totalScenes,
+  return withJobLock(jobId, async () => {
+    const existing = await readClassroomGenerationJob(jobId);
+    if (!existing) {
+      throw new Error(`Classroom generation job not found: ${jobId}`);
+    }
+    if (existing.status === 'canceled') return existing;
+
+    const updated: ClassroomGenerationJob = {
+      ...existing,
+      status: 'running',
+      step: progress.step,
+      progress: progress.progress,
+      message: progress.message,
+      scenesGenerated: progress.scenesGenerated,
+      totalScenes: progress.totalScenes,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+    return updated;
   });
 }
 
@@ -201,19 +221,32 @@ export async function markClassroomGenerationJobSucceeded(
   jobId: string,
   result: GenerateClassroomResult,
 ): Promise<ClassroomGenerationJob> {
-  return updateClassroomGenerationJob(jobId, {
-    status: 'succeeded',
-    step: 'completed',
-    progress: 100,
-    message: 'Classroom generation completed',
-    completedAt: new Date().toISOString(),
-    scenesGenerated: result.scenesCount,
-    result: {
-      classroomId: result.id,
-      url: result.url,
-      scenesCount: result.scenesCount,
-      ...(result.meta ? { meta: result.meta } : {}),
-    },
+  return withJobLock(jobId, async () => {
+    const existing = await readClassroomGenerationJob(jobId);
+    if (!existing) {
+      throw new Error(`Classroom generation job not found: ${jobId}`);
+    }
+    if (existing.status === 'canceled') return existing;
+
+    const updated: ClassroomGenerationJob = {
+      ...existing,
+      status: 'succeeded',
+      step: 'completed',
+      progress: 100,
+      message: 'Classroom generation completed',
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      scenesGenerated: result.scenesCount,
+      result: {
+        classroomId: result.id,
+        url: result.url,
+        scenesCount: result.scenesCount,
+        ...(result.meta ? { meta: result.meta } : {}),
+      },
+    };
+
+    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+    return updated;
   });
 }
 
@@ -221,11 +254,37 @@ export async function markClassroomGenerationJobFailed(
   jobId: string,
   error: string,
 ): Promise<ClassroomGenerationJob> {
+  return withJobLock(jobId, async () => {
+    const existing = await readClassroomGenerationJob(jobId);
+    if (!existing) {
+      throw new Error(`Classroom generation job not found: ${jobId}`);
+    }
+    if (existing.status === 'canceled') return existing;
+
+    const updated: ClassroomGenerationJob = {
+      ...existing,
+      status: 'failed',
+      step: 'failed',
+      message: 'Classroom generation failed',
+      completedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      error,
+    };
+
+    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+    return updated;
+  });
+}
+
+export async function markClassroomGenerationJobCanceled(
+  jobId: string,
+  message = 'Classroom generation canceled',
+): Promise<ClassroomGenerationJob> {
   return updateClassroomGenerationJob(jobId, {
-    status: 'failed',
-    step: 'failed',
-    message: 'Classroom generation failed',
+    status: 'canceled',
+    step: 'canceled',
+    message,
     completedAt: new Date().toISOString(),
-    error,
+    error: undefined,
   });
 }

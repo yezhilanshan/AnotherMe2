@@ -237,14 +237,14 @@ export function getServerProviders(): Record<string, { models?: string[]; baseUr
   return result;
 }
 
-/** Resolve API key: client key > server key > empty string */
+/** Resolve API key: server key > client key > empty string */
 export function resolveApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().providers[providerId]?.apiKey || '';
+  return getConfig().providers[providerId]?.apiKey || clientKey || '';
 }
 
-/** Resolve base URL: client > server > undefined */
+/** Resolve base URL: server > client > undefined */
 export function resolveBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return clientBaseUrl || getConfig().providers[providerId]?.baseUrl;
+  return getConfig().providers[providerId]?.baseUrl || clientBaseUrl;
 }
 
 /** Resolve proxy URL for a provider (server config only) */
@@ -267,11 +267,11 @@ export function getServerTTSProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolveTTSApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().tts[providerId]?.apiKey || '';
+  return getConfig().tts[providerId]?.apiKey || clientKey || '';
 }
 
 export function resolveTTSBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return clientBaseUrl || getConfig().tts[providerId]?.baseUrl;
+  return getConfig().tts[providerId]?.baseUrl || clientBaseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,11 +289,11 @@ export function getServerASRProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolveASRApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().asr[providerId]?.apiKey || '';
+  return getConfig().asr[providerId]?.apiKey || clientKey || '';
 }
 
 export function resolveASRBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return clientBaseUrl || getConfig().asr[providerId]?.baseUrl;
+  return getConfig().asr[providerId]?.baseUrl || clientBaseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,11 +311,11 @@ export function getServerPDFProviders(): Record<string, { baseUrl?: string }> {
 }
 
 export function resolvePDFApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().pdf[providerId]?.apiKey || '';
+  return getConfig().pdf[providerId]?.apiKey || clientKey || '';
 }
 
 export function resolvePDFBaseUrl(providerId: string, clientBaseUrl?: string): string | undefined {
-  return clientBaseUrl || getConfig().pdf[providerId]?.baseUrl;
+  return getConfig().pdf[providerId]?.baseUrl || clientBaseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,14 +332,14 @@ export function getServerImageProviders(): Record<string, Record<string, never>>
 }
 
 export function resolveImageApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().image[providerId]?.apiKey || '';
+  return getConfig().image[providerId]?.apiKey || clientKey || '';
 }
 
 export function resolveImageBaseUrl(
   providerId: string,
   clientBaseUrl?: string,
 ): string | undefined {
-  return clientBaseUrl || getConfig().image[providerId]?.baseUrl;
+  return getConfig().image[providerId]?.baseUrl || clientBaseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,14 +356,14 @@ export function getServerVideoProviders(): Record<string, Record<string, never>>
 }
 
 export function resolveVideoApiKey(providerId: string, clientKey?: string): string {
-  return clientKey || getConfig().video[providerId]?.apiKey || '';
+  return getConfig().video[providerId]?.apiKey || clientKey || '';
 }
 
 export function resolveVideoBaseUrl(
   providerId: string,
   clientBaseUrl?: string,
 ): string | undefined {
-  return clientBaseUrl || getConfig().video[providerId]?.baseUrl;
+  return getConfig().video[providerId]?.baseUrl || clientBaseUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,13 +381,13 @@ export function getServerWebSearchProviders(): Record<string, { baseUrl?: string
   return result;
 }
 
-/** Resolve Tavily API key: client key > server key > TAVILY_API_KEY env > empty */
+/** Resolve Tavily API key: server key > TAVILY_API_KEY env > client key > empty */
 export function resolveWebSearchApiKey(clientKey?: string): string {
   const serverKey = getConfig().webSearch.tavily?.apiKey;
-  return clientKey || serverKey || process.env.TAVILY_API_KEY || '';
+  return serverKey || process.env.TAVILY_API_KEY || clientKey || '';
 }
 
-/** Resolve Tavily base URL: client > server > undefined */
+/** Resolve Tavily base URL: server > client > undefined */
 export function resolveWebSearchBaseUrl(clientBaseUrl?: string): string | undefined {
-  return clientBaseUrl || getConfig().webSearch.tavily?.baseUrl;
+  return getConfig().webSearch.tavily?.baseUrl || clientBaseUrl;
 }

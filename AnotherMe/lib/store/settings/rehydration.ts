@@ -15,6 +15,7 @@ import {
   getDefaultWebSearchConfig,
 } from '@/lib/store/settings/defaults';
 import type { SettingsState } from '@/lib/store/settings/types';
+import { validateModel } from '@/lib/store/settings-validation';
 
 /**
  * Check whether a provider ID exists in the given provider registry.
@@ -46,9 +47,23 @@ export function ensureValidProviderSelections(state: Partial<SettingsState>): vo
   if (!hasProviderId(IMAGE_PROVIDERS, state.imageProviderId)) {
     state.imageProviderId = defaultImageConfig.imageProviderId;
   }
+  // Validate imageModelId against available models
+  if (state.imageProviderId && state.imageProvidersConfig) {
+    const imgPid = state.imageProviderId as ImageProviderId;
+    const builtIn = IMAGE_PROVIDERS[imgPid]?.models ?? [];
+    const custom = state.imageProvidersConfig[imgPid]?.customModels ?? [];
+    state.imageModelId = validateModel(state.imageModelId ?? '', [...builtIn, ...custom]);
+  }
 
   if (!hasProviderId(VIDEO_PROVIDERS, state.videoProviderId)) {
     state.videoProviderId = defaultVideoConfig.videoProviderId;
+  }
+  // Validate videoModelId against available models
+  if (state.videoProviderId && state.videoProvidersConfig) {
+    const vidPid = state.videoProviderId as VideoProviderId;
+    const builtIn = VIDEO_PROVIDERS[vidPid]?.models ?? [];
+    const custom = state.videoProvidersConfig[vidPid]?.customModels ?? [];
+    state.videoModelId = validateModel(state.videoModelId ?? '', [...builtIn, ...custom]);
   }
 
   if (!hasProviderId(TTS_PROVIDERS, state.ttsProviderId)) {
@@ -62,13 +77,46 @@ export function ensureValidProviderSelections(state: Partial<SettingsState>): vo
   if (!hasProviderId(PROVIDERS, state.providerId)) {
     state.providerId = 'openai' as ProviderId;
   }
+  // Validate LLM modelId against available models
+  if (state.providerId && state.providersConfig) {
+    const pid = state.providerId as ProviderId;
+    const config = state.providersConfig[pid];
+    const allModels = [
+      ...(config?.models ?? []),
+      ...(config?.serverModels?.map((id) => ({ id })) ?? []),
+      ...(PROVIDERS[pid]?.models ?? []),
+    ];
+    state.modelId = validateModel(state.modelId ?? '', allModels);
+  }
 
   if (!hasProviderId(PROVIDERS, state.visionProviderId)) {
     state.visionProviderId = state.providerId || ('openai' as ProviderId);
   }
+  // Validate visionModelId
+  if (state.visionProviderId && state.providersConfig) {
+    const vPid = state.visionProviderId as ProviderId;
+    const config = state.providersConfig[vPid];
+    const allModels = [
+      ...(config?.models ?? []),
+      ...(config?.serverModels?.map((id) => ({ id })) ?? []),
+      ...(PROVIDERS[vPid]?.models ?? []),
+    ];
+    state.visionModelId = validateModel(state.visionModelId ?? '', allModels);
+  }
 
   if (!hasProviderId(PROVIDERS, state.ocrProviderId)) {
     state.ocrProviderId = state.visionProviderId || state.providerId || ('openai' as ProviderId);
+  }
+  // Validate ocrModelId
+  if (state.ocrProviderId && state.providersConfig) {
+    const oPid = state.ocrProviderId as ProviderId;
+    const config = state.providersConfig[oPid];
+    const allModels = [
+      ...(config?.models ?? []),
+      ...(config?.serverModels?.map((id) => ({ id })) ?? []),
+      ...(PROVIDERS[oPid]?.models ?? []),
+    ];
+    state.ocrModelId = validateModel(state.ocrModelId ?? '', allModels);
   }
 }
 

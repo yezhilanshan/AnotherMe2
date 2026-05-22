@@ -10,7 +10,6 @@ import { createDefaultRuntime } from '@/lib/orchestration/capability-runtime';
 import { createLearningContext } from '@/lib/types/learning-context';
 import { globalStreamBus } from '@/lib/orchestration/stream-bus';
 import { classroomGenerateHandler } from '@/lib/orchestration/handlers/classroom-generation-handler';
-import { buildClassroomGenerationClassroomBook, saveClassroomBook } from '@/lib/server/classroom-book-service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('GenerateClassroom API');
@@ -56,6 +55,7 @@ export async function POST(req: NextRequest) {
       const authUser = await getAuthenticatedUserFromRequest(req);
       authUserId = authUser?.id?.trim() || undefined;
       if (authUserId) {
+        body.authUserId = authUserId;
         body.learningContext = await buildLearningContext({
           userId: authUserId,
           source: 'classroom',
@@ -74,7 +74,11 @@ export async function POST(req: NextRequest) {
           enabledTools: [
             { id: 'course_generation', enabled: true, config: {} },
             { id: 'web_search', enabled: Boolean(body.enableWebSearch), config: {} },
-            { id: 'media_generation', enabled: Boolean(body.enableImageGeneration || body.enableVideoGeneration), config: {} },
+            {
+              id: 'media_generation',
+              enabled: Boolean(body.enableImageGeneration || body.enableVideoGeneration),
+              config: {},
+            },
             { id: 'tts', enabled: Boolean(body.enableTTS), config: {} },
           ],
           lookbackDays: 14,
@@ -89,32 +93,16 @@ export async function POST(req: NextRequest) {
 
     // Run through CapabilityRuntime for unified execution flow + ClassroomBook persistence
     const runtime = createDefaultRuntime({
-      buildContext: async () => body.learningContext || createLearningContext(authUserId || 'anonymous', { metadata: { source: 'classroom', topic: null, language: 'zh-CN', grade: null, extra: {} } }),
+      buildContext: async () =>
+        body.learningContext ||
+        createLearningContext(authUserId || 'anonymous', {
+          metadata: { source: 'classroom', topic: null, language: 'zh-CN', grade: null, extra: {} },
+        }),
       checkGuard: async () => ({ passed: true }),
       emitTrace: async (event) => {
         globalStreamBus.publish(event);
       },
-      persistResult: async (result) => {
-        const output = result.output as Record<string, unknown> | undefined;
-        const resultJobId = typeof output?.jobId === 'string' ? output.jobId : jobId;
-        const knowledgePointIds =
-          (result.stages.find((s) => s.stage === 'post_process')?.output?.knowledgePointIds as string[] | undefined) || [];
-
-        if (authUserId) {
-          try {
-            const book = buildClassroomGenerationClassroomBook({
-              userId: authUserId,
-              jobId: resultJobId,
-              requirement,
-              sourceCapability: 'course_generate',
-              knowledgePointIds,
-            });
-            await saveClassroomBook(book);
-          } catch {
-            // Non-blocking: ClassroomBook persistence failure should not break classroom generation
-          }
-        }
-      },
+      persistResult: async () => {},
     });
     runtime.registerHandler(classroomGenerateHandler);
 
@@ -139,7 +127,9 @@ export async function POST(req: NextRequest) {
           jobId: String(stageResult.output.jobId || jobId),
           status: String(stageResult.output.status || 'queued'),
           step: String(stageResult.output.step || 'queued'),
-          pollUrl: String(stageResult.output.pollUrl || `${baseUrl}/api/generate-classroom/${jobId}`),
+          pollUrl: String(
+            stageResult.output.pollUrl || `${baseUrl}/api/generate-classroom/${jobId}`,
+          ),
         };
       }
     }

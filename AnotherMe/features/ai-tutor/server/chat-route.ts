@@ -39,8 +39,8 @@ import { deepResearchHandler } from '../orchestration/handlers/deep-research-han
 import { buildChatClassroomBook, saveClassroomBook } from '@/lib/server/classroom-book-service';
 const log = createLogger('Chat API');
 
-// Allow streaming responses up to 60 seconds
-export const maxDuration = 60;
+// Allow streaming responses up to 120 seconds (increased for server-driven multi-turn discussions)
+export const maxDuration = 120;
 
 const SESSION_OWNERSHIP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SESSION_OWNERSHIP_CACHE_MAX_SIZE = 5000;
@@ -623,6 +623,7 @@ export async function POST(req: NextRequest) {
         const assistantMessageId = `assistant-${requestId}`;
         let assistantMessageStarted = false;
         let emittedVisibleText = false;
+        let serverDrivenDoneEmitted = false;
         const structuredResultOnly =
           requestedCapability === 'math_animator'
           || requestedCapability === 'visualize'
@@ -692,6 +693,10 @@ export async function POST(req: NextRequest) {
               if (agentEvent) {
                 await writeEvent(agentEvent);
               }
+              // Track server-driven done event from director graph
+              if (rawAgentEvent?.type === 'done') {
+                serverDrivenDoneEmitted = true;
+              }
             }
           } else {
             emitStageEvent(
@@ -726,7 +731,12 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        if (assistantMessageStarted) {
+        // Server-driven mode: director graph already emitted done event with directorState,
+        // skip the wrapper to avoid overwriting it.
+        if (body.config?.serverDriven && serverDrivenDoneEmitted) {
+          stopHeartbeat();
+          await writer.close();
+        } else if (assistantMessageStarted) {
           await writeEvent({
             type: 'agent_end',
             data: { messageId: assistantMessageId, agentId: String(requestedCapability) },
@@ -739,10 +749,12 @@ export async function POST(req: NextRequest) {
               agentHadContent: emittedVisibleText,
             },
           });
+          stopHeartbeat();
+          await writer.close();
+        } else {
+          stopHeartbeat();
+          await writer.close();
         }
-
-        stopHeartbeat();
-        await writer.close();
       } catch (error) {
         stopHeartbeat();
 

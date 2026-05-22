@@ -80,23 +80,25 @@ export function CanvasArea({
   );
 
   return (
-    <div className="w-full h-full flex flex-col bg-gray-50 dark:bg-gray-900 group/canvas">
+    <div className="w-full h-full flex flex-col bg-[#f6f4f0] dark:bg-gray-950 group/canvas">
       {/* Slide area — takes remaining space */}
       <div
         className={cn(
           'flex-1 min-h-0 relative overflow-hidden flex items-center justify-center p-2 transition-colors duration-500',
+          'max-md:items-start max-md:p-2 max-md:pt-3',
           currentScene?.type === 'interactive'
-            ? 'bg-blue-50/30 dark:bg-blue-900/10'
-            : 'bg-gray-50/30 dark:bg-gray-900/30',
+            ? 'bg-sky-50/40 dark:bg-sky-950/10'
+            : 'bg-transparent',
         )}
       >
         <div
           className={cn(
-            'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-800 shadow-2xl rounded-lg overflow-hidden relative transition-all duration-700',
+            'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-900 shadow-2xl rounded-[22px] overflow-hidden relative transition-all duration-700',
+            'max-md:h-auto max-md:w-full max-md:rounded-[18px]',
             showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
             currentScene?.type === 'interactive'
-              ? 'shadow-blue-200/50 dark:shadow-blue-900/50 ring-1 ring-blue-900/5 dark:ring-blue-500/10'
-              : 'shadow-gray-200/50 dark:shadow-gray-800/50 ring-1 ring-gray-950/5 dark:ring-white/5',
+              ? 'shadow-sky-200/50 dark:shadow-sky-900/50 ring-1 ring-sky-900/5 dark:ring-sky-500/10'
+              : 'shadow-gray-200/70 dark:shadow-gray-950/60 ring-1 ring-gray-950/5 dark:ring-white/5',
           )}
           onClick={handleSlideClick}
         >

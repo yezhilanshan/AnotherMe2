@@ -16,7 +16,7 @@ import type {
   PPTElementShadow,
   PPTElementLink,
 } from '@/lib/types/slides';
-import type { Scene, SlideContent } from '@/lib/types/stage';
+import type { Scene, SlideContent, Stage } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
 import { getElementRange, getLineElementPath, getTableSubThemeColor } from '@/lib/utils/element';
 import { type AST, toAST } from '@/lib/export/html-parser';
@@ -339,6 +339,79 @@ function isSVGImage(url: string) {
   return /^data:image\/svg\+xml;base64,/.test(url) || /\.svg$/.test(url);
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchAsDataUrl(url: string, label: string): Promise<string> {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`${label} fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  return blobToDataUrl(await resp.blob());
+}
+
+function captureVideoFrameDataUrl(
+  src: string,
+  fallbackWidth: number,
+  fallbackHeight: number,
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const video = document.createElement('video');
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      finish(undefined, new Error('Video frame capture timeout'));
+    }, 10000);
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      video.onloadeddata = null;
+      video.onseeked = null;
+      video.onerror = null;
+      video.removeAttribute('src');
+      video.load();
+    };
+
+    const finish = (value?: string, error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value || '');
+    };
+
+    video.crossOrigin = 'anonymous';
+    video.muted = true;
+    video.preload = 'auto';
+    video.onloadeddata = () => {
+      video.currentTime = 0;
+    };
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || fallbackWidth;
+        canvas.height = video.videoHeight || fallbackHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          finish(undefined, new Error('No canvas context'));
+          return;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/png'));
+      } catch (error) {
+        finish(undefined, error);
+      }
+    };
+    video.onerror = () => finish(undefined, new Error('Video load failed'));
+    video.src = src;
+  });
+}
+
 // ── Main export hook ──
 
 // ── Build PPTX blob (reused by single-export and resource pack) ──
@@ -357,6 +430,23 @@ function buildSpeakerNotes(scene: Scene): string {
     }
   }
   return parts.join('\n');
+}
+
+function buildPortableResourceManifest(stage: Stage | null, scenes: Scene[]) {
+  const agentIds = stage?.agentIds || [];
+  return {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    stage,
+    scenes: scenes.map((scene) => ({
+      ...scene,
+      actions: scene.actions?.map((action) => {
+        if (action.type !== 'discussion' || !action.agentId) return action;
+        const agentIndex = agentIds.indexOf(action.agentId);
+        return agentIndex >= 0 ? { ...action, agentIndex } : action;
+      }),
+    })),
+  };
 }
 
 async function buildPptxBlob(
@@ -482,16 +572,9 @@ async function buildPptxBlob(
         // (blob: URLs and remote URLs won't work in offline PPTX)
         if (!isBase64Image(resolvedSrc)) {
           try {
-            const resp = await fetch(resolvedSrc);
-            const blob = await resp.blob();
-            resolvedSrc = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-          } catch {
-            log.warn('Failed to convert image to base64, skipping element');
+            resolvedSrc = await fetchAsDataUrl(resolvedSrc, 'image');
+          } catch (error) {
+            log.warn('Failed to convert image to base64, skipping element:', error);
             continue;
           }
         }
@@ -963,14 +1046,7 @@ async function buildPptxBlob(
         // Fetch blob and convert to base64 for embedding in PPTX
         // (blob: URLs and remote URLs won't work in offline PPTX)
         try {
-          const resp = await fetch(resolvedSrc);
-          const blob = await resp.blob();
-          const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
+          const base64 = await fetchAsDataUrl(resolvedSrc, el.type);
 
           const mediaOptions: pptxgen.MediaProps = {
             x: el.left / ratioPx2Inch,
@@ -999,15 +1075,9 @@ async function buildPptxBlob(
             }
             if (posterUrl) {
               try {
-                const posterResp = await fetch(posterUrl);
-                const posterBlob = await posterResp.blob();
-                coverBase64 = await new Promise<string>((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onloadend = () => resolve(reader.result as string);
-                  reader.onerror = reject;
-                  reader.readAsDataURL(posterBlob);
-                });
-              } catch {
+                coverBase64 = await fetchAsDataUrl(posterUrl, 'video poster');
+              } catch (error) {
+                log.warn('Failed to embed video poster, falling back to frame capture:', error);
                 // Poster fetch failed, fall through to video frame capture
               }
             }
@@ -1015,37 +1085,9 @@ async function buildPptxBlob(
             // 2. Fallback: capture first frame from video via canvas
             if (!coverBase64) {
               try {
-                coverBase64 = await new Promise<string>((resolve, reject) => {
-                  const video = document.createElement('video');
-                  video.crossOrigin = 'anonymous';
-                  video.muted = true;
-                  video.preload = 'auto';
-                  video.onloadeddata = () => {
-                    video.currentTime = 0;
-                  };
-                  video.onseeked = () => {
-                    try {
-                      const canvas = document.createElement('canvas');
-                      canvas.width = video.videoWidth || el.width;
-                      canvas.height = video.videoHeight || el.height;
-                      const ctx = canvas.getContext('2d');
-                      if (ctx) {
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                        resolve(canvas.toDataURL('image/png'));
-                      } else {
-                        reject(new Error('No canvas context'));
-                      }
-                      video.src = ''; // Release
-                    } catch (e) {
-                      reject(e);
-                    }
-                  };
-                  video.onerror = () => reject(new Error('Video load failed'));
-                  // Timeout to avoid hanging
-                  setTimeout(() => reject(new Error('Video frame capture timeout')), 10000);
-                  video.src = resolvedSrc;
-                });
-              } catch {
+                coverBase64 = await captureVideoFrameDataUrl(resolvedSrc, el.width, el.height);
+              } catch (error) {
+                log.warn('Failed to capture video frame for export:', error);
                 // Frame capture also failed, video will use default play button
               }
             }
@@ -1159,7 +1201,13 @@ export function useExportPPTX() {
         }
       }
 
-      // 3. Download ZIP
+      // 3. Add portable source manifest for future round-trip import.
+      zip.file(
+        'manifest.json',
+        JSON.stringify(buildPortableResourceManifest(stage, scenes), null, 2),
+      );
+
+      // 4. Download ZIP
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       saveAs(zipBlob, `${fileName}.zip`);
       toast.success(t('export.exportSuccess'));

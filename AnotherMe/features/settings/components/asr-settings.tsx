@@ -4,14 +4,8 @@ import { useState, useRef } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useSpeechRecognitionCleanup } from '@/lib/hooks/use-speech-recognition-cleanup';
 import { useSettingsStore } from '@/lib/store/settings';
 import { ASR_PROVIDERS } from '@/lib/audio/constants';
 import type { ASRProviderId } from '@/lib/audio/types';
@@ -41,6 +35,11 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Vendor-prefixed API
+  const speechRecognitionRef = useRef<any>(null);
+
+  // Cleanup: release microphone and stop SpeechRecognition on unmount
+  useSpeechRecognitionCleanup(mediaRecorderRef, speechRecognitionRef);
 
   // Reset state when provider changes (derived state pattern)
   const [prevProviderId, setPrevProviderId] = useState(selectedProviderId);
@@ -74,6 +73,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
         }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Vendor-prefixed API without standard typings
         const recognition = new (SpeechRecognitionCtor as new () => any)();
+        speechRecognitionRef.current = recognition;
         recognition.lang = asrLanguage || 'zh-CN';
         recognition.onresult = (event: {
           results: {
@@ -321,34 +321,36 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
       </div>
 
       {/* Model Selection */}
-      {asrProvider.models.length > 0 && (
-        <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
-          <div className="space-y-3">
-            <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
-              {t('settings.ttsModel')}
-            </Label>
-            <Select
-              value={asrProvidersConfig[selectedProviderId]?.modelId || asrProvider.defaultModelId}
-              onValueChange={(value) => setASRProviderConfig(selectedProviderId, { modelId: value })}
-            >
-              <SelectTrigger className="h-11 rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,253,250,0.95)] text-sm text-[rgba(46,39,33,0.92)] focus:border-[rgba(193,154,110,0.6)] focus:ring-2 focus:ring-[rgba(193,154,110,0.12)]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,252,247,0.98)]">
-                {asrProvider.models.map((model) => (
-                  <SelectItem 
-                    key={model.id} 
-                    value={model.id}
-                    className="text-sm text-[rgba(46,39,33,0.92)] focus:bg-[rgba(248,242,234,0.85)]"
-                  >
-                    {model.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+      <div className="rounded-2xl border border-[rgba(133,88,34,0.12)] bg-[rgba(255,252,247,0.85)] p-5 shadow-[0_8px_24px_rgba(61,43,16,0.04)] backdrop-blur-sm">
+        <div className="space-y-3">
+          <Label className="text-sm font-semibold text-[rgba(93,80,68,0.92)] tracking-wide block">
+            {t('settings.ttsModel')}
+          </Label>
+          <Input
+            name={`asr-model-${selectedProviderId}`}
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            placeholder="输入模型名"
+            value={asrProvidersConfig[selectedProviderId]?.modelId || asrProvider.defaultModelId}
+            onChange={(e) =>
+              setASRProviderConfig(selectedProviderId, {
+                modelId: e.target.value,
+              })
+            }
+            className="h-11 rounded-xl border-[rgba(133,88,34,0.14)] bg-[rgba(255,253,250,0.95)] text-sm text-[rgba(46,39,33,0.92)] placeholder:text-[rgba(115,102,88,0.5)] focus:border-[rgba(193,154,110,0.6)] focus:ring-2 focus:ring-[rgba(193,154,110,0.12)]"
+            list={`asr-models-${selectedProviderId}`}
+          />
+          {asrProvider.models.length > 0 && (
+            <datalist id={`asr-models-${selectedProviderId}`}>
+              {asrProvider.models.map((model) => (
+                <option key={model.id} value={model.id} />
+              ))}
+            </datalist>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -276,14 +276,14 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'GLM-4.6V',
         contextWindow: 128000,
         outputWindow: 32000,
-        capabilities: { streaming: true, tools: true, vision: false },
+        capabilities: { streaming: true, tools: true, vision: true },
       },
       {
         id: 'glm-4.6v-flash',
         name: 'GLM-4.6V-Flash',
         contextWindow: 128000,
         outputWindow: 32000,
-        capabilities: { streaming: true, tools: true, vision: false },
+        capabilities: { streaming: true, tools: true, vision: true },
       },
       // GLM-4.5 Series - Cost-effective models
       {
@@ -423,7 +423,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: {
           streaming: true,
           tools: true,
-          vision: false,
+          vision: true,
           thinking: {
             toggleable: true,
             budgetAdjustable: false,
@@ -609,7 +609,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Qwen3-VL-32B-Instruct',
         contextWindow: 256000,
         outputWindow: 32768,
-        capabilities: { streaming: true, tools: true, vision: false },
+        capabilities: { streaming: true, tools: true, vision: true },
       },
       // MiniMax Series
       {
@@ -625,7 +625,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'Kimi-K2.5',
         contextWindow: 256000,
         outputWindow: 96000,
-        capabilities: { streaming: true, tools: true, vision: false },
+        capabilities: { streaming: true, tools: true, vision: true },
       },
       // GLM Series
       {
@@ -640,7 +640,7 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         name: 'GLM-4.1V-9B-Thinking',
         contextWindow: 64000,
         outputWindow: 8192,
-        capabilities: { streaming: true, tools: true, vision: false },
+        capabilities: { streaming: true, tools: true, vision: true },
       },
     ],
   },
@@ -653,6 +653,13 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     requiresApiKey: true,
     icon: '/logos/doubao.svg',
     models: [
+      {
+        id: 'doubao-1.5-vision-pro-250328',
+        name: 'Doubao 1.5 Vision Pro',
+        contextWindow: 128000,
+        outputWindow: 32768,
+        capabilities: { streaming: true, tools: true, vision: true },
+      },
       {
         id: 'doubao-seed-2-0-pro-260215',
         name: 'Doubao Seed 2.0 Pro',
@@ -1001,11 +1008,17 @@ export function getModel(config: ModelConfig): ModelWithInfo {
         apiKey: effectiveApiKey,
         baseURL: effectiveBaseUrl,
       };
-      if (config.proxy) {
+      const proxyUrl =
+        config.proxy ||
+        process.env.HTTPS_PROXY ||
+        process.env.https_proxy ||
+        process.env.HTTP_PROXY ||
+        process.env.http_proxy;
+      if (proxyUrl) {
         // Dynamic require to avoid bundling undici on the client side
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { ProxyAgent, fetch: undiciFetch } = require('undici');
-        const agent = new ProxyAgent(config.proxy);
+        const agent = new ProxyAgent(proxyUrl);
         googleOptions.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
           undiciFetch(input as string, {
             ...(init as Record<string, unknown>),

@@ -11,6 +11,7 @@ import { db } from './database';
 import { saveChatSessions, loadChatSessions, deleteChatSessions } from './chat-storage';
 import { clearPlaybackState } from './playback-storage';
 import { createLogger } from '@/lib/logger';
+import { migrateStage, migrateSceneContent } from './schema-migration';
 
 const log = createLogger('StageStorage');
 
@@ -84,14 +85,21 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
 export async function loadStageData(stageId: string): Promise<StageStoreData | null> {
   try {
     // Load stage
-    const stage = await db.stages.get(stageId);
-    if (!stage) {
+    const rawStage = await db.stages.get(stageId);
+    if (!rawStage) {
       log.info(`Stage not found: ${stageId}`);
       return null;
     }
+    // Apply schema migrations for legacy data
+    const stage = migrateStage(rawStage as Stage);
 
     // Load scenes
-    const scenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
+    const rawScenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
+    // Apply schema migrations to scene content (slides)
+    const scenes = rawScenes.map((s) => ({
+      ...s,
+      content: migrateSceneContent(s.content),
+    }));
 
     // Load chat sessions from independent table
     const chats = await loadChatSessions(stageId);
@@ -101,7 +109,10 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     return {
       stage,
       scenes,
-      currentSceneId: stage.currentSceneId || scenes[0]?.id || null,
+      currentSceneId:
+        (rawStage as unknown as { currentSceneId?: string }).currentSceneId ||
+        scenes[0]?.id ||
+        null,
       chats,
     };
   } catch (error) {
@@ -164,12 +175,16 @@ export async function listStages(): Promise<StageListItem[]> {
 /**
  * Get first slide scene's canvas data for each stage (for thumbnail preview).
  * Also resolves gen_img_* placeholders from mediaFiles so thumbnails show real images.
- * Returns a map of stageId -> Slide (canvas data with resolved images)
+ * Returns the slide map and a revokeUrls() cleanup function to free object URLs.
  */
 export async function getFirstSlideByStages(
   stageIds: string[],
-): Promise<Record<string, import('../types/slides').Slide>> {
+): Promise<{
+  slides: Record<string, import('../types/slides').Slide>;
+  revokeUrls: () => void;
+}> {
   const result: Record<string, import('../types/slides').Slide> = {};
+  const objectUrls: string[] = [];
   try {
     await Promise.all(
       stageIds.map(async (stageId) => {
@@ -195,7 +210,9 @@ export async function getFirstSlideByStages(
             for (const el of placeholderEls as Array<{ src: string }>) {
               const blob = mediaMap.get(el.src);
               if (blob) {
-                el.src = URL.createObjectURL(blob);
+                const url = URL.createObjectURL(blob);
+                objectUrls.push(url);
+                el.src = url;
               } else {
                 // Clear unresolved placeholder so BaseImageElement won't subscribe
                 // to the global media store (which may have stale data from another course)
@@ -211,7 +228,12 @@ export async function getFirstSlideByStages(
   } catch (error) {
     log.error('Failed to load thumbnails:', error);
   }
-  return result;
+  return {
+    slides: result,
+    revokeUrls: () => {
+      for (const url of objectUrls) URL.revokeObjectURL(url);
+    },
+  };
 }
 
 /**
