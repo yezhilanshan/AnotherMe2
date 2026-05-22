@@ -2,6 +2,9 @@
 .vscode/
 .idea/
 .claude/
+.codex/
+.codex-logs/
+.codex-*
 .workbuddy/
 *.local.md
 
