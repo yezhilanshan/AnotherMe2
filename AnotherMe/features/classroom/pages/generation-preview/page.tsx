@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Sparkles, AlertCircle, AlertTriangle, ArrowLeft, Bot } from 'lucide-react';
+import { CheckCircle2, Sparkles, AlertCircle, AlertTriangle, ArrowLeft, Bot, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -29,7 +29,8 @@ import { AgentRevealModal } from '@/features/classroom/components/agent/agent-re
 import { createLogger } from '@/lib/logger';
 import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
 import { type GenerationSessionState, ALL_STEPS, getActiveSteps } from './types';
-import { StepVisualizer } from './components/visualizers';
+import { StepVisualizer } from './components/visualizers-new';
+import { OutlinesEditor } from '@/features/classroom/components/generation/outlines-editor';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 
 const log = createLogger('GenerationPreview');
@@ -47,6 +48,10 @@ export function GenerationPreviewContent() {
   const [isComplete] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [streamingOutlines, setStreamingOutlines] = useState<SceneOutline[] | null>(null);
+  const [isReviewingOutlines, setIsReviewingOutlines] = useState(false);
+  const [editableOutlines, setEditableOutlines] = useState<SceneOutline[]>([]);
+  const outlineConfirmRef = useRef<(() => void) | null>(null);
+  const editableOutlinesRef = useRef<SceneOutline[]>([]);
   const [truncationWarnings, setTruncationWarnings] = useState<string[]>([]);
   const [webSearchSources, setWebSearchSources] = useState<Array<{ title: string; url: string }>>(
     [],
@@ -83,6 +88,11 @@ export function GenerationPreviewContent() {
     }
     setSessionLoaded(true);
   }, []);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    editableOutlinesRef.current = editableOutlines;
+  }, [editableOutlines]);
 
   // Abort all in-flight requests on unmount
   useEffect(() => {
@@ -386,6 +396,7 @@ export function GenerationPreviewContent() {
         style: 'professional',
         createdAt: Date.now(),
         updatedAt: Date.now(),
+        schemaVersion: 1,
       };
 
       if (settings.agentMode === 'auto') {
@@ -545,8 +556,27 @@ export function GenerationPreviewContent() {
         stage.agentIds = presetAgentIds;
       }
 
+      // Helper: show outline editor, await user confirmation, persist reviewed outlines
+      const reviewOutlines = async (
+        outlinesToReview: SceneOutline[],
+        current: typeof currentSession,
+      ): Promise<SceneOutline[]> => {
+        setEditableOutlines([...outlinesToReview]);
+        setIsReviewingOutlines(true);
+        await new Promise<void>((resolve) => {
+          outlineConfirmRef.current = resolve;
+        });
+        const reviewed = editableOutlinesRef.current;
+        const updated = { ...current, sceneOutlines: reviewed };
+        setSession(updated);
+        sessionStorage.setItem('generationSession', JSON.stringify(updated));
+        setIsReviewingOutlines(false);
+        return reviewed;
+      };
+
       // ── Generate outlines (with agent personas for teacher context) ──
       let outlines = currentSession.sceneOutlines;
+      let outlinesReviewed = false;
 
       const outlineStepIdx = activeSteps.findIndex((s) => s.id === 'outline');
       setCurrentStepIndex(outlineStepIdx >= 0 ? outlineStepIdx : 0);
@@ -935,6 +965,19 @@ export function GenerationPreviewContent() {
 
             {/* Central Content */}
             <div className="mt-6 flex w-full flex-1 flex-col items-center justify-center space-y-8">
+              {isReviewingOutlines ? (
+                <div className="w-full max-h-[60vh] overflow-y-auto px-2">
+                  <OutlinesEditor
+                    outlines={editableOutlines}
+                    onChange={setEditableOutlines}
+                    onConfirm={() => {
+                      outlineConfirmRef.current?.();
+                      outlineConfirmRef.current = null;
+                    }}
+                    onBack={goBackToHome}
+                  />
+                </div>
+              ) : (<>
               <div className="rounded-full border border-[rgba(151,118,75,0.14)] bg-white/74 px-4 py-1.5 text-[11px] uppercase tracking-[0.28em] text-[rgba(118,91,55,0.76)]">
                 学习内容准备中 · {Math.min(currentStepIndex + 1, activeSteps.length)}/
                 {activeSteps.length}
@@ -1066,6 +1109,7 @@ export function GenerationPreviewContent() {
                   )}
                 </AnimatePresence>
               </div>
+              </>)}
             </div>
           </Card>
         </motion.div>

@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { useSettingsStore } from '@/lib/store/settings';
 import { getCurrentModelConfig, validateModelConfigForFeature } from '@/lib/utils/model-config';
+import { nanoid } from 'nanoid';
+import type { GenerationSessionState } from '@/features/classroom/pages/generation-preview/types';
 
 interface ParsePdfSuccess {
   success: true;
@@ -33,7 +35,7 @@ interface GenerateClassroomResponse {
 
 interface GenerateClassroomJobResponse {
   success: boolean;
-  status?: 'queued' | 'running' | 'succeeded' | 'failed';
+  status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
   message?: string;
   progress?: number;
   result?: {
@@ -52,6 +54,7 @@ export default function CreateClassPage() {
   const router = useRouter();
   const isMountedRef = useRef(true);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activePollUrlRef = useRef<string | null>(null);
   const [topic, setTopic] = useState('');
   const [requirements, setRequirements] = useState('');
   const [materialFile, setMaterialFile] = useState<File | null>(null);
@@ -63,6 +66,10 @@ export default function CreateClassPage() {
     return () => {
       isMountedRef.current = false;
       abortControllerRef.current?.abort();
+      const pollUrl = activePollUrlRef.current;
+      if (pollUrl) {
+        void fetch(pollUrl, { method: 'DELETE', keepalive: true }).catch(() => {});
+      }
     };
   }, []);
 
@@ -103,7 +110,9 @@ export default function CreateClassPage() {
 
     const payload = (await response.json()) as ParsePdfSuccess | ParsePdfError;
     if (!response.ok || !payload.success) {
-      throw new Error(payload.success ? 'PDF 解析失败，请稍后重试。' : payload.error || 'PDF 解析失败。');
+      throw new Error(
+        payload.success ? 'PDF 解析失败，请稍后重试。' : payload.error || 'PDF 解析失败。',
+      );
     }
 
     const text = payload.data.text || '';
@@ -131,7 +140,9 @@ export default function CreateClassPage() {
     const validation = validateModelConfigForFeature('chat');
     if (!validation.valid) {
       const missingText = validation.missingRoles.join('、');
-      setErrorText(`请先在设置页面配置以下模型：${missingText}。每个角色需要同时配置 API Key 和 Base URL。`);
+      setErrorText(
+        `请先在设置页面配置以下模型：${missingText}。每个角色需要同时配置 API Key 和 Base URL。`,
+      );
       toast.error('模型配置不完整', {
         description: `缺少：${missingText}`,
       });
@@ -140,10 +151,14 @@ export default function CreateClassPage() {
 
     // Validate PDF provider if user uploaded a PDF file
     if (materialFile) {
-      const isPdf = materialFile.type === 'application/pdf' || materialFile.name.toLowerCase().endsWith('.pdf');
+      const isPdf =
+        materialFile.type === 'application/pdf' || materialFile.name.toLowerCase().endsWith('.pdf');
       if (isPdf) {
         const activePdfConfig = pdfProvidersConfig?.[pdfProviderId];
-        if (!activePdfConfig?.apiKey || !activePdfConfig?.baseUrl) {
+        if (
+          !activePdfConfig?.isServerConfigured &&
+          (!activePdfConfig?.apiKey || !activePdfConfig?.baseUrl)
+        ) {
           setErrorText('请先在设置页面配置 PDF 解析服务的 API Key 和 Base URL。');
           toast.error('PDF 解析配置不完整', {
             description: '需要配置 PDF provider 才能解析上传的文件',
@@ -154,121 +169,63 @@ export default function CreateClassPage() {
     }
 
     setErrorText('');
-    setStatusText('正在准备生成请求...');
-    setIsGenerating(true);
 
-    try {
-      abortControllerRef.current?.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+    // Build generation session and navigate to generation-preview page
+    const requirement = trimmedRequirements
+      ? `${trimmedTopic}\n\n补充要求：${trimmedRequirements}`
+      : trimmedTopic;
 
-      const requirement = trimmedRequirements
-        ? `${trimmedTopic}\n\n补充要求：${trimmedRequirements}`
-        : trimmedTopic;
+    const session: GenerationSessionState = {
+      sessionId: nanoid(10),
+      requirements: {
+        requirement,
+        language: 'zh-CN',
+      },
+      pdfText: '',
+      pdfImages: [],
+      imageStorageIds: [],
+      sceneOutlines: null,
+      currentStep: 'generating',
+    };
 
-      setStatusText('正在处理学习资料...');
-      const activePdfConfig = pdfProvidersConfig?.[pdfProviderId];
-      const pdfContent = await parsePdfIfNeeded(
-        materialFile,
-        controller.signal,
-        pdfProviderId,
-        activePdfConfig?.apiKey,
-        activePdfConfig?.baseUrl,
-      );
-
-      const createResp = await fetch('/api/generate-classroom', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          requirement,
-          language: 'zh-CN',
-          ...(pdfContent ? { pdfContent } : {}),
-          enableWebSearch: true,
-          enableImageGeneration: true,
-          enableVideoGeneration: true,
-          enableTTS: true,
-          agentMode: 'generate',
-          modelConfig: getCurrentModelConfig(),
-        }),
-      });
-
-      const createPayload = (await createResp.json()) as GenerateClassroomResponse;
-      if (!createResp.ok || !createPayload.success || !createPayload.jobId) {
-        throw new Error(createPayload.error || '创建课堂任务失败。');
-      }
-
-      const { jobId } = createPayload;
-      const pollUrl = createPayload.pollUrl || `/api/generate-classroom/${jobId}`;
-      const pollIntervalMs = createPayload.pollIntervalMs || 5000;
-      setStatusText('任务已提交，正在生成课堂...');
-
-      const maxPollAttempts = 240;
-      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
-        if (!isMountedRef.current || controller.signal.aborted) {
-          return;
+    // If user uploaded a PDF, store it in IndexedDB for deferred parsing
+    if (materialFile) {
+      const isPdf =
+        materialFile.type === 'application/pdf' || materialFile.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        try {
+          const { storePdfBlob } = await import('@/lib/utils/image-storage');
+          const storageKey = await storePdfBlob(materialFile);
+          session.pdfStorageKey = storageKey;
+          session.pdfFileName = materialFile.name;
+          session.pdfProviderId = pdfProviderId;
+          const activePdfConfig = pdfProvidersConfig?.[pdfProviderId];
+          if (activePdfConfig) {
+            session.pdfProviderConfig = {
+              apiKey: activePdfConfig.apiKey,
+              baseUrl: activePdfConfig.baseUrl,
+            };
+          }
+        } catch (err) {
+          console.error('Failed to store PDF:', err);
         }
-
-        await sleep(pollIntervalMs);
-
-        const pollResp = await fetch(pollUrl, {
-          method: 'GET',
-          cache: 'no-store',
-          signal: controller.signal,
-        });
-
-        const pollPayload = (await pollResp.json()) as GenerateClassroomJobResponse;
-        if (!pollResp.ok || !pollPayload.success) {
-          throw new Error(pollPayload.error || '读取课堂生成状态失败。');
-        }
-
-        const progressText =
-          typeof pollPayload.progress === 'number' ? ` (${Math.round(pollPayload.progress)}%)` : '';
-        if (!isMountedRef.current || controller.signal.aborted) {
-          return;
-        }
-
-        setStatusText(`${pollPayload.message || '课堂生成中'}${progressText}`);
-
-        if (pollPayload.status === 'failed') {
-          throw new Error(pollPayload.error || '课堂生成失败。');
-        }
-
-        if (pollPayload.status === 'succeeded' && pollPayload.result?.classroomId) {
-          setStatusText('课堂生成完成，正在进入课堂...');
-
-          const targetUrl = (() => {
-            const resultUrl = pollPayload.result?.url;
-            if (resultUrl) {
-              try {
-                const parsed = new URL(resultUrl, window.location.origin);
-                return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-              } catch {
-                // Fall back to classroom route when url parsing fails.
-              }
-            }
-            return `/classroom/${encodeURIComponent(pollPayload.result.classroomId)}`;
-          })();
-
-          router.push(targetUrl);
-          return;
-        }
-      }
-
-      throw new Error('课堂生成超时，请稍后在“我的课程”中查看结果。');
-    } catch (error) {
-      if (!isMountedRef.current) {
-        return;
-      }
-
-      setErrorText(error instanceof Error ? error.message : '生成课堂时发生未知错误。');
-    } finally {
-      if (isMountedRef.current) {
-        setIsGenerating(false);
       }
     }
+
+    // Store session and navigate to generation-preview
+    sessionStorage.setItem('generationSession', JSON.stringify(session));
+    router.push('/generation-preview');
+  };
+
+  const handleCancelGeneration = () => {
+    const pollUrl = activePollUrlRef.current;
+    abortControllerRef.current?.abort();
+    if (pollUrl) {
+      void fetch(pollUrl, { method: 'DELETE', keepalive: true }).catch(() => {});
+      activePollUrlRef.current = null;
+    }
+    setStatusText('正在取消课堂生成...');
+    setIsGenerating(false);
   };
 
   return (
@@ -343,7 +300,16 @@ export default function CreateClassPage() {
           {statusText ? <p className="text-sm text-gray-600">{statusText}</p> : null}
           {errorText ? <p className="text-sm text-red-600">{errorText}</p> : null}
 
-          <div className="pt-4 flex justify-end">
+          <div className="pt-4 flex justify-end gap-3">
+            {isGenerating ? (
+              <button
+                type="button"
+                onClick={handleCancelGeneration}
+                className="flex items-center gap-2 px-8 py-4 border border-gray-300 bg-white hover:bg-gray-50 text-gray-900 font-bold uppercase tracking-wide transition-all text-sm"
+              >
+                取消生成
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={handleGenerate}
