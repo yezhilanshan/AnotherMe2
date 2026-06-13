@@ -12,6 +12,15 @@ import { db, type ChatSessionRecord } from './database';
 /** Maximum messages per session to avoid IndexedDB bloat */
 const MAX_MESSAGES_PER_SESSION = 200;
 
+function queueStageSync(stageId: string): void {
+  if (typeof window === 'undefined') return;
+  void import('./stage-storage')
+    .then(({ debouncedSyncToServer }) => debouncedSyncToServer(stageId))
+    .catch(() => {
+      // Best-effort server backup must not block local chat persistence.
+    });
+}
+
 /**
  * Save chat sessions for a stage to IndexedDB.
  * - Active sessions are saved as 'interrupted' (streaming context lost on refresh)
@@ -22,6 +31,7 @@ export async function saveChatSessions(stageId: string, sessions: ChatSession[])
   if (!sessions || sessions.length === 0) {
     // Delete all sessions for this stage if empty
     await db.chatSessions.where('stageId').equals(stageId).delete();
+    queueStageSync(stageId);
     return;
   }
 
@@ -48,6 +58,8 @@ export async function saveChatSessions(stageId: string, sessions: ChatSession[])
     await db.chatSessions.where('stageId').equals(stageId).delete();
     await db.chatSessions.bulkPut(records);
   });
+
+  queueStageSync(stageId);
 }
 
 /**
@@ -78,4 +90,5 @@ export async function loadChatSessions(stageId: string): Promise<ChatSession[]> 
  */
 export async function deleteChatSessions(stageId: string): Promise<void> {
   await db.chatSessions.where('stageId').equals(stageId).delete();
+  queueStageSync(stageId);
 }

@@ -37,10 +37,20 @@ server {
     proxy_pass ${GATEWAY_UPSTREAM};
   }
 
-  location /ws/ {
+  # ── Live-book REST API (non‑WS) ──────────────────────────────
+  location /api/live-book/ {
+    proxy_pass ${GATEWAY_UPSTREAM};
+  }
+
+  # ── Co-writer REST API ───────────────────────────────────────
+  location /api/co-writer/ {
+    proxy_pass ${GATEWAY_UPSTREAM};
+  }
+
+  location = /api/messages/ws {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
-    proxy_pass ${GATEWAY_UPSTREAM};
+    proxy_pass ${CORE_UPSTREAM};
   }
 
   location /artifacts/ {

@@ -1,7 +1,7 @@
 """
 LearningBlock - Upgrade from Scene-level to Block-level learning objects.
 
-Inspired by DeepTutor's Book Engine block system. Extends the existing Scene model
+Inspired by AnotherMe's Book Engine block system. Extends the existing Scene model
 with block-level source tracking, learning objectives, attempt tracking,
 misconception tags, and retry/failure state.
 """

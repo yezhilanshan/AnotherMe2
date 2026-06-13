@@ -48,11 +48,17 @@ export interface ChatAreaRef {
   endActiveSession: () => Promise<void>;
   softPauseActiveSession: () => Promise<void>;
   resumeActiveSession: () => Promise<void>;
-  sendMessage: (content: string, capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize') => Promise<void>;
+  sendMessage: (
+    content: string,
+    capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize',
+  ) => Promise<void>;
   startDiscussion: (request: DiscussionRequest) => Promise<void>;
   startLecture: (sceneId: string) => Promise<string>;
   addLectureMessage: (sessionId: string, action: Action, actionIndex: number) => void;
-  addReaction: (type: import('@/lib/types/chat').UserReaction['type'], targetAgentId?: string) => void;
+  addReaction: (
+    type: import('@/lib/types/chat').UserReaction['type'],
+    targetAgentId?: string,
+  ) => void;
   getIsStreaming: () => boolean;
   getActiveSessionType: () => string | null;
   getLectureMessageId: (sessionId: string) => string | null;
@@ -286,14 +292,10 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
 
             {/* Notes Tab */}
             <TabsContent value="lecture" className="flex-1 overflow-hidden flex flex-col">
-              <LectureNotesView
-                scenes={scenes}
-                currentSceneId={currentSceneId}
-                stageId={stageId}
-              />
+              <LectureNotesView scenes={scenes} currentSceneId={currentSceneId} stageId={stageId} />
             </TabsContent>
 
-            {/* Chat Tab - DeepTutor style */}
+            {/* Chat Tab - AnotherMe style */}
             <TabsContent value="chat" className="flex-1 overflow-hidden flex flex-col min-h-0">
               {/* Top header bar */}
               <div className="flex items-center justify-between px-4 py-2 shrink-0">
@@ -317,13 +319,14 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                 <ToolTracePanel traces={toolTraces} isStreaming={isStreaming} />
 
                 {chatSessions.length === 0 ? (
-                  /* Empty state - DeepTutor style */
+                  /* Empty state - AnotherMe style */
                   <div className="flex-1 flex flex-col items-center justify-center text-center px-6 min-h-[300px]">
                     <h2 className="text-[22px] font-semibold text-gray-800 dark:text-gray-100 mb-2 tracking-tight">
                       {t('chat.welcomeTitle') || 'What would you like to learn?'}
                     </h2>
                     <p className="text-[13px] text-gray-400 dark:text-gray-500 leading-relaxed">
-                      {t('chat.welcomeSubtitle') || 'Ask anything — I am here to help you understand.'}
+                      {t('chat.welcomeSubtitle') ||
+                        'Ask anything — I am here to help you understand.'}
                     </p>
                   </div>
                 ) : (
@@ -344,7 +347,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
               </div>
 
               {/* Chat Composer */}
-              <div className="shrink-0 px-3 pb-3 pt-1">
+              <div className="shrink-0 px-3 pb-3 pt-1 max-md:pb-safe">
                 <ChatComposer
                   isStreaming={isStreaming}
                   capability={capability}

@@ -96,7 +96,7 @@ export const ChatComposer = memo(function ChatComposer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey) {
         e.preventDefault();
         doSend();
       }
@@ -207,7 +207,7 @@ export const ChatComposer = memo(function ChatComposer({
             />
           </div>
 
-          {/* Bottom toolbar - DeepTutor style */}
+          {/* Bottom toolbar - AnotherMe style */}
           <div className="border-t border-gray-100 dark:border-gray-800/50 px-3 py-2">
             <div className="flex items-center gap-1">
               {/* Tools button */}

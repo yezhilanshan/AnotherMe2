@@ -1,11 +1,14 @@
 /**
  * Agentic Pipeline for AI Tutor Chat
  *
- * 实现 DeepTutor 等价的 agentic tool calling 流程：
+ * 实现 AnotherMe 等价的 agentic tool calling 流程：
  * thinking -> acting -> observing -> responding
  *
  * 与当前预执行全部工具的方式不同，此 pipeline 让模型在生成过程中
  * 按需选择工具、观察结果、再生成最终回答。
+ *
+ * 提示词来源：anotherme2_engine/tutor_engine/agents/chat/prompts/zh/agentic_chat.yaml
+ * 与 AnotherMe 引擎的 AgenticChatPipeline 保持同步。
  */
 
 import { streamText, type LanguageModel } from 'ai';
@@ -86,52 +89,60 @@ export interface AgenticPipelineResult {
 }
 
 // ============================================================================
-// System Prompts (四阶段提示词)
+// System Prompts（四阶段提示词 - 来自 AnotherMe agentic_chat.yaml zh）
+// 与 anotherme2_engine/tutor_engine/agents/chat/prompts/zh/agentic_chat.yaml 保持一致，
+// 确保 AI Tutor 使用 AnotherMe 原生的 thinking/acting/observing/responding 流程。
 // ============================================================================
 
-const THINKING_SYSTEM_PROMPT = `你是一位AI导师助手。请分析用户的问题，思考解决思路。
+const THINKING_SYSTEM_PROMPT = `你是 AnotherMe 内部的 thinking 模块（不面向用户）。你的产出是一份简短的内部分析备忘，供后续 acting / responding 阶段消费，绝不会直接展示给用户。
 
-思考要点：
-1. 理解用户问题的核心需求
-2. 识别问题类型（知识问答、计算、创意、分析等）
-3. 判断是否需要使用工具辅助回答
-4. 规划回答的结构和要点
+产出格式（用自然段落，不需要标题）：
+- 用户目标：用一两句话概括用户真正想要什么。
+- 已知 vs. 缺失：当前对话和上下文中已经有什么信息，还缺什么。
+- 工具规划：哪些工具可能补足缺失信息，简要说明理由。如果信息已足够，写"无需工具"。
+- 回答要点：最终回答应覆盖的关键点（列 2-4 条）。
 
-请用中文进行思考，展示你的分析过程。`;
+关键约束：
+- 你只输出内部分析备忘，不要给出面向用户的回答、结论或解题过程。
+- 可以提及预计使用哪些工具，但不要真正调用工具。
+- 保持简洁，不超过 200 字。
 
-const ACTING_SYSTEM_PROMPT = `你是一位AI导师助手。根据思考结果，决定是否需要调用工具来辅助回答。
+当前启用工具：
+{toolList}`;
 
-可用工具：
-{toolList}
+const ACTING_SYSTEM_PROMPT = `你是 AnotherMe 的工具调用代理。你的任务是根据用户问题和前序 thinking，从当前已启用的工具中自主选择必要工具并调用。
 
-工具使用原则：
-1. 只在必要时调用工具
-2. 可以并行调用多个相关工具
-3. 每个工具调用都要有明确的目的
-4. 如果不需要工具，直接回答用户问题
+规则：
+1. 先完整审视所有已启用工具，再决定最有帮助的工具组合；不要只盯住单个工具。
+2. 对于需要定义、事实核验、外部资料、论文、计算、推理等不同信息面的复杂问题，优先并行调用多个互补工具来覆盖这些信息面。
+3. 只调用真正有帮助的工具，但只要工具能显著提升答案质量，就应充分调用。
+4. 参数要具体、可执行，优先使用用户原问题中的关键信息，必要时针对不同工具改写成最适合它的查询。
+5. 如果信息已经足够，可以不调用工具。
+6. 不要输出最终回答给学生；这里只负责工具选择与调用。
+7. 单轮最多并行调用 8 个工具；如果有多个互补工具都相关，优先在同一轮一起调用。
 
-请根据思考结果，选择合适的工具进行调用。`;
+当前可用工具：
+{toolList}`;
 
-const OBSERVING_SYSTEM_PROMPT = `你是一位AI导师助手。你已经调用了一些工具并获得了结果。
+const OBSERVING_SYSTEM_PROMPT = `你是 AnotherMe 的 observing 阶段。请基于 thinking 和 acting 阶段的输出，整理一份内部观察总结，供最终回答阶段使用。不要直接回答学生。
 
-请分析工具返回的结果：
-1. 总结每个工具返回的关键信息
-2. 评估信息的质量和相关性
-3. 识别信息中的矛盾或缺口
-4. 整合所有信息形成统一的观察结论
+优先总结：
+1. 已确认的事实与结论
+2. 工具结果带来的关键证据
+3. 仍需在最终回答中解释清楚的点
 
-请用中文输出你的观察和分析。`;
+本轮可用工具背景：
+{toolList}`;
 
-const RESPONDING_SYSTEM_PROMPT = `你是一位AI导师助手。基于之前的思考、工具调用和观察，生成最终回答。
+const RESPONDING_SYSTEM_PROMPT = `你是 AnotherMe 的最终回答阶段。请根据 observation 和工具结果，给用户一个清晰、直接、结构良好的正式答复。
 
-回答要求：
-1. 直接回应用户的问题
-2. 结合工具返回的信息（如果有）
-3. 结构清晰，重点突出
-4. 使用中文回答
-5. 如果使用了工具，适当引用工具提供的信息
+要求：
+1. 只输出面向用户的正式回答。
+2. 不要暴露内部链路、思考过程或工具编排。
+3. 若工具结果提供了证据或限制，请自然融入答案。
 
-请生成完整、有帮助的回答。`;
+本轮工具背景：
+{toolList}`;
 
 // ============================================================================
 // Helper Functions
@@ -147,7 +158,7 @@ function formatToolList(enabledTools: TutorToolName[]): string {
     paper_search: 'paper_search - 搜索学术论文',
   };
 
-  return enabledTools.map(t => `- ${toolDescriptions[t]}`).join('\n') || '- 无可用工具';
+  return enabledTools.map((t) => `- ${toolDescriptions[t]}`).join('\n') || '- 无可用工具';
 }
 
 function generateToolCallId(): string {
@@ -159,15 +170,21 @@ function generateToolCallId(): string {
 // ============================================================================
 
 async function* stageThinking(
-  options: AgenticPipelineOptions
+  options: AgenticPipelineOptions,
 ): AsyncGenerator<AgenticPipelineEvent, string> {
-  const { userMessage, conversationHistory, languageModel, systemPrompt, signal } = options;
+  const { userMessage, conversationHistory, languageModel, systemPrompt, signal, enabledTools } =
+    options;
 
   log.info('[AgenticPipeline] Stage: Thinking started');
   yield { type: 'thinking_start' };
 
+  const thinkingPrompt = (systemPrompt || THINKING_SYSTEM_PROMPT).replace(
+    '{toolList}',
+    formatToolList(enabledTools),
+  );
+
   const messages: CoreMessage[] = [
-    { role: 'system', content: systemPrompt || THINKING_SYSTEM_PROMPT },
+    { role: 'system', content: thinkingPrompt },
     ...conversationHistory,
     { role: 'user', content: userMessage },
   ];
@@ -206,9 +223,10 @@ async function* stageThinking(
 
 async function* stageActing(
   options: AgenticPipelineOptions,
-  thinking: string
+  thinking: string,
 ): AsyncGenerator<AgenticPipelineEvent, { toolTraces: ToolTrace[] }> {
-  const { userMessage, conversationHistory, enabledTools, toolContext, languageModel, signal } = options;
+  const { userMessage, conversationHistory, enabledTools, toolContext, languageModel, signal } =
+    options;
 
   log.info('[AgenticPipeline] Stage: Acting started', { enabledTools });
 
@@ -230,7 +248,7 @@ async function* stageActing(
     { role: 'system', content: actingPrompt },
     ...conversationHistory,
     { role: 'user', content: userMessage },
-    { role: 'assistant', content: `[思考过程]\n${thinking}\n\n现在决定是否需要调用工具。` },
+    { role: 'assistant', content: `[Thinking]\n${thinking}` },
   ];
 
   const toolTraces: ToolTrace[] = [];
@@ -242,7 +260,6 @@ async function* stageActing(
         context: toolContext,
         onToolStart: (name, args) => {
           log.info(`[AgenticPipeline] Tool started: ${name}`, args);
-          // 发送工具开始事件
         },
         onToolEnd: (name, result) => {
           log.info(`[AgenticPipeline] Tool completed: ${name}`, { success: result.success });
@@ -262,7 +279,6 @@ async function* stageActing(
           if (signal?.aborted) {
             throw new Error('Aborted');
           }
-          // 文本输出在 acting 阶段主要是思考过程
         }
 
         // 获取工具调用结果
@@ -271,7 +287,6 @@ async function* stageActing(
         // 处理工具结果
         if (toolResults) {
           for (const toolResult of toolResults) {
-            // 使用类型断言处理工具结果
             const tr = toolResult as {
               toolName: string;
               toolCallId: string;
@@ -295,7 +310,7 @@ async function* stageActing(
         }
 
         return toolTraces;
-      }
+      },
     );
 
     // streamText exposes completed tool results after the step finishes. Emit a
@@ -336,7 +351,7 @@ async function* stageActing(
 async function* stageObserving(
   options: AgenticPipelineOptions,
   thinking: string,
-  toolTraces: ToolTrace[]
+  toolTraces: ToolTrace[],
 ): AsyncGenerator<AgenticPipelineEvent, string> {
   const { userMessage, conversationHistory, languageModel, signal } = options;
 
@@ -349,21 +364,25 @@ async function* stageObserving(
     return '';
   }
 
-  // 格式化工具结果
   const toolResultsText = toolTraces
-    .map((trace, idx) => `
+    .map((trace, idx) =>
+      `
 工具 ${idx + 1}: ${trace.name}
 参数: ${JSON.stringify(trace.arguments)}
 结果: ${trace.result.slice(0, 500)}${trace.result.length > 500 ? '...' : ''}
-    `.trim())
+    `.trim(),
+    )
     .join('\n\n');
 
   const messages: CoreMessage[] = [
     { role: 'system', content: OBSERVING_SYSTEM_PROMPT },
     ...conversationHistory,
     { role: 'user', content: userMessage },
-    { role: 'assistant', content: `[思考过程]\n${thinking}` },
-    { role: 'user', content: `工具调用结果：\n\n${toolResultsText}\n\n请分析以上工具结果。` },
+    { role: 'assistant', content: `[Thinking]\n${thinking}` },
+    {
+      role: 'user',
+      content: `请整理本轮推理与工具执行得到的关键信息，输出给 tutor 自己看的观察总结。聚焦：已确认事实、仍不确定的点、最终回答应强调什么。不要直接写给学生。\n\n工具调用结果：\n\n${toolResultsText}`,
+    },
   ];
 
   let observation = '';
@@ -402,7 +421,7 @@ async function* stageResponding(
   options: AgenticPipelineOptions,
   thinking: string,
   observation: string,
-  toolTraces: ToolTrace[]
+  toolTraces: ToolTrace[],
 ): AsyncGenerator<AgenticPipelineEvent, string> {
   const { userMessage, conversationHistory, languageModel, signal } = options;
 
@@ -411,23 +430,24 @@ async function* stageResponding(
 
   const contextParts: string[] = [];
 
-  if (thinking) {
-    contextParts.push(`[思考过程]\n${thinking}`);
-  }
-
   if (observation) {
-    contextParts.push(`[工具结果分析]\n${observation}`);
+    contextParts.push(`[Observation]\n${observation}`);
   }
 
   if (toolTraces.length > 0) {
     const toolSummary = toolTraces
-      .map(t => `- ${t.name}: ${t.result.slice(0, 200)}${t.result.length > 200 ? '...' : ''}`)
+      .map((t) => `- ${t.name}: ${t.result.slice(0, 200)}${t.result.length > 200 ? '...' : ''}`)
       .join('\n');
-    contextParts.push(`[工具结果摘要]\n${toolSummary}`);
+    contextParts.push(`[Tool Trace]\n${toolSummary}`);
   }
 
+  const respondingPrompt = RESPONDING_SYSTEM_PROMPT.replace(
+    '{toolList}',
+    formatToolList(options.enabledTools),
+  );
+
   const messages: CoreMessage[] = [
-    { role: 'system', content: RESPONDING_SYSTEM_PROMPT },
+    { role: 'system', content: respondingPrompt },
     ...conversationHistory,
     ...(contextParts.length > 0
       ? [{ role: 'assistant' as const, content: contextParts.join('\n\n') }]
@@ -473,7 +493,7 @@ async function* stageResponding(
  * 四阶段流程：thinking -> acting -> observing -> responding
  */
 export async function* runAgenticPipeline(
-  options: AgenticPipelineOptions
+  options: AgenticPipelineOptions,
 ): AsyncGenerator<AgenticPipelineEvent, AgenticPipelineResult> {
   const startTime = Date.now();
   log.info('[AgenticPipeline] Started', { enabledTools: options.enabledTools });
@@ -527,7 +547,7 @@ export async function* runAgenticPipeline(
  * 简化的 agentic pipeline，直接返回结果而不流式输出
  */
 export async function runAgenticPipelineSimple(
-  options: AgenticPipelineOptions
+  options: AgenticPipelineOptions,
 ): Promise<AgenticPipelineResult> {
   const events: AgenticPipelineEvent[] = [];
 
@@ -535,8 +555,8 @@ export async function runAgenticPipelineSimple(
     events.push(event);
   }
 
-  const completeEvent = events.find(e => e.type === 'complete');
-  const errorEvent = events.find(e => e.type === 'error');
+  const completeEvent = events.find((e) => e.type === 'complete');
+  const errorEvent = events.find((e) => e.type === 'error');
 
   if (completeEvent?.data) {
     return completeEvent.data as AgenticPipelineResult;

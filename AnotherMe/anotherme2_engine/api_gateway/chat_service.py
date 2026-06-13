@@ -18,6 +18,7 @@ from .knowledge_tracing_service import (
     normalize_learning_event_for_kt,
     process_quiz_answer,
 )
+from .db import nested_session_scope
 from .models import (
     AIChatMessage,
     AIChatSession,
@@ -56,7 +57,7 @@ def _ensure_user(session: Session, user_id: str, name: str | None = None) -> App
     user = AppUser(id=user_id, name=name)
     try:
         # Use a SAVEPOINT so concurrent requests can race safely on users.id.
-        with session.begin_nested():
+        with nested_session_scope(session):
             session.add(user)
             session.flush([user])
         return user
@@ -73,7 +74,7 @@ def _ensure_user(session: Session, user_id: str, name: str | None = None) -> App
 
 
 def serialize_conversation(conversation: Conversation, unread_count: int = 0) -> dict[str, Any]:
-    return {
+    result = {
         "conversation_id": conversation.id,
         "type": conversation.conversation_type,
         "name": conversation.name,
@@ -84,6 +85,9 @@ def serialize_conversation(conversation: Conversation, unread_count: int = 0) ->
         "created_at": conversation.created_at.isoformat(),
         "updated_at": conversation.updated_at.isoformat(),
     }
+    if conversation.metadata_json:
+        result["metadata"] = conversation.metadata_json
+    return result
 
 
 def create_conversation(
@@ -93,6 +97,7 @@ def create_conversation(
     name: str,
     creator_id: str | None = None,
     member_ids: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> Conversation:
     creator = creator_id or user_id
     _ensure_user(session, creator)
@@ -101,6 +106,7 @@ def create_conversation(
         conversation_type=conversation_type,
         name=name,
         creator_id=creator,
+        metadata_json=metadata,
     )
     session.add(conversation)
     session.flush()
@@ -417,7 +423,7 @@ def create_message(
     _ensure_user(session, sender_id)
     for attempt in range(3):
         try:
-            with session.begin_nested():
+            with nested_session_scope(session):
                 conversation_query = session.query(Conversation).filter(Conversation.id == conversation_id)
                 if _supports_for_update(session):
                     conversation_query = conversation_query.with_for_update()
@@ -589,10 +595,12 @@ def create_ai_session(
     subject: str | None = None,
     linked_classroom_id: str | None = None,
     linked_conversation_id: str | None = None,
+    session_id: str | None = None,
 ) -> AIChatSession:
     _ensure_user(session, user_id)
 
     record = AIChatSession(
+        id=session_id or str(uuid4()),
         user_id=user_id,
         title=title,
         source=source,
@@ -637,9 +645,13 @@ def serialize_ai_message(message: AIChatMessage) -> dict[str, Any]:
     return {
         "message_id": message.id,
         "session_id": message.session_id,
+        "runtime_seq": message.runtime_seq,
         "role": message.role,
         "content": message.content,
         "content_type": message.content_type,
+        "capability": message.capability,
+        "events": message.events_json or [],
+        "attachments": message.attachments_json or [],
         "model_name": message.model_name,
         "prompt_tokens": message.prompt_tokens,
         "completion_tokens": message.completion_tokens,
@@ -655,11 +667,21 @@ def list_ai_messages(session: Session, session_id: str, limit: int = 200) -> lis
     rows = (
         session.query(AIChatMessage)
         .filter(AIChatMessage.session_id == session_id)
-        .order_by(AIChatMessage.created_at.asc())
+        .order_by(AIChatMessage.runtime_seq.asc().nulls_last(), AIChatMessage.created_at.asc())
         .limit(max(1, min(limit, 500)))
         .all()
     )
     return [serialize_ai_message(row) for row in rows]
+
+
+def _next_ai_message_seq(session: Session, session_id: str) -> int:
+    max_seq = (
+        session.query(func.max(AIChatMessage.runtime_seq))
+        .filter(AIChatMessage.session_id == session_id)
+        .scalar()
+        or 0
+    )
+    return int(max_seq) + 1
 
 
 def create_ai_message(
@@ -676,6 +698,11 @@ def create_ai_message(
     latency_ms: int | None = None,
     request_id: str | None = None,
     parent_message_id: str | None = None,
+    message_id: str | None = None,
+    runtime_seq: int | None = None,
+    capability: str = "",
+    events: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> AIChatMessage:
     ai_session = session.get(AIChatSession, session_id)
     if not ai_session:
@@ -690,12 +717,18 @@ def create_ai_message(
             return existing
 
     try:
-        with session.begin_nested():
+        with nested_session_scope(session):
+            resolved_runtime_seq = runtime_seq or _next_ai_message_seq(session, session_id)
             message = AIChatMessage(
+                id=message_id or str(uuid4()),
                 session_id=session_id,
+                runtime_seq=resolved_runtime_seq,
                 role=role,
                 content=content,
                 content_type=content_type,
+                capability=capability or "",
+                events_json=events or [],
+                attachments_json=attachments or [],
                 model_name=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -752,7 +785,7 @@ def upsert_ai_feedback(
         return feedback
 
     try:
-        with session.begin_nested():
+        with nested_session_scope(session):
             feedback = AIMessageFeedback(
                 message_id=message_id,
                 user_id=user_id,
@@ -1004,7 +1037,7 @@ def extract_learning_records(
                 )
             )
             try:
-                with session.begin_nested():
+                with nested_session_scope(session):
                     session.add(
                         AILearningRecord(
                             id=record_id,

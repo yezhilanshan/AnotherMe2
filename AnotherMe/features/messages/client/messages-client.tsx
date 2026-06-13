@@ -37,7 +37,6 @@ import type {
   MessagesResponse,
   RemoveMemberResponse,
   SearchResponse,
-  WSConfigResponse,
 } from '@/features/messages/pages/messages/types';
 import {
   ASSISTANT_ID,
@@ -61,7 +60,6 @@ export default function MessagesPage() {
   const [aiSessionByConversation, setAiSessionByConversation] = useState<Record<string, string>>(
     {},
   );
-  const [wsBaseUrl, setWsBaseUrl] = useState('');
   const [wsConnected, setWsConnected] = useState(false);
 
   const [input, setInput] = useState('');
@@ -83,6 +81,7 @@ export default function MessagesPage() {
   const [hoveredMessageId, setHoveredMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const webSearchProviderId = useSettingsStore((s) => s.webSearchProviderId);
   const webSearchProvidersConfig = useSettingsStore((s) => s.webSearchProvidersConfig);
 
@@ -329,33 +328,6 @@ export default function MessagesPage() {
   };
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch('/api/messages/ws-config', {
-          method: 'GET',
-          cache: 'no-store',
-        });
-        const payload = (await response.json()) as WSConfigResponse;
-        if (!response.ok || !payload.success || !payload.wsBaseUrl) {
-          throw new Error(payload.error || '获取 WebSocket 地址失败');
-        }
-        if (!cancelled) {
-          setWsBaseUrl(payload.wsBaseUrl);
-        }
-      } catch {
-        if (!cancelled) {
-          setWsBaseUrl('');
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     if (!userReady) return;
 
     let cancelled = false;
@@ -404,19 +376,15 @@ export default function MessagesPage() {
   }, [loadConversationMembers, loadConversationMessages, membersApiEnabled, selectedContactId]);
 
   useEffect(() => {
-    if (!selectedContactId || !currentUserId || !wsBaseUrl || !userReady) {
+    if (!selectedContactId || !currentUserId || !userReady) {
       setWsConnected(false);
       return;
     }
     setWsConnected(false);
     let active = true;
-    const wsQuery = new URLSearchParams({ user_id: currentUserId });
-    const wsUrl = `${wsBaseUrl}/ws/messages/${selectedContactId}?${wsQuery.toString()}`;
 
-    if (window.location.protocol === 'https:' && wsUrl.startsWith('ws://')) {
-      setWsConnected(false);
-      return;
-    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/messages/ws?conversation_id=${encodeURIComponent(selectedContactId)}&user_id=${encodeURIComponent(currentUserId)}`;
 
     let ws: WebSocket;
     try {
@@ -425,6 +393,8 @@ export default function MessagesPage() {
       setWsConnected(false);
       return;
     }
+
+    wsRef.current = ws;
 
     ws.onopen = () => {
       if (!active) {
@@ -482,11 +452,12 @@ export default function MessagesPage() {
 
     return () => {
       active = false;
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close();
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
       }
     };
-  }, [currentUserId, fetchConversations, selectedContactId, userReady, wsBaseUrl]);
+  }, [currentUserId, fetchConversations, selectedContactId, userReady]);
 
   const handleCreateGroupConversation = async () => {
     const name = newGroupName.trim();

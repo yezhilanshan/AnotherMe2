@@ -1,5 +1,5 @@
 /**
- * ClassroomBook - Persistent learning artifact inspired by DeepTutor Book Engine.
+ * ClassroomBook - Persistent learning artifact inspired by AnotherMe Book Engine.
  *
  * A ClassroomBook is not just a generated classroom JSON. It is a durable,
  * queryable, and replayable learning product that includes:

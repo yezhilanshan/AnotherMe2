@@ -155,10 +155,12 @@ export function ModernChatInterface({ className }: ModernChatInterfaceProps) {
     [handleSend]
   );
 
-  // Initialize a session during render if none exist
-  if (sessions.length === 0) {
-    createNewSession();
-  }
+  // Initialize a session on mount if none exist
+  useEffect(() => {
+    if (sessions.length === 0) {
+      createNewSession();
+    }
+  }, [sessions.length, createNewSession]);
 
   return (
     <div
@@ -167,7 +169,7 @@ export function ModernChatInterface({ className }: ModernChatInterfaceProps) {
         className,
       )}
     >
-      {/* 侧边栏 */}
+      {/* 侧边栏 - 桌面端显示 */}
       <AnimatePresence mode="wait">
         {!sidebarCollapsed && (
           <motion.aside
@@ -175,7 +177,7 @@ export function ModernChatInterface({ className }: ModernChatInterfaceProps) {
             animate={{ width: 260, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
-            className="flex flex-col border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 h-full"
+            className="hidden md:flex flex-col border-r border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 h-full"
           >
             {/* 头部 */}
             <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">

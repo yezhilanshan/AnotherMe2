@@ -10,6 +10,7 @@ import type { PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
 import { cn } from '@/lib/utils';
 import { DEFAULT_TEACHER_AVATAR, DEFAULT_STUDENT_AVATAR } from '@/features/classroom/components/roundtable/constants';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const PRESENTATION_BUBBLE_WIDTH = 'w-[min(420px,calc(100vw-3rem))]';
 
@@ -116,6 +117,111 @@ export function buildPresentationBubbleModel({
     isLoading,
     isTopicPending,
   };
+}
+
+/** Mobile subtitle bar — full-width at the bottom with speaker info and text */
+function MobileSubtitleBar({
+  bubble,
+  onClick,
+  audioIndicatorState,
+  buttonState,
+  isPaused,
+}: {
+  readonly bubble: PresentationBubbleModel;
+  readonly onClick?: () => void;
+  readonly audioIndicatorState?: AudioIndicatorState;
+  readonly buttonState?: 'play' | 'bars' | 'restart' | 'none';
+  readonly isPaused?: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    <div
+      onClick={onClick}
+      className={cn(
+        'w-full rounded-2xl border backdrop-blur-xl shadow-[0_-8px_30px_rgba(0,0,0,0.2)] overflow-hidden cursor-pointer',
+        bubble.role === 'user'
+          ? 'bg-violet-900/70 border-violet-700/50'
+          : bubble.role === 'agent'
+            ? 'bg-blue-900/70 border-blue-700/50'
+            : 'bg-gray-900/75 border-gray-600/50',
+      )}
+    >
+      <div className="flex items-center gap-2.5 px-3 py-2">
+        {/* Avatar */}
+        <div
+          className={cn(
+            'w-8 h-8 rounded-full overflow-hidden border-2 shrink-0',
+            bubble.role === 'user'
+              ? 'border-violet-400/70'
+              : bubble.role === 'agent'
+                ? 'border-blue-400/70'
+                : 'border-purple-400/70',
+          )}
+        >
+          <AvatarDisplay src={bubble.avatar} alt={bubble.name} />
+        </div>
+
+        {/* Name + text */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                'text-[10px] font-bold uppercase tracking-wider shrink-0',
+                bubble.role === 'user'
+                  ? 'text-violet-300'
+                  : bubble.role === 'agent'
+                    ? 'text-blue-300'
+                    : 'text-purple-300',
+              )}
+            >
+              {bubble.name}
+            </span>
+            {audioIndicatorState === 'generating' && (
+              <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />
+            )}
+            {audioIndicatorState === 'playing' && (
+              <Volume2 className="w-3 h-3 text-gray-400" />
+            )}
+          </div>
+          {bubble.isLoading ? (
+            <div className="flex gap-1 items-center py-0.5">
+              {[0, 0.2, 0.4].map((delay) => (
+                <motion.div
+                  key={delay}
+                  animate={{ opacity: [0.3, 1, 0.3] }}
+                  transition={{ repeat: Infinity, duration: 1, delay }}
+                  className="w-1.5 h-1.5 rounded-full bg-purple-400"
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-[13px] leading-snug text-gray-100 line-clamp-2 break-words">
+              {bubble.text}
+            </p>
+          )}
+        </div>
+
+        {/* Play/pause indicator */}
+        {bubble.role !== 'user' && !bubble.isLoading && buttonState && buttonState !== 'none' && (
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
+            className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors shrink-0"
+          >
+            {buttonState === 'play' || buttonState === 'restart' ? (
+              <Play className="w-4 h-4 text-white ml-0.5" />
+            ) : isPaused ? (
+              <Play className="w-4 h-4 text-amber-400 ml-0.5" />
+            ) : (
+              <Pause className="w-4 h-4 text-white" />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** Collapsed pill — shows avatar + name, click to expand */
@@ -398,6 +504,7 @@ export function PresentationSpeechOverlay({
   isPaused,
 }: PresentationSpeechOverlayProps) {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
 
   const bubble = buildPresentationBubbleModel({
     playbackView,
@@ -458,6 +565,35 @@ export function PresentationSpeechOverlay({
 
   /* ── Left-side overlay: absolute covers stage, renders left bubble + cue ── */
   if (side === 'left') {
+    // Mobile: full-width subtitle bar above the interaction dock
+    if (isMobile) {
+      return (
+        <div className="absolute inset-x-0 bottom-24 z-30 pointer-events-auto">
+          <AnimatePresence mode="wait">
+            {matchesSide && bubble && (
+              <motion.div
+                key={bubble.key}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
+                className="w-full px-3"
+              >
+                <MobileSubtitleBar
+                  bubble={bubble}
+                  onClick={onBubbleClick}
+                  audioIndicatorState={audioIndicatorState}
+                  buttonState={buttonState}
+                  isPaused={isPaused}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      );
+    }
+
+    // Desktop: bubble at bottom-left
     return (
       <div className="absolute inset-0 pointer-events-none">
         <AnimatePresence mode="wait">
@@ -479,6 +615,9 @@ export function PresentationSpeechOverlay({
   }
 
   /* ── Right-side: inline flow, rendered inside the dock's flex column ── */
+  // On mobile, the left-side overlay handles full-width subtitles, so skip right-side
+  if (isMobile) return null;
+
   return (
     <AnimatePresence mode="wait">
       {matchesSide && bubble && (

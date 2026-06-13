@@ -13,8 +13,9 @@ from unittest.mock import patch
 import api_gateway.db as db_module
 from api_gateway.app import create_app
 from api_gateway.config import Settings
-from api_gateway.db import init_db, reconfigure_db, session_scope
+from api_gateway.db import init_db, nested_session_scope, reconfigure_db, session_scope
 from api_gateway.job_service import (
+    _mark_failed,
     _run_problem_video_generate,
     create_or_get_job,
     fail_jobs_with_missing_input_objects,
@@ -31,15 +32,22 @@ from api_gateway.models import (
     AIChatMessage,
     AIChatSession,
     AILearningRecord,
+    AppUser,
     Job,
     JobArtifact,
     LearningEvent,
     StudentProfile,
 )
 from api_gateway.queueing import QueueMessage
-from api_gateway.schemas import CreateJobRequest, JobType, validate_job_payload
-from api_gateway.storage import LocalObjectStorage
+from api_gateway.schemas import CreateJobRequest, JobStatus, JobType, validate_job_payload
+from api_gateway.storage import LocalObjectStorage, build_storage
+from api_gateway.anotherme_client import AnotherMeClient
 from api_gateway.anotherme_executor import MissingInputObjectError, ProblemVideoExecutionResult, _merge_runtime_configs
+from agents.foundation.config import (
+    build_default_llm_config,
+    build_ocr_model_config,
+    build_vision_model_config,
+)
 
 
 class FakeQueueClient:
@@ -103,6 +111,21 @@ def test_course_generation_provider_switch_and_payload_injection():
     msm_provider.submit({"requirement": "讲解勾股定理"})
     assert stub.last_payload is not None
     assert stub.last_payload["pedagogy_profile"]["domain"] == "middle-school-math"
+
+
+def test_anotherme_client_disables_system_proxy_env(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("api_gateway.anotherme_client.httpx.Client", FakeHttpxClient)
+
+    client = AnotherMeClient("http://localhost:3000")
+    client._get_client()
+
+    assert captured["trust_env"] is False
 
 
 def test_validate_payload_defaults():
@@ -200,6 +223,37 @@ def test_idempotent_job_creation(tmp_path: Path):
         assert job1.id == job2.id
 
 
+def test_failed_idempotent_job_can_be_recreated(tmp_path: Path):
+    db_path = tmp_path / "jobs-retry.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(tmp_path / "obj"),
+    )
+    req = CreateJobRequest(
+        job_type=JobType.COURSE_GENERATE,
+        payload={"requirement": "勾股定理"},
+        user_id="mobile-user",
+    )
+
+    with session_scope() as session:
+        failed_job, created1 = create_or_get_job(session, req, settings)
+        _mark_failed(session, failed_job, "JOB_EXECUTION_FAILED", "upstream 502")
+        session.flush()
+
+        retry_job, created2 = create_or_get_job(session, req, settings)
+        session.flush()
+
+        assert created1 is True
+        assert created2 is True
+        assert retry_job.id != failed_job.id
+        assert retry_job.status == JobStatus.QUEUED.value
+        assert retry_job.idempotency_key.startswith(failed_job.idempotency_key + ":retry:")
+
+
 def test_init_db_auto_falls_back_to_sqlite_when_postgres_unreachable(tmp_path: Path, monkeypatch):
     fallback_db = tmp_path / "gateway-fallback.db"
 
@@ -253,6 +307,86 @@ def test_init_db_precheck_fallback_initializes_sqlite_without_postgres_lock(tmp_
 
     assert str(db_module.engine.url).startswith("sqlite:///")
     assert fallback_db.exists()
+
+
+def test_nested_session_scope_rolls_back_savepoint_only(tmp_path: Path):
+    db_path = tmp_path / "nested-savepoint.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    with session_scope() as session:
+        session.add(AppUser(id="outer-user", name="Outer"))
+        try:
+            with nested_session_scope(session):
+                session.add(AppUser(id="inner-user", name="Inner"))
+                session.flush()
+                raise RuntimeError("rollback inner")
+        except RuntimeError:
+            pass
+        session.add(AppUser(id="after-inner-user", name="After"))
+
+    with session_scope() as session:
+        assert session.get(AppUser, "outer-user") is not None
+        assert session.get(AppUser, "after-inner-user") is not None
+        assert session.get(AppUser, "inner-user") is None
+
+
+def test_ai_chat_non_streaming_persists_to_unified_database(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-unified.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**_kwargs):
+        yield {"type": "stream", "content": "统一数据库回复"}
+        yield {"type": "done"}
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "解释二次函数"}],
+                "model": "test-model",
+                "api_key": "test-key",
+                "capability": "chat",
+                "user_id": "stu-unified",
+                "request_id": "req-unified-chat",
+                "persistence_session_id": "sess-unified-chat",
+                "persist_messages": True,
+                "persist_user_message": True,
+                "persist_assistant_message": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "sess-unified-chat"
+
+    with session_scope() as session:
+        ai_session = session.get(AIChatSession, "sess-unified-chat")
+        assert ai_session is not None
+        rows = (
+            session.query(AIChatMessage)
+            .filter(AIChatMessage.session_id == "sess-unified-chat")
+            .order_by(AIChatMessage.runtime_seq.asc())
+            .all()
+        )
+        assert [(row.runtime_seq, row.role, row.content) for row in rows] == [
+            (1, "user", "解释二次函数"),
+            (2, "assistant", "统一数据库回复"),
+        ]
+        assert rows[0].capability == "chat"
 
 
 def test_api_contract_uploads_and_jobs(tmp_path: Path):
@@ -361,6 +495,17 @@ def test_gateway_health_endpoints_remain_available(tmp_path: Path):
     assert health.status_code == 200
     assert health.json()["ok"] is True
     assert "queue_backend" in health.json()
+
+
+def test_local_storage_root_is_independent_from_process_cwd(tmp_path: Path, monkeypatch):
+    settings = Settings(local_storage_root="./gateway_data/test-objects")
+    monkeypatch.chdir(tmp_path)
+
+    storage = build_storage(settings)
+
+    assert isinstance(storage, LocalObjectStorage)
+    assert storage.root.is_absolute()
+    assert storage.root == Path(__file__).resolve().parents[1] / "gateway_data" / "test-objects"
 
 
 def test_study_package_requires_output():
@@ -481,6 +626,44 @@ def test_problem_video_runtime_config_does_not_inherit_text_credentials_for_expl
     assert "api_key" not in ocr_config
     assert "base_url" not in ocr_config
     assert ocr_config["model"] == "qwen-vl-ocr-latest"
+
+
+def test_problem_video_server_defaults_use_env_when_mobile_omits_llm_config(monkeypatch):
+    monkeypatch.setenv("DEFAULT_MODEL", "qwen:qwen3.5-plus-2026-02-15")
+    monkeypatch.setenv("QWEN_API_KEY", "server-qwen-key")
+    monkeypatch.setenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    monkeypatch.delenv("PROBLEM_VIDEO_TEXT_MODEL", raising=False)
+    monkeypatch.delenv("PROBLEM_VIDEO_VISION_MODEL", raising=False)
+    monkeypatch.delenv("PROBLEM_VIDEO_OCR_MODEL", raising=False)
+
+    llm_config, vision_config, ocr_config = _merge_runtime_configs(
+        base_llm_config=build_default_llm_config(),
+        base_vision_config=build_vision_model_config(),
+        base_ocr_config=build_ocr_model_config(),
+        override={},
+    )
+
+    assert llm_config["api_key"] == "server-qwen-key"
+    assert llm_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert llm_config["model"] == "qwen3.5-plus-2026-02-15"
+    assert vision_config["api_key"] == "server-qwen-key"
+    assert vision_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert vision_config["model"] == "qwen3-vl-plus"
+    assert ocr_config["api_key"] == "server-qwen-key"
+    assert ocr_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert ocr_config["model"] == "qwen-vl-ocr-latest"
+
+
+def test_problem_video_role_model_env_overrides_are_server_side(monkeypatch):
+    monkeypatch.setenv("DEFAULT_MODEL", "qwen:qwen-text-env")
+    monkeypatch.setenv("PROBLEM_VIDEO_VISION_MODEL", "qwen:qwen-vision-env")
+    monkeypatch.setenv("PROBLEM_VIDEO_OCR_MODEL", "qwen:qwen-ocr-env")
+    monkeypatch.setenv("QWEN_API_KEY", "server-qwen-key")
+    monkeypatch.setenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+    assert build_default_llm_config()["model"] == "qwen-text-env"
+    assert build_vision_model_config()["model"] == "qwen-vision-env"
+    assert build_ocr_model_config()["model"] == "qwen-ocr-env"
 
 
 def test_problem_video_result_contract(tmp_path: Path):

@@ -6,7 +6,9 @@
 .codex-logs/
 .codex-*
 .workbuddy/
+.playwright-mcp/
 *.local.md
+nul
 
 # env
 .env
@@ -37,10 +39,22 @@ blob-report/
 OpenMAIC/%SystemDrive%/
 gateway_data/
 AnotherMe/data/
+AnotherMe/anotherme2_engine/data/
 AnotherMe/logs/
 AnotherMe/.workbuddy/
 AnotherMe/.next/
 AnotherMe/.vercel/
+AnotherMe/output/
+AnotherMe/output_problem*/
+AnotherMe/output_test/
+AnotherMe/generated_outputs/
+AnotherMe/media/videos/
+*.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
 
 # generated artifacts
 *.tar
@@ -51,6 +65,8 @@ AnotherMe/.vercel/
 *.rar
 media/videos/
 media/texts/
+graphify-out/
+AnotherMe/anotherme2_engine/graphify-out/
 AnotherMe/public/generated/
 OpenMAIC/anotherme2_engine/output/
 OpenMAIC/anotherme2_engine/output_problem*/

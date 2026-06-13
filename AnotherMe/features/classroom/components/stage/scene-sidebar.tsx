@@ -142,7 +142,7 @@ export function SceneSidebar({
             type="button"
             aria-label="关闭场景列表"
             onClick={() => onCollapseChange(true)}
-            className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
+            className="w-7 h-7 max-md:w-11 max-md:h-11 shrink-0 rounded-lg flex items-center justify-center bg-gray-100/80 dark:bg-gray-800/80 text-gray-500 dark:text-gray-400 ring-1 ring-black/[0.04] dark:ring-white/[0.06] hover:bg-gray-200/90 dark:hover:bg-gray-700/90 hover:text-gray-700 dark:hover:text-gray-200 active:scale-90 transition-all duration-200"
           >
             <PanelLeftClose className="w-4 h-4" />
           </button>
@@ -184,7 +184,7 @@ export function SceneSidebar({
                   });
                 }}
                 className={cn(
-                  'group relative rounded-lg transition-all duration-200 cursor-pointer flex flex-col gap-1 p-1.5',
+                  'group relative rounded-lg transition-all duration-200 cursor-pointer flex flex-col gap-1 p-1.5 max-md:min-h-[44px] max-md:py-2',
                   isActive
                     ? 'bg-purple-50 dark:bg-purple-900/20 ring-1 ring-purple-200 dark:ring-purple-700'
                     : 'hover:bg-gray-50/80 dark:hover:bg-gray-800/50',

@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { useIsMobileLandscape } from '@/hooks/use-landscape';
 import { SceneRenderer } from '@/features/classroom/components/stage/scene-renderer';
 import { SceneProvider } from '@/lib/contexts/scene-context';
 import { Whiteboard } from '@/features/classroom/components/whiteboard';
@@ -47,6 +49,37 @@ export function CanvasArea({
   onRetryGeneration,
 }: CanvasAreaProps) {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
+  const isMobileLandscape = useIsMobileLandscape();
+
+  // Mobile landscape: toolbar auto-hide after 3s of inactivity
+  const [toolbarVisible, setToolbarVisible] = useState(true);
+  const toolbarTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const resetToolbarTimer = useCallback(() => {
+    setToolbarVisible(true);
+    clearTimeout(toolbarTimerRef.current);
+    if (isMobileLandscape) {
+      toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000);
+    }
+  }, [isMobileLandscape]);
+
+  // Start auto-hide timer when entering landscape
+  useEffect(() => {
+    const syncTimer = window.setTimeout(() => {
+      if (isMobileLandscape) {
+        resetToolbarTimer();
+      } else {
+        setToolbarVisible(true);
+        clearTimeout(toolbarTimerRef.current);
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(syncTimer);
+      clearTimeout(toolbarTimerRef.current);
+    };
+  }, [isMobileLandscape, resetToolbarTimer]);
   const showControls = mode === 'playback' && !whiteboardOpen;
   const showPlayHint =
     showControls &&
@@ -57,6 +90,7 @@ export function CanvasArea({
 
   const handleSlideClick = useCallback(
     (e: React.MouseEvent) => {
+      resetToolbarTimer(); // Reset auto-hide on any canvas tap
       if (!showControls || isLiveSession || currentScene?.type !== 'slide') return;
       // Don't trigger page play/pause when clicking inside a video element's visual area.
       // Video elements may be visually covered by other slide elements (e.g. text),
@@ -76,16 +110,17 @@ export function CanvasArea({
       }
       onPlayPause();
     },
-    [showControls, isLiveSession, onPlayPause, currentScene?.type],
+    [showControls, isLiveSession, onPlayPause, currentScene?.type, resetToolbarTimer],
   );
 
   return (
-    <div className="w-full h-full flex flex-col bg-[#f6f4f0] dark:bg-gray-950 group/canvas">
+    <div className="w-full h-full flex flex-col bg-[#f6f4f0] dark:bg-gray-950 group/canvas relative">
       {/* Slide area — takes remaining space */}
       <div
         className={cn(
           'flex-1 min-h-0 relative overflow-hidden flex items-center justify-center p-2 transition-colors duration-500',
-          'max-md:items-start max-md:p-2 max-md:pt-3',
+          'max-md:items-center max-md:px-2 max-md:pb-2 max-md:pt-[calc(env(safe-area-inset-top)+3.5rem)]',
+          isMobileLandscape && '!p-0 !items-center',
           currentScene?.type === 'interactive'
             ? 'bg-sky-50/40 dark:bg-sky-950/10'
             : 'bg-transparent',
@@ -95,6 +130,7 @@ export function CanvasArea({
           className={cn(
             'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-900 shadow-2xl rounded-[22px] overflow-hidden relative transition-all duration-700',
             'max-md:h-auto max-md:w-full max-md:rounded-[18px]',
+            isMobileLandscape && '!h-full !w-full !rounded-lg !max-h-full !max-w-full',
             showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
             currentScene?.type === 'interactive'
               ? 'shadow-sky-200/50 dark:shadow-sky-900/50 ring-1 ring-sky-900/5 dark:ring-sky-500/10'
@@ -229,8 +265,48 @@ export function CanvasArea({
         </div>
       </div>
 
-      {/* ── Canvas Toolbar — in document flow, only when not merged into roundtable ── */}
-      {!hideToolbar && (
+      {/* ── Canvas Toolbar — floating overlay on mobile, normal flow on desktop ── */}
+      {!hideToolbar && isMobile ? (
+        /* Mobile: floating pill at bottom-center, auto-hides after 3s in landscape */
+        <div
+          className={cn(
+            'absolute bottom-3 left-1/2 -translate-x-1/2 z-[120]',
+            isMobileLandscape
+              ? `transition-opacity duration-300 ${toolbarVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`
+              : '',
+          )}
+          onTouchStart={resetToolbarTimer}
+          onTouchEnd={resetToolbarTimer}
+          onClick={resetToolbarTimer}
+        >
+          <CanvasToolbar
+            className={cn(
+              'h-9 px-2 rounded-full',
+              'bg-black/60 dark:bg-black/70 backdrop-blur-xl',
+              'border border-white/10 shadow-lg',
+              '[&_button]:text-white/80 [&_button:hover]:text-white',
+              '[&_span]:text-white/70',
+            )}
+            currentSceneIndex={currentSceneIndex}
+            scenesCount={scenesCount}
+            engineState={engineState}
+            isLiveSession={isLiveSession}
+            whiteboardOpen={whiteboardOpen}
+            sidebarCollapsed={sidebarCollapsed}
+            chatCollapsed={chatCollapsed}
+            onToggleSidebar={onToggleSidebar}
+            onToggleChat={onToggleChat}
+            onPrevSlide={onPrevSlide}
+            onNextSlide={onNextSlide}
+            onPlayPause={onPlayPause}
+            onWhiteboardClose={onWhiteboardClose}
+            isPresenting={isPresenting}
+            onTogglePresentation={onTogglePresentation}
+            showStopDiscussion={showStopDiscussion}
+            onStopDiscussion={onStopDiscussion}
+          />
+        </div>
+      ) : !hideToolbar ? (
         <CanvasToolbar
           className={cn(
             'shrink-0 h-9 px-2',
@@ -255,7 +331,7 @@ export function CanvasArea({
           showStopDiscussion={showStopDiscussion}
           onStopDiscussion={onStopDiscussion}
         />
-      )}
+      ) : null}
     </div>
   );
 }

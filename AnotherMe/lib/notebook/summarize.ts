@@ -4,7 +4,7 @@ import type { NotebookNoteType } from './storage';
 
 const log = createLogger('Notebook:Summarize');
 
-// 摘要提示词模板（参考 DeepTutor）
+// 摘要提示词模板（参考 AnotherMe）
 const SUMMARY_PROMPT_TEMPLATE = `请为以下笔记内容生成一个简洁的摘要（不超过100字）。
 
 笔记类型：{type}
@@ -35,7 +35,7 @@ export interface SummarizeOptions {
 
 /**
  * 为笔记内容生成 AI 摘要
- * 参考 DeepTutor 的 summarize_agent.py
+ * 参考 AnotherMe 的 summarize_agent.py
  */
 export async function generateNoteSummary(options: SummarizeOptions): Promise<string> {
   const { title, content, type, language = 'auto', maxLength = 100 } = options;
@@ -129,7 +129,7 @@ function getTypeLabel(type: NotebookNoteType): string {
 
 /**
  * 为聊天内容生成标题
- * 参考 DeepTutor 的 auto_title 功能
+ * 参考 AnotherMe 的 auto_title 功能
  */
 export async function generateChatNoteTitle(messages: Array<{ role: string; content: string }>): Promise<string> {
   try {

@@ -297,10 +297,10 @@ const AssistantMessage = memo(function AssistantMessage({
           </div>
 
           {/* 操作按钮 */}
-          <div className="mt-2 flex items-center gap-2 opacity-0 group-hover/message:opacity-100 transition-opacity">
+          <div className="mt-2 flex items-center gap-2 max-md:opacity-60 md:opacity-0 md:group-hover/message:opacity-100 transition-opacity">
             <button
               onClick={handleCopy}
-              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+              className="inline-flex min-h-[36px] items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
             >
               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
               {copied ? t('common.copied') : t('common.copy')}
@@ -309,7 +309,7 @@ const AssistantMessage = memo(function AssistantMessage({
             {!isStreaming && onRegenerate && (
               <button
                 onClick={onRegenerate}
-                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+                className="inline-flex min-h-[36px] items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
               >
                 <RefreshCcw className="w-3 h-3" />
                 {t('chat.regenerate')}

@@ -1,7 +1,7 @@
 /**
  * LearningBlock - Upgrade from Scene-level to Block-level learning objects.
  * 
- * Inspired by DeepTutor's Book Engine block system. While SceneType already has
+ * Inspired by AnotherMe's Book Engine block system. While SceneType already has
  * slide | quiz | interactive | pbl, the granularity is still "scene-level" and lacks:
  * - Block-level source tracking
  * - Learning objectives

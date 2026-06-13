@@ -199,6 +199,33 @@ def init_db() -> None:
                 conn.exec_driver_sql(
                     "ALTER TABLE jobs ALTER COLUMN updated_at SET NOT NULL"
                 )
+                conn.exec_driver_sql(
+                    "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS metadata_json JSONB"
+                )
+                conn.exec_driver_sql("ALTER TABLE ai_chat_sessions ALTER COLUMN id TYPE VARCHAR(128)")
+                conn.exec_driver_sql("ALTER TABLE ai_chat_messages ALTER COLUMN session_id TYPE VARCHAR(128)")
+                conn.exec_driver_sql("ALTER TABLE ai_learning_records ALTER COLUMN session_id TYPE VARCHAR(128)")
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS compressed_summary TEXT NOT NULL DEFAULT ''"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS summary_up_to_msg_id INTEGER NOT NULL DEFAULT 0"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS preferences_json JSONB NOT NULL DEFAULT '{}'::jsonb"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS runtime_seq INTEGER"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS capability VARCHAR(64) NOT NULL DEFAULT ''"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS events_json JSONB NOT NULL DEFAULT '[]'::jsonb"
+                )
+                conn.exec_driver_sql(
+                    "ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS attachments_json JSONB NOT NULL DEFAULT '[]'::jsonb"
+                )
                 return
 
             if url.startswith("sqlite"):
@@ -217,6 +244,22 @@ def init_db() -> None:
                     "UPDATE jobs SET updated_at = COALESCE(updated_at, created_at, :now_iso) WHERE updated_at IS NULL",
                     {"now_iso": now_iso},
                 )
+                if not _sqlite_column_exists(conn, "conversations", "metadata_json"):
+                    conn.exec_driver_sql("ALTER TABLE conversations ADD COLUMN metadata_json TEXT")
+                if not _sqlite_column_exists(conn, "ai_chat_sessions", "compressed_summary"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_sessions ADD COLUMN compressed_summary TEXT NOT NULL DEFAULT ''")
+                if not _sqlite_column_exists(conn, "ai_chat_sessions", "summary_up_to_msg_id"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_sessions ADD COLUMN summary_up_to_msg_id INTEGER NOT NULL DEFAULT 0")
+                if not _sqlite_column_exists(conn, "ai_chat_sessions", "preferences_json"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_sessions ADD COLUMN preferences_json TEXT NOT NULL DEFAULT '{}'")
+                if not _sqlite_column_exists(conn, "ai_chat_messages", "runtime_seq"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_messages ADD COLUMN runtime_seq INTEGER")
+                if not _sqlite_column_exists(conn, "ai_chat_messages", "capability"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_messages ADD COLUMN capability TEXT NOT NULL DEFAULT ''")
+                if not _sqlite_column_exists(conn, "ai_chat_messages", "events_json"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_messages ADD COLUMN events_json TEXT NOT NULL DEFAULT '[]'")
+                if not _sqlite_column_exists(conn, "ai_chat_messages", "attachments_json"):
+                    conn.exec_driver_sql("ALTER TABLE ai_chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
                 return
 
         # Gateway and worker may boot together; serialize schema init on PostgreSQL.
@@ -277,6 +320,32 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+@contextmanager
+def nested_session_scope(session: Session) -> Iterator[Session]:
+    """Create a savepoint within an existing session.
+
+    Usage:
+        with session_scope() as session:
+            do_work(session)
+            try:
+                with nested_session_scope(session) as inner:
+                    risky_work(inner)  # if this fails, only the savepoint rolls back
+            except Exception:
+                pass  # outer session continues
+            more_work(session)  # still active
+
+    On success: releases the savepoint (does NOT commit the outer transaction).
+    On failure: rolls back to the savepoint, then re-raises.
+    """
+    savepoint = session.begin_nested()
+    try:
+        yield session
+        savepoint.commit()
+    except Exception:
+        savepoint.rollback()
+        raise
 
 
 def get_db() -> Iterator[Session]:

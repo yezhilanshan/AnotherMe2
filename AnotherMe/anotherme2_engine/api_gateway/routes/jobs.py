@@ -21,7 +21,7 @@ from .auth import require_token
 
 
 def create_jobs_router(settings: Settings, queue_client, check_capability: Callable[[str], None]) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["jobs"])
 
     @router.post("/v1/jobs", response_model=JobSummary)
     def create_job(

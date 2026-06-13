@@ -24,6 +24,8 @@ import { ChatArea, type ChatAreaRef } from '@/features/ai-tutor/components/chat/
 import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/registry/store';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { useIsMobileLandscape } from '@/hooks/use-landscape';
+import { PresentationSpeechOverlay } from '@/features/classroom/components/roundtable/presentation-speech-overlay';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -32,8 +34,11 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Play, Pause, Repeat } from 'lucide-react';
 import { VisuallyHidden } from 'radix-ui';
+import { AvatarDisplay } from '@/components/ui/avatar-display';
+import { DEFAULT_TEACHER_AVATAR, DEFAULT_STUDENT_AVATAR } from '@/features/classroom/components/roundtable/constants';
+import type { Participant } from '@/lib/types/roundtable';
 
 /**
  * Stage Component
@@ -168,6 +173,7 @@ export function Stage({
   const audioPlayerRef = useRef(createAudioPlayer());
   const chatAreaRef = useRef<ChatAreaRef>(null);
   const isMobile = useIsMobile();
+  const isMobileLandscape = useIsMobileLandscape();
   const [mobileSceneDrawerOpen, setMobileSceneDrawerOpen] = useState(false);
   const [mobileChatDrawerOpen, setMobileChatDrawerOpen] = useState(false);
   const lectureSessionIdRef = useRef<string | null>(null);
@@ -183,6 +189,39 @@ export function Stage({
   const autoStartRef = useRef(false);
   // Discussion buffer-level pause state (distinct from soft-pause which aborts SSE)
   const [isDiscussionPaused, setIsDiscussionPaused] = useState(false);
+
+  // Listen for native shell commands (React Native WebView bridge)
+  useEffect(() => {
+    const toggleSceneList = () => setMobileSceneDrawerOpen((prev) => !prev);
+    const toggleChat = () => setMobileChatDrawerOpen((prev) => !prev);
+    window.addEventListener('native:toggleSceneList', toggleSceneList);
+    window.addEventListener('native:toggleChat', toggleChat);
+    return () => {
+      window.removeEventListener('native:toggleSceneList', toggleSceneList);
+      window.removeEventListener('native:toggleChat', toggleChat);
+    };
+  }, []);
+
+  // Expose stage store state to native shell via window.__STAGE_STORE_STATE__
+  useEffect(() => {
+    const unsub = useStageStore.subscribe((state) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__STAGE_STORE_STATE__ = {
+        currentSceneId: state.currentSceneId,
+        scenes: state.scenes,
+        totalScenes: state.scenes.length,
+      };
+    });
+    // Initial write
+    const s = useStageStore.getState();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__STAGE_STORE_STATE__ = {
+      currentSceneId: s.currentSceneId,
+      scenes: s.scenes,
+      totalScenes: s.scenes.length,
+    };
+    return unsub;
+  }, []);
 
   /**
    * Resume a soft-paused topic: re-call /chat with existing session messages.
@@ -542,19 +581,24 @@ export function Stage({
 
     engineRef.current = engine;
 
-    // Auto-start if triggered by auto-play scene advance
+    // Auto-start playback
+    const doAutoStart = async () => {
+      if (currentScene && chatAreaRef.current) {
+        const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
+        lectureSessionIdRef.current = sessionId;
+        lectureActionCounterRef.current = 0;
+      }
+      engine.start();
+    };
+
     if (autoStartRef.current) {
+      // Triggered by auto-play scene advance
       autoStartRef.current = false;
-      (async () => {
-        if (currentScene && chatAreaRef.current) {
-          const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
-          lectureSessionIdRef.current = sessionId;
-          lectureActionCounterRef.current = 0;
-        }
-        engine.start();
-      })();
-    } else {
-      // Load saved playback state and restore position (but never auto-play).
+      doAutoStart();
+    } else if (isMobile || useSettingsStore.getState().autoPlayLecture) {
+      // Mobile: always auto-start playback
+      // Desktop: auto-start if autoPlayLecture is enabled
+      doAutoStart();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run when scene changes, functions are stable refs
   }, [currentScene]);
@@ -782,20 +826,22 @@ export function Stage({
   };
 
   const handleToggleSidebar = useCallback(() => {
+    if (isMobileLandscape) return; // No sidebar in landscape
     if (isMobile) {
       setMobileSceneDrawerOpen((current) => !current);
       return;
     }
     setSidebarCollapsed(!sidebarCollapsed);
-  }, [isMobile, setSidebarCollapsed, sidebarCollapsed]);
+  }, [isMobile, isMobileLandscape, setSidebarCollapsed, sidebarCollapsed]);
 
   const handleToggleChat = useCallback(() => {
+    if (isMobileLandscape) return; // No chat panel in landscape
     if (isMobile) {
       setMobileChatDrawerOpen((current) => !current);
       return;
     }
     setChatAreaCollapsed(!chatAreaCollapsed);
-  }, [chatAreaCollapsed, isMobile, setChatAreaCollapsed]);
+  }, [chatAreaCollapsed, isMobile, isMobileLandscape, setChatAreaCollapsed]);
 
   const isPresentationShortcutTarget = useCallback((target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
@@ -941,9 +987,13 @@ export function Stage({
     : null;
 
   // Calculate scene viewer height (keep space only for roundtable in playback mode)
+  // Mobile portrait: full height (no roundtable bar, simplified UI)
+  // Mobile landscape: full height (roundtable hidden, speech shown as overlay)
   const sceneViewerHeight = (() => {
-    const roundtableHeight = mode === 'playback' && !isPresenting ? (isMobile ? 160 : 192) : 0;
-    return `calc(100% - ${roundtableHeight}px)`;
+    if (isMobileLandscape) return '100%';
+    if (isMobile) return undefined; // Let flex handle it (canvas + subtitle + roundtable)
+    if (mode !== 'playback' || isPresenting) return '100%';
+    return 'calc(100% - 192px)';
   })();
   const chatDisplayWidth =
     isMobile && typeof window !== 'undefined' ? Math.min(window.innerWidth, 430) : chatAreaWidth;
@@ -966,7 +1016,7 @@ export function Stage({
         className="hidden md:flex md:absolute md:inset-y-3 md:left-3 md:z-40 md:rounded-3xl md:border md:border-white/70 md:shadow-[0_24px_80px_rgba(15,23,42,0.14)] md:dark:border-white/10"
       />
 
-      {mobileSceneDrawerOpen && (
+      {mobileSceneDrawerOpen && !isMobileLandscape && (
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
@@ -982,7 +1032,7 @@ export function Stage({
               gatedSceneSwitch(sceneId);
             }}
             onRetryOutline={onRetryOutline}
-            className="absolute inset-y-0 left-0 h-mobile-screen max-w-[86vw] pt-safe"
+            className="absolute inset-y-0 left-0 h-mobile-screen w-[min(86vw,340px)] max-w-[86vw] pt-safe"
           />
         </div>
       )}
@@ -1035,8 +1085,21 @@ export function Stage({
           />
         </div>
 
-        {/* Roundtable Area */}
-        {mode === 'playback' && (
+        {/* Mobile: full-width subtitle bar above the Roundtable */}
+        {mode === 'playback' && isMobile && !isMobileLandscape && playbackView.sourceText && (
+          <MobileSubtitleBar
+            text={playbackView.sourceText}
+            role={playbackView.bubbleRole}
+            participants={participants}
+            speakingAgentId={speakingAgentId}
+            buttonState={playbackView.buttonState}
+            isPaused={engineMode === 'paused'}
+            onBubbleClick={handlePlayPause}
+          />
+        )}
+
+        {/* Roundtable Area — hidden on mobile landscape (has floating overlay) */}
+        {mode === 'playback' && !isMobileLandscape && (
           <div
             className={cn(
               'transition-opacity duration-300',
@@ -1178,21 +1241,45 @@ export function Stage({
             {/* Reaction Bar — floating at the bottom during active discussion */}
             {chatIsStreaming && chatSessionType === 'discussion' && (
               <div className="absolute bottom-3 left-1/2 z-30 -translate-x-1/2">
-                <ReactionBar
-                  onReaction={(type) => chatAreaRef.current?.addReaction(type)}
-                />
+                <ReactionBar onReaction={(type) => chatAreaRef.current?.addReaction(type)} />
               </div>
             )}
           </div>
         )}
+
+        {/* Mobile Landscape: floating speech overlay (replaces Roundtable) */}
+        {mode === 'playback' && isMobileLandscape && (
+          <div className="absolute inset-0 z-30 pointer-events-none">
+            <PresentationSpeechOverlay
+              playbackView={playbackView}
+              participants={participants}
+              speakingAgentId={speakingAgentId}
+              isTopicPending={isTopicPending}
+              side="left"
+              onBubbleClick={handlePlayPause}
+              audioIndicatorState={audioIndicatorState}
+              buttonState={
+                playbackView.phase === 'lecturePlaying' || playbackView.phase === 'discussionActive'
+                  ? 'bars'
+                  : playbackView.phase === 'lecturePaused' ||
+                      playbackView.phase === 'discussionPaused'
+                    ? 'play'
+                    : playbackCompleted
+                      ? 'restart'
+                      : 'none'
+              }
+              isPaused={engineMode === 'paused'}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Chat Area */}
-      {mobileChatDrawerOpen && (
+      {/* Chat Area — visually hidden in mobile landscape but stays mounted for SSE logic */}
+      {mobileChatDrawerOpen && !isMobileLandscape && (
         <button
           type="button"
           aria-label="关闭聊天遮罩"
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          className="fixed inset-0 z-[45] bg-black/40 md:hidden"
           onClick={() => setMobileChatDrawerOpen(false)}
         />
       )}
@@ -1200,15 +1287,19 @@ export function Stage({
         ref={chatAreaRef}
         width={chatDisplayWidth}
         onWidthChange={setChatAreaWidth}
-        collapsed={chatDisplayCollapsed}
+        collapsed={isMobileLandscape ? true : chatDisplayCollapsed}
         onCollapseChange={(collapsed) => {
+          if (isMobileLandscape) return; // No chat in landscape
           if (isMobile) {
             setMobileChatDrawerOpen(!collapsed);
           } else {
             setChatAreaCollapsed(collapsed);
           }
         }}
-        className="md:absolute md:inset-y-3 md:right-3 md:z-40 md:h-[calc(100%-1.5rem)] md:rounded-3xl md:border md:border-white/70 md:shadow-[0_24px_80px_rgba(15,23,42,0.14)] md:dark:border-white/10 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:z-50 max-md:h-[78dvh] max-md:max-w-full max-md:rounded-t-[28px] max-md:border-t max-md:border-white/70 max-md:shadow-[0_-24px_70px_rgba(15,23,42,0.25)]"
+        className={cn(
+          'md:absolute md:inset-y-3 md:right-3 md:z-40 md:h-[calc(100%-1.5rem)] md:rounded-3xl md:border md:border-white/70 md:shadow-[0_24px_80px_rgba(15,23,42,0.14)] md:dark:border-white/10 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:z-50 max-md:h-[min(82dvh,calc(100dvh-env(safe-area-inset-top)-0.75rem))] max-md:max-w-full max-md:rounded-t-[22px] max-md:border-t max-md:border-white/70 max-md:pb-safe max-md:shadow-[0_-24px_70px_rgba(15,23,42,0.25)]',
+          isMobileLandscape && 'hidden',
+        )}
         activeBubbleId={activeBubbleId}
         onActiveBubble={(id) => setActiveBubbleId(id)}
         currentSceneId={currentSceneId}
@@ -1303,6 +1394,119 @@ export function Stage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/** Mobile full-width subtitle bar — rendered above the Roundtable */
+function MobileSubtitleBar({
+  text,
+  role,
+  participants,
+  speakingAgentId,
+  buttonState,
+  isPaused,
+  onBubbleClick,
+}: {
+  readonly text: string;
+  readonly role: 'teacher' | 'user' | 'agent' | null;
+  readonly participants: Participant[];
+  readonly speakingAgentId: string | null;
+  readonly buttonState?: 'play' | 'bars' | 'restart' | 'none';
+  readonly isPaused?: boolean;
+  readonly onBubbleClick?: () => void;
+}) {
+  const teacherParticipant = participants.find((p) => p.role === 'teacher');
+  const speakingStudent = speakingAgentId
+    ? participants.find((p) => p.id === speakingAgentId && p.role !== 'teacher' && p.role !== 'user')
+    : null;
+
+  const name =
+    role === 'teacher'
+      ? teacherParticipant?.name || ''
+      : role === 'agent'
+        ? speakingStudent?.name || ''
+        : role === 'user'
+          ? ''
+          : '';
+
+  const avatar =
+    role === 'teacher'
+      ? teacherParticipant?.avatar || DEFAULT_TEACHER_AVATAR
+      : role === 'agent'
+        ? speakingStudent?.avatar || DEFAULT_STUDENT_AVATAR
+        : '';
+
+  if (!text || !role) return null;
+
+  return (
+    <div className="shrink-0 px-3 pb-1">
+      <div
+        onClick={onBubbleClick}
+        className={cn(
+          'w-full rounded-xl border backdrop-blur-xl shadow-lg overflow-hidden cursor-pointer active:scale-[0.99] transition-transform',
+          role === 'user'
+            ? 'bg-violet-900/70 border-violet-700/40'
+            : role === 'agent'
+              ? 'bg-blue-900/70 border-blue-700/40'
+              : 'bg-gray-900/75 border-gray-600/40',
+        )}
+      >
+        <div className="flex items-center gap-2.5 px-3 py-2">
+          {avatar && (
+            <div
+              className={cn(
+                'w-7 h-7 rounded-full overflow-hidden border-2 shrink-0',
+                role === 'user'
+                  ? 'border-violet-400/60'
+                  : role === 'agent'
+                    ? 'border-blue-400/60'
+                    : 'border-purple-400/60',
+              )}
+            >
+              <AvatarDisplay src={avatar} alt={name} />
+            </div>
+          )}
+
+          <div className="flex-1 min-w-0">
+            {name && (
+              <span
+                className={cn(
+                  'text-[10px] font-bold uppercase tracking-wider',
+                  role === 'user'
+                    ? 'text-violet-300'
+                    : role === 'agent'
+                      ? 'text-blue-300'
+                      : 'text-purple-300',
+                )}
+              >
+                {name}
+              </span>
+            )}
+            <p className="text-[13px] leading-snug text-gray-100 line-clamp-2 break-words">
+              {text}
+            </p>
+          </div>
+
+          {buttonState && buttonState !== 'none' && role !== 'user' && (
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onBubbleClick?.();
+              }}
+              className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors shrink-0"
+            >
+              {buttonState === 'play' || buttonState === 'restart' ? (
+                <Play className="w-4 h-4 text-white ml-0.5" />
+              ) : isPaused ? (
+                <Play className="w-4 h-4 text-amber-400 ml-0.5" />
+              ) : (
+                <Pause className="w-4 h-4 text-white" />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

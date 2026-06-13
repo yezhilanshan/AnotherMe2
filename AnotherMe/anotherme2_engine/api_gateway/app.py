@@ -8,7 +8,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from . import db as db_module
@@ -19,12 +21,21 @@ from agents.foundation.capability_registry import CapabilityRegistry, create_def
 from .models import Job
 from .queueing import build_queue_client
 from .routes.auth import require_token
+from .routes.ai_chat import create_ai_chat_router
 from .routes.ai_learning import create_ai_learning_router
 from .routes.core import create_core_router
 from .routes.jobs import create_jobs_router
 from .routes.knowledge import create_knowledge_router
+from .routes.live_book import create_live_book_router
+from .routes.co_writer import router as co_writer_router
 from .routes.messages import create_messages_router
 from .routes.uploads import create_uploads_router
+from .routes.media import create_media_router
+from .routes.documents import create_documents_router
+from .routes.tools import create_tools_router
+from .routes.server_config import create_server_config_router
+from .routes.classroom import create_classroom_router
+from .routes.admin import create_admin_router
 from .storage import ObjectStorage, build_storage
 
 
@@ -260,10 +271,32 @@ def create_app(
     settings = settings_override or get_settings()
     app = FastAPI(title=settings.app_name)
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "*",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     queue_client = queue_client_override or build_queue_client(settings)
     storage = storage_override or build_storage(settings)
     conversation_hub = ConversationSocketHub()
     capability_registry = create_default_registry()
+
+    # ── Global error envelope (P1) ──────────────────────────────────────
+    # All unhandled exceptions are wrapped in the same shape so clients
+    # only need one error parser.  Existing routes may still raise
+    # `HTTPException`; FastAPI re-uses its default 401/404 render.
+    from .errors import APIError, register_error_handlers
+
+    register_error_handlers(app)
 
     def _check_capability(capability_id: str) -> None:
         """Check if a capability is available; raise HTTPException if not."""
@@ -292,6 +325,19 @@ def create_app(
         Path(settings.worker_temp_root).mkdir(parents=True, exist_ok=True)
         reconfigure_db(settings.database_url)
         init_db()
+
+        # Run backend data migrations
+        try:
+            from tutor_engine.services.migration_registry import run_all_migrations
+            migration_result = run_all_migrations()
+            if migration_result["ran"] > 0 or migration_result["errors"]:
+                print(
+                    f"[gateway-app] migrations: {migration_result['ran']} ran, "
+                    f"{migration_result['skipped']} skipped, "
+                    f"{len(migration_result['errors'])} errors"
+                )
+        except Exception as exc:
+            print(f"[gateway-app] migration runner failed (non-fatal): {exc}")
 
         if settings.startup_purge_enabled:
             startup_db = db_module.SessionLocal()
@@ -339,7 +385,23 @@ def create_app(
     app.include_router(create_messages_router(settings, event_bus, conversation_hub))
 
     app.include_router(create_ai_learning_router(settings))
+    app.include_router(create_ai_chat_router(settings))
     app.include_router(create_knowledge_router(settings))
+
+    # 静态文件服务：让 /api/outputs/ 可以访问 math_animator 等生成的视频/图片
+    from tutor_engine.services.path_service import get_path_service
+    outputs_dir = str(get_path_service().user_data_dir)
+    app.mount("/api/outputs", StaticFiles(directory=outputs_dir), name="outputs")
+    app.include_router(create_live_book_router(settings))
+    app.include_router(co_writer_router, prefix="/co-writer")
+
+    # Phase A: New endpoints for mobile client
+    app.include_router(create_media_router(settings))
+    app.include_router(create_documents_router(settings))
+    app.include_router(create_tools_router(settings))
+    app.include_router(create_server_config_router(settings))
+    app.include_router(create_classroom_router(settings))
+    app.include_router(create_admin_router(settings, queue_client))
 
     @app.get("/v1/capabilities")
     def get_capabilities(
@@ -437,14 +499,38 @@ def create_app(
         }
 
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(_request, exc: HTTPException):
+    async def http_exception_handler(request, exc: HTTPException):
+        request_id = getattr(request.state, "request_id", None)
         if isinstance(exc.detail, dict):
-            return JSONResponse(status_code=exc.status_code, content=exc.detail)
-        return JSONResponse(status_code=exc.status_code, content={"error_code": "HTTP_ERROR", "message": str(exc.detail)})
+            body = {**exc.detail}
+            if request_id and "request_id" not in body:
+                body["request_id"] = request_id
+            return JSONResponse(status_code=exc.status_code, content=body)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error_code": "HTTP_ERROR", "message": str(exc.detail), "request_id": request_id},
+        )
 
     @app.exception_handler(ValueError)
-    async def value_error_handler(_request, exc: ValueError):
-        return JSONResponse(status_code=400, content={"error_code": "INVALID_REQUEST", "message": str(exc)})
+    async def value_error_handler(request, exc: ValueError):
+        request_id = getattr(request.state, "request_id", None)
+        return JSONResponse(status_code=400, content={"error_code": "INVALID_REQUEST", "message": str(exc), "request_id": request_id})
+
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request, exc: Exception):
+        request_id = getattr(request.state, "request_id", None)
+        return JSONResponse(
+            status_code=500,
+            content={"error_code": "INTERNAL_ERROR", "message": "An unexpected error occurred", "request_id": request_id},
+        )
+
+    @app.middleware("http")
+    async def request_id_middleware(request, call_next):
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     return app
 

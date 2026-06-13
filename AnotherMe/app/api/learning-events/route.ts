@@ -1,10 +1,75 @@
 import { NextRequest } from 'next/server';
-import { createGatewayLearningEvent, isAnotherMe2GatewayError } from '@/lib/server/anotherme2-gateway';
+import {
+  createGatewayLearningEvent,
+  getGatewayLearningEventStats,
+  isAnotherMe2GatewayError,
+  listGatewayLearningEvents,
+} from '@/lib/server/anotherme2-gateway';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireAuthenticatedUserFromRequest } from '@/lib/auth/session';
 import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
+
+function parseBooleanParam(value: string | null, defaultValue: boolean): boolean {
+  if (value == null) {
+    return defaultValue;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === '0' || normalized === 'false' || normalized === 'no') {
+    return false;
+  }
+  return defaultValue;
+}
+
+function parseBoundedInt(value: string | null, fallback: number, min: number, max: number): number {
+  const parsed = Number(value || fallback);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const user = await requireAuthenticatedUserFromRequest(request);
+    const stats = parseBooleanParam(request.nextUrl.searchParams.get('stats'), false);
+
+    if (stats) {
+      const eventStats = await getGatewayLearningEventStats({
+        userId: user.id,
+        classroomId: request.nextUrl.searchParams.get('classroomId') || undefined,
+        lookbackDays: parseBoundedInt(request.nextUrl.searchParams.get('lookbackDays'), 30, 1, 365),
+      });
+      return apiSuccess({ stats: eventStats });
+    }
+
+    const events = await listGatewayLearningEvents({
+      userId: user.id,
+      eventType: request.nextUrl.searchParams.get('eventType') || undefined,
+      classroomId: request.nextUrl.searchParams.get('classroomId') || undefined,
+      sceneId: request.nextUrl.searchParams.get('sceneId') || undefined,
+      limit: parseBoundedInt(request.nextUrl.searchParams.get('limit'), 200, 1, 500),
+    });
+
+    return apiSuccess({ events });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return apiError('INVALID_REQUEST', error.status, error.message, error.code);
+    }
+    if (isAnotherMe2GatewayError(error)) {
+      return apiError('UPSTREAM_ERROR', error.status, error.message);
+    }
+    return apiError(
+      'INTERNAL_ERROR',
+      500,
+      error instanceof Error ? error.message : 'Failed to load learning events',
+    );
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {

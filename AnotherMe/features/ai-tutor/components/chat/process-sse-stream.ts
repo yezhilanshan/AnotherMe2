@@ -74,6 +74,16 @@ export async function processSSEStream(
               break;
             }
 
+            case 'code_delta': {
+              const targetId = currentMessageId;
+              if (!targetId) break;
+              const code = event.data?.code;
+              if (typeof code === 'string' && code) {
+                buffer.pushText(targetId, code);
+              }
+              break;
+            }
+
             case 'action': {
               const targetId = event.data.messageId ?? currentMessageId;
               if (!targetId) break;

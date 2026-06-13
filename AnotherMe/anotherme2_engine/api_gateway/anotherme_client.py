@@ -24,6 +24,7 @@ class AnotherMeClient:
             self._client = httpx.Client(
                 timeout=self.timeout_seconds,
                 limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+                trust_env=False,
             )
         return self._client
 
@@ -39,18 +40,38 @@ class AnotherMeClient:
             return payload["result"]
         return payload
 
+    def _upstream_error_message(self, method: str, path: str, status_code: int, text: str) -> str:
+        detail = text.strip()[:500]
+        hint = (
+            f"AnotherMe Web/Core upstream returned {status_code} for {method} {path}. "
+            f"Check ANOTHERME_BASE_URL={self.base_url!r} and make sure the Web/Core service is running and reachable."
+        )
+        return f"{hint}{f' Response: {detail}' if detail else ''}"
+
     def _post(self, path: str, json_body: Dict[str, Any]) -> Dict[str, Any]:
         client = self._get_client()
-        response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
+        try:
+            response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
+        except httpx.RequestError as exc:
+            raise AnotherMeError(
+                f"Cannot reach AnotherMe Web/Core upstream at {self.base_url!r} for POST {path}: {exc}. "
+                "Start the Web/Core service or fix ANOTHERME_BASE_URL."
+            ) from exc
         if response.status_code >= 400:
-            raise AnotherMeError(f"AnotherMe POST {path} failed: {response.status_code} {response.text}")
+            raise AnotherMeError(self._upstream_error_message("POST", path, response.status_code, response.text))
         return self._unwrap(response.json())
 
     def _get(self, path: str) -> Dict[str, Any]:
         client = self._get_client()
-        response = client.get(f"{self.base_url.rstrip('/')}{path}")
+        try:
+            response = client.get(f"{self.base_url.rstrip('/')}{path}")
+        except httpx.RequestError as exc:
+            raise AnotherMeError(
+                f"Cannot reach AnotherMe Web/Core upstream at {self.base_url!r} for GET {path}: {exc}. "
+                "Start the Web/Core service or fix ANOTHERME_BASE_URL."
+            ) from exc
         if response.status_code >= 400:
-            raise AnotherMeError(f"AnotherMe GET {path} failed: {response.status_code} {response.text}")
+            raise AnotherMeError(self._upstream_error_message("GET", path, response.status_code, response.text))
         return self._unwrap(response.json())
 
     def submit_course_job(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -66,6 +87,12 @@ class AnotherMeClient:
         pedagogy_profile = payload.get("pedagogy_profile")
         if isinstance(pedagogy_profile, dict) and pedagogy_profile:
             body["pedagogy_profile"] = pedagogy_profile
+        pdf_content = payload.get("pdf_content")
+        if isinstance(pdf_content, dict) and pdf_content.get("text"):
+            body["pdfContent"] = {
+                "text": str(pdf_content.get("text") or ""),
+                "images": pdf_content.get("images") if isinstance(pdf_content.get("images"), list) else [],
+            }
         return self._post("/api/generate-classroom", body)
 
     def poll_course_job(self, anotherme_job_id: str) -> Dict[str, Any]:

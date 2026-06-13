@@ -1,18 +1,28 @@
 import * as React from 'react';
 
 const MOBILE_BREAKPOINT = 768;
+const TABLET_BREAKPOINT = 1024;
 
+/**
+ * Detects mobile devices.
+ * - Viewport < 768px → always mobile
+ * - Touch device with viewport < 1024px → mobile (catches phones in landscape)
+ * - Otherwise → desktop
+ */
 export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined);
 
   React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    const detect = () => {
+      const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      const w = window.innerWidth;
+      setIsMobile(w < MOBILE_BREAKPOINT || (isTouch && w < TABLET_BREAKPOINT));
     };
-    mql.addEventListener('change', onChange);
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    return () => mql.removeEventListener('change', onChange);
+
+    const mql = window.matchMedia(`(max-width: ${TABLET_BREAKPOINT - 1}px)`);
+    mql.addEventListener('change', detect);
+    detect();
+    return () => mql.removeEventListener('change', detect);
   }, []);
 
   return !!isMobile;

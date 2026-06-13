@@ -81,7 +81,7 @@ class GeometryTerminologyStandard:
 
     # 变换相关术语
     TRANSFORM_TERMS = {
-        "折叠": ["折叠", "翻折", "轴对称"],
+        "折叠": ["折叠", "翻折"],
         "对称": ["对称", "轴对称", "镜像对称"],
         "平移": ["平移", "平行移动", "滑动"],
         "旋转": ["旋转", "转动", "周转"],
@@ -473,6 +473,7 @@ class NarrationSkillEngine:
     """
 
     def __init__(self):
+        self._narration_engine = None
         self.terminology = GeometryTerminologyStandard()
         self.fold_templates = FoldProblemNarrationTemplates()
         self.detailed_templates = DetailedExplanationTemplates()

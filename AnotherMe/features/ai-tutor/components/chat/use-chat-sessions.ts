@@ -1494,7 +1494,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             try {
               // 动态导入以避免服务端渲染问题
               const { collectRAGDataSource } = await import('@/lib/hooks/use-rag-data');
-              const ragData = collectRAGDataSource();
+              const ragData = await collectRAGDataSource();
               config.ragDataSource = ragData;
               log.info(`[ChatArea] Collected RAG data: ${ragData.notes?.length || 0} notes`);
             } catch (e) {

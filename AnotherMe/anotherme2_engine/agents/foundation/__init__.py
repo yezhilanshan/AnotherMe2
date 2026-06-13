@@ -1,7 +1,7 @@
 """
-DeepTutor Integration Module.
+AnotherMe Integration Module.
 
-This module integrates all 5 DeepTutor-inspired innovations:
+This module integrates all 5 AnotherMe-inspired innovations:
 1. LearningContext - Unified learning context
 2. LearningBlock - Block-based learning objects
 3. LearningEvent - Unified learning event stream

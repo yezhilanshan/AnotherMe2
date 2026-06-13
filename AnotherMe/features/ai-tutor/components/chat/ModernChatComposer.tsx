@@ -94,7 +94,7 @@ export const ModernChatComposer = memo(function ModernChatComposer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey) {
         e.preventDefault();
         doSend();
       }
@@ -263,7 +263,7 @@ export const ModernChatComposer = memo(function ModernChatComposer({
                       'flex items-center gap-1.5',
                       isActive
                         ? `bg-gray-100 dark:bg-gray-800 ${tool.color}`
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800/50'
                     )}
                     title={tool.label}
                   >

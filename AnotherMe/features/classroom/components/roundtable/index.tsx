@@ -37,6 +37,7 @@ import type { EngineMode, PlaybackView } from '@/lib/playback';
 import type { Participant } from '@/lib/types/roundtable';
 import type { TutorToolState } from '@/lib/types/tutor-tools';
 import { TutorToolSelector } from '@/features/ai-tutor/components/chat/tutor-tool-selector';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 export interface DiscussionRequest {
   topic: string;
@@ -187,6 +188,7 @@ export function Roundtable({
   onTutorToolStateChange,
 }: RoundtableProps) {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
   const setTTSMuted = useSettingsStore((s) => s.setTTSMuted);
   const ttsEnabled = useSettingsStore((state) => state.ttsEnabled);
@@ -637,7 +639,10 @@ export function Roundtable({
     isProcessing;
   const toolbar = (
     <CanvasToolbar
-      className="shrink-0 h-8 px-3 border-b border-gray-100/40 dark:border-gray-700/30"
+      className={cn(
+        'shrink-0 h-8 px-3 border-b border-gray-100/40 dark:border-gray-700/30',
+        isMobile && 'h-10 px-2',
+      )}
       currentSceneIndex={currentSceneIndex}
       scenesCount={scenesCount}
       engineState={
@@ -757,7 +762,7 @@ export function Roundtable({
                 exit={{ opacity: 0, scale: 0.95, y: 15, filter: 'blur(4px)' }}
                 className="w-[min(480px,calc(100vw-3rem))] pointer-events-auto"
               >
-                {/* 输入框容器 - 参考 DeepTutor 的卡片设计 */}
+                {/* 输入框容器 - 参考 AnotherMe 的卡片设计 */}
                 <div className="rounded-2xl border bg-white/70 dark:bg-black/60 backdrop-blur-xl shadow-[0_8px_32px_rgba(0,0,0,0.08)] dark:shadow-[0_8px_32px_rgba(0,0,0,0.4)] border-gray-200/60 dark:border-white/10 overflow-hidden">
                   {/* 输入框 */}
                   <div className="flex items-center gap-2 px-4 py-2">
@@ -796,7 +801,7 @@ export function Roundtable({
                     </button>
                   </div>
 
-                  {/* 工具栏 - 参考 DeepTutor 放在输入框下方 */}
+                  {/* 工具栏 - 参考 AnotherMe 放在输入框下方 */}
                   {tutorToolState && onTutorToolStateChange && (
                     <div className="border-t border-gray-200/30 dark:border-white/10 px-3 py-2">
                       <TutorToolSelector
@@ -1091,7 +1096,7 @@ export function Roundtable({
   return (
     <div
       className={cn(
-        'h-[160px] md:h-[192px] w-full flex flex-col relative z-10 transition-all duration-300 max-md:rounded-t-[26px] max-md:shadow-[0_-18px_50px_rgba(15,23,42,0.10)] max-md:overflow-hidden',
+        'h-[160px] md:h-[192px] w-full flex flex-col relative z-10 transition-all duration-300 max-md:h-[calc(148px+env(safe-area-inset-bottom))] max-md:rounded-t-[20px] max-md:pb-safe max-md:shadow-[0_-18px_50px_rgba(15,23,42,0.10)] max-md:overflow-hidden',
         isPresenting && !controlsVisible
           ? 'border-t border-transparent bg-transparent backdrop-blur-none'
           : 'border-t border-white/80 dark:border-gray-800 bg-white/75 dark:bg-gray-900/80 backdrop-blur-xl',
@@ -1107,7 +1112,7 @@ export function Roundtable({
         {toolbar}
       </div>
       {/* ── Interaction area — three-column layout ── */}
-      <div className="flex-1 flex items-stretch min-h-0">
+      <div className="flex-1 flex items-stretch min-h-0 max-md:min-h-0">
         {/* Left: Teacher identity */}
         <div
           className={cn(
@@ -1129,7 +1134,7 @@ export function Roundtable({
               ref={teacherAvatarRef}
               className="relative group cursor-pointer flex flex-col items-center justify-center gap-1"
             >
-              <HoverCard openDelay={300} closeDelay={100}>
+              <HoverCard openDelay={isMobile ? 0 : 300} closeDelay={isMobile ? 500 : 100}>
                 <HoverCardTrigger asChild>
                   <div className="flex flex-col items-center gap-1">
                     <div
@@ -1236,7 +1241,7 @@ export function Roundtable({
         </div>
 
         {/* Center: Interaction stage */}
-        <div className="flex-1 relative mx-2 mb-2 min-w-0 md:mx-3">
+        <div className="flex-1 relative mx-1.5 mb-1.5 min-w-0 md:mx-3 md:mb-2">
           {/* End flash banner (Issue 3) */}
           <AnimatePresence>
             {endFlashVisible && (
@@ -1270,7 +1275,7 @@ export function Roundtable({
                 if (isRecording || isProcessing) cancelRecording();
               }
             }}
-            className="relative w-full h-full rounded-3xl md:rounded-[2.5rem] bg-gradient-to-b from-white/40 to-white/85 dark:from-gray-800/40 dark:to-gray-800/80 backdrop-blur-xl border border-white/60 dark:border-gray-700/50 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] flex flex-col justify-center px-3 md:px-6 overflow-hidden group transition-all duration-700 cursor-default"
+            className="relative w-full h-full rounded-2xl md:rounded-[2.5rem] bg-gradient-to-b from-white/40 to-white/85 dark:from-gray-800/40 dark:to-gray-800/80 backdrop-blur-xl border border-white/60 dark:border-gray-700/50 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] flex flex-col justify-center px-2.5 md:px-6 overflow-hidden group transition-all duration-700 cursor-default"
           >
             {/* Text input box */}
             <AnimatePresence>
@@ -1286,9 +1291,9 @@ export function Roundtable({
                   animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
                   exit={{ opacity: 0, scale: 0.95, y: 15, filter: 'blur(4px)' }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute inset-x-6 bottom-4 z-20 flex items-center justify-end"
+                  className="absolute inset-x-2 bottom-2 z-20 flex items-center justify-end md:inset-x-6 md:bottom-4"
                 >
-                  <div className="relative w-fit max-w-[85%] sm:max-w-[65%] min-w-[200px] sm:min-w-[300px] bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-2xl rounded-br-none shadow-2xl border border-purple-200 dark:border-purple-700 ring-1 ring-purple-100/50 dark:ring-purple-800/50 overflow-hidden">
+                  <div className="relative w-full max-w-full min-w-0 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md rounded-2xl rounded-br-none shadow-2xl border border-purple-200 dark:border-purple-700 ring-1 ring-purple-100/50 dark:ring-purple-800/50 overflow-hidden sm:w-fit sm:max-w-[65%] sm:min-w-[300px]">
                     {/* 输入框区域 */}
                     <div className="flex items-end gap-2 p-2 pr-2">
                       <div className="pl-4 flex-1 py-1 min-w-0">
@@ -1304,7 +1309,7 @@ export function Roundtable({
                           placeholder={t('roundtable.inputPlaceholder')}
                           autoFocus
                           rows={1}
-                          className="w-full resize-none bg-transparent border-none focus:ring-0 focus:outline-none outline-none shadow-none ring-0 text-gray-700 dark:text-gray-200 text-sm placeholder:text-gray-400 dark:placeholder:text-gray-500 min-h-[40px] max-h-[120px]"
+                          className="w-full resize-none bg-transparent border-none focus:ring-0 focus:outline-none outline-none shadow-none ring-0 text-gray-700 dark:text-gray-200 text-sm placeholder:text-gray-400 dark:placeholder:text-gray-500 min-h-[38px] max-h-[86px] md:min-h-[40px] md:max-h-[120px]"
                           style={{ fieldSizing: 'content' } as Record<string, string>}
                         />
                       </div>
@@ -1326,7 +1331,7 @@ export function Roundtable({
                       </button>
                     </div>
 
-                    {/* 工具栏 - 参考 DeepTutor 放在输入框下方 */}
+                    {/* 工具栏 - 参考 AnotherMe 放在输入框下方 */}
                     {tutorToolState && onTutorToolStateChange && (
                       <div className="border-t border-purple-200/30 dark:border-purple-800/30 px-3 py-2">
                         <TutorToolSelector
@@ -1617,7 +1622,7 @@ export function Roundtable({
                         onPlayPause?.();
                       }}
                       className={cn(
-                        'relative px-3 pt-2 pb-3 md:px-4 rounded-2xl text-[13px] md:text-[15px] leading-relaxed transition-all border w-[min(420px,calc(100%-1rem))] md:w-[min(420px,calc(100%-3rem))] group/bubble flex flex-col max-h-[72px] md:max-h-[110px]',
+                        'relative px-3 pt-2 pb-3 md:px-4 rounded-2xl text-[13px] md:text-[15px] leading-relaxed transition-all border w-[min(100%,420px)] md:w-[min(420px,calc(100%-3rem))] group/bubble flex flex-col max-h-[82px] md:max-h-[110px]',
                         bubbleRole === 'teacher' ? 'pl-4 pr-10' : 'pl-4 pr-10',
                         bubbleRole === 'user'
                           ? 'bg-purple-600/95 dark:bg-purple-500/95 backdrop-blur-sm border-purple-400/40 dark:border-purple-300/40 text-white rounded-br-sm shadow-md shadow-purple-300/30 dark:shadow-purple-800/30'
@@ -1820,12 +1825,12 @@ export function Roundtable({
         {/* Right: Participants area */}
         <div
           className={cn(
-            'w-[122px] md:w-[140px] shrink-0 flex flex-col py-2 md:py-3 border-l border-gray-100/50 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-900/30 overflow-visible transition-opacity duration-300',
+            'w-[72px] md:w-[140px] shrink-0 flex flex-col py-1.5 md:py-3 border-l border-gray-100/50 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-900/30 overflow-visible transition-opacity duration-300',
             isPresenting && !controlsVisible && 'opacity-0 pointer-events-none',
           )}
         >
           {/* Companion agent avatars — horizontal row, scrollable on overflow, arrows on hover */}
-          <div className="flex-none relative group/scroll">
+          <div className="flex-none relative group/scroll max-md:hidden">
             {/* Left arrow */}
             <button
               onClick={() => {
@@ -1898,7 +1903,7 @@ export function Roundtable({
                           }}
                         />
                       )}
-                      <HoverCard openDelay={300} closeDelay={100}>
+                      <HoverCard openDelay={isMobile ? 0 : 300} closeDelay={isMobile ? 500 : 100}>
                         <HoverCardTrigger asChild>
                           <div
                             className={cn(
@@ -2016,11 +2021,11 @@ export function Roundtable({
           </div>
 
           {/* Divider */}
-          <div className="mx-auto my-1.5 w-8 h-px bg-gray-200 dark:bg-gray-700 opacity-50 shrink-0" />
+          <div className="mx-auto my-1 w-7 h-px bg-gray-200 dark:bg-gray-700 opacity-50 shrink-0 md:my-1.5 md:w-8" />
 
           {/* User avatar + interaction buttons */}
-          <div className="flex-1 flex items-center justify-center gap-3 px-2 min-h-0">
-            <div className="flex flex-col gap-1.5 shrink-0">
+          <div className="flex-1 flex flex-col-reverse items-center justify-center gap-1.5 px-1 min-h-0 md:flex-row md:gap-3 md:px-2">
+            <div className="flex flex-row gap-1.5 shrink-0 md:flex-col">
               {isSendCooldown ? (
                 /* Unified cooldown indicator — replaces both buttons with a single dot wave */
                 <div className="flex items-center justify-center w-8 h-8">
@@ -2052,7 +2057,7 @@ export function Roundtable({
                     }}
                     disabled={!asrEnabled}
                     className={cn(
-                      'w-8 h-8 rounded-full border flex items-center justify-center transition-all active:scale-95 shadow-sm',
+                      'w-9 h-9 rounded-full border flex items-center justify-center transition-all active:scale-95 shadow-sm md:w-8 md:h-8',
                       !asrEnabled
                         ? 'bg-gray-100 dark:bg-gray-800/50 text-gray-300 dark:text-gray-600 border-gray-200 dark:border-gray-700 cursor-not-allowed'
                         : isVoiceOpen
@@ -2072,7 +2077,7 @@ export function Roundtable({
                       handleToggleInput();
                     }}
                     className={cn(
-                      'w-8 h-8 rounded-full border flex items-center justify-center transition-all active:scale-95 shadow-sm',
+                      'w-9 h-9 rounded-full border flex items-center justify-center transition-all active:scale-95 shadow-sm md:w-8 md:h-8',
                       isInputOpen
                         ? 'bg-purple-600 dark:bg-purple-500 border-purple-600 dark:border-purple-500 text-white shadow-purple-200 dark:shadow-purple-800'
                         : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-500 hover:bg-purple-50 dark:hover:bg-purple-900/20 hover:text-purple-600 dark:hover:text-purple-400 hover:border-purple-200 dark:hover:border-purple-700',
@@ -2094,7 +2099,7 @@ export function Roundtable({
             >
               <div
                 className={cn(
-                  'relative w-12 h-12 md:w-16 md:h-16 rounded-full transition-all duration-300 flex items-center justify-center',
+                  'relative w-11 h-11 md:w-16 md:h-16 rounded-full transition-all duration-300 flex items-center justify-center',
                   activeRole === 'user' || isInputOpen || isCueUser
                     ? 'scale-105'
                     : 'opacity-50 grayscale-[0.2] scale-95 group-hover:opacity-100 group-hover:grayscale-0 group-hover:scale-100',
@@ -2110,7 +2115,7 @@ export function Roundtable({
                         : 'border-white dark:border-gray-700 group-hover:border-purple-200 dark:group-hover:border-purple-600',
                   )}
                 />
-                <div className="w-10 h-10 md:w-14 md:h-14 rounded-full bg-gray-50 dark:bg-gray-800 overflow-hidden relative z-10 shadow-sm border border-gray-50 dark:border-gray-700 text-xl md:text-2xl">
+                <div className="w-9 h-9 md:w-14 md:h-14 rounded-full bg-gray-50 dark:bg-gray-800 overflow-hidden relative z-10 shadow-sm border border-gray-50 dark:border-gray-700 text-lg md:text-2xl">
                   <AvatarDisplay src={userAvatar} alt={t('roundtable.you')} />
                 </div>
                 <div className="absolute top-0 right-0 w-5 h-5 bg-white dark:bg-gray-800 rounded-full flex items-center justify-center shadow-md border border-gray-100 dark:border-gray-700 z-20">

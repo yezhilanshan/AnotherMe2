@@ -1,0 +1,43 @@
+{
+  "name": "mobile",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@anotherme/api-client": "file:../AnotherMe/packages/api-client",
+    "@expo/vector-icons": "^15.1.1",
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-community/netinfo": "^12.0.1",
+    "expo": "~56.0.8",
+    "expo-av": "^16.0.8",
+    "expo-constants": "~56.0.16",
+    "expo-document-picker": "~56.0.4",
+    "expo-image-picker": "~56.0.15",
+    "expo-linking": "~56.0.13",
+    "expo-notifications": "~56.0.15",
+    "expo-router": "~56.2.8",
+    "expo-screen-orientation": "~56.0.5",
+    "expo-status-bar": "~56.0.4",
+    "expo-web-browser": "~56.0.5",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-sse": "^1.2.1",
+    "react-native-webview": "^13.16.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@expo/ngrok": "^4.1.3",
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test:capability": "node lib/capability.test.mjs"
+  },
+  "private": true
+}

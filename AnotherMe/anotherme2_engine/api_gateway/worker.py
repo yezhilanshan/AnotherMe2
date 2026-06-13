@@ -24,6 +24,19 @@ def run_worker() -> None:
     reconfigure_db(settings.database_url)
     init_db()
 
+    # Run backend data migrations
+    try:
+        from tutor_engine.services.migration_registry import run_all_migrations
+        migration_result = run_all_migrations()
+        if migration_result["ran"] > 0 or migration_result["errors"]:
+            print(
+                f"[gateway-worker] migrations: {migration_result['ran']} ran, "
+                f"{migration_result['skipped']} skipped, "
+                f"{len(migration_result['errors'])} errors"
+            )
+    except Exception as exc:
+        print(f"[gateway-worker] migration runner failed (non-fatal): {exc}")
+
     queue_client = build_queue_client(settings)
     storage = build_storage(settings)
     queue_order = [

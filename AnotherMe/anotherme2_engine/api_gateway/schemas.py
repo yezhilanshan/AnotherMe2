@@ -42,6 +42,11 @@ class CourseGenerateInput(BaseModel):
     language: str = "zh-CN"
     options: CourseOptions = Field(default_factory=CourseOptions)
     pedagogy_profile: Optional[PedagogyProfile] = None
+    source_object_key: Optional[str] = None
+    source_file_name: Optional[str] = None
+    source_mime_type: Optional[str] = None
+    source_text: Optional[str] = None
+    pdf_content: Optional[Dict[str, Any]] = None
 
 
 class ProblemVideoGenerateInput(BaseModel):
@@ -117,6 +122,7 @@ class APIError(BaseModel):
     error_code: str
     message: str
     details: Optional[Dict[str, Any]] = None
+    request_id: Optional[str] = None
 
 
 class MessageAttachmentInput(BaseModel):
@@ -133,6 +139,7 @@ class CreateConversationRequest(BaseModel):
     name: str = Field(..., min_length=1)
     creator_id: Optional[str] = None
     member_ids: list[str] = Field(default_factory=list)
+    metadata: Optional[dict] = None
 
 
 class ConversationSummary(BaseModel):
@@ -243,6 +250,9 @@ class CreateAIChatMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
     user_id: Optional[str] = None
     content_type: str = "text"
+    capability: str = ""
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     model_name: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
@@ -255,9 +265,13 @@ class CreateAIChatMessageRequest(BaseModel):
 class AIChatMessageOutput(BaseModel):
     message_id: str
     session_id: str
+    runtime_seq: Optional[int] = None
     role: str
     content: str
     content_type: str
+    capability: str = ""
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     model_name: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None

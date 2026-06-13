@@ -35,10 +35,10 @@ interface ClassroomListResponse {
 }
 
 const SCENE_COLORS: Record<string, string> = {
-  slide: '#111827',
-  quiz: '#E0573D',
-  interactive: '#4A6FA5',
-  pbl: '#F4D03F',
+  slide: '#6366f1',
+  quiz: '#06b6d4',
+  interactive: '#f59e0b',
+  pbl: '#10b981',
 };
 
 const WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -72,7 +72,7 @@ function estimateStudyHours(scenesCount: number) {
 }
 
 function ChartSkeleton({ height }: { height: number }) {
-  return <div className="w-full animate-pulse bg-gray-100" style={{ height }} />;
+  return <div className="w-full animate-pulse bg-muted rounded-lg" style={{ height }} />;
 }
 
 export default function LearningPlanPage() {
@@ -192,7 +192,7 @@ export default function LearningPlanPage() {
 
   if (loading) {
     return (
-      <div className="h-[50vh] flex items-center justify-center text-gray-500">
+      <div className="h-[50vh] flex items-center justify-center text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
         正在加载学习看板...
       </div>
@@ -206,12 +206,12 @@ export default function LearningPlanPage() {
   }
 
   const pieProgressData = [
-    { name: '已完成', value: completedUnits, color: '#111827' },
-    { name: '待学习', value: pendingUnits, color: '#E5E7EB' },
+    { name: '已完成', value: completedUnits, color: '#6366f1' },
+    { name: '待学习', value: pendingUnits, color: '#e2e8f0' },
   ];
   const topicData = sceneTypePieData.length
     ? sceneTypePieData
-    : [{ name: '暂无数据', value: 1, color: '#D1D5DB' }];
+    : [{ name: '暂无数据', value: 1, color: '#cbd5e1' }];
   const startLearningHref = recommendedTasks.length
     ? `/preview-class?classroomId=${encodeURIComponent(recommendedTasks[0].id)}`
     : '/create-class';
@@ -219,18 +219,20 @@ export default function LearningPlanPage() {
   return (
     <div className="space-y-6">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900 tracking-wide uppercase">学习看板</h1>
+        <h1 className="text-2xl font-bold text-foreground tracking-wide uppercase">学习看板</h1>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-4 bg-white p-6 shadow-sm flex flex-col">
+        <div className="lg:col-span-4 bg-card p-6 shadow-sm flex flex-col rounded-xl">
           <div className="flex justify-between items-start mb-4">
-            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">课程完成度</h2>
+            <h2 className="text-sm font-bold text-foreground uppercase tracking-wide">
+              课程完成度
+            </h2>
           </div>
           <div className="flex items-center gap-2 mb-4">
             <span className="text-sm font-medium">{completionRate.toFixed(1)}%</span>
-            <div className="h-4 w-4 rounded-full bg-[#E8F5E9] flex items-center justify-center">
-              <ArrowUpRight className="h-3 w-3 text-[#4CAF50]" />
+            <div className="h-4 w-4 rounded-full bg-emerald-50 flex items-center justify-center">
+              <ArrowUpRight className="h-3 w-3 text-emerald-500" />
             </div>
           </div>
 
@@ -239,22 +241,22 @@ export default function LearningPlanPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-4 mt-4">
-            <div className="bg-[#F4F3F0] p-4 text-center hover:bg-gray-100 transition-colors cursor-pointer rounded-lg">
-              <p className="text-2xl font-bold text-gray-900">{completedUnits}</p>
-              <p className="text-xs text-gray-500 mt-1">已完成课时</p>
+            <div className="bg-muted p-4 text-center hover:bg-secondary transition-colors cursor-pointer rounded-lg">
+              <p className="text-2xl font-bold text-foreground">{completedUnits}</p>
+              <p className="text-xs text-muted-foreground mt-1">已完成课时</p>
             </div>
-            <div className="bg-[#F4F3F0] p-4 text-center hover:bg-gray-100 transition-colors cursor-pointer rounded-lg">
-              <p className="text-2xl font-bold text-gray-900">{pendingUnits}</p>
-              <p className="text-xs text-gray-500 mt-1">待学习课时</p>
+            <div className="bg-muted p-4 text-center hover:bg-secondary transition-colors cursor-pointer rounded-lg">
+              <p className="text-2xl font-bold text-foreground">{pendingUnits}</p>
+              <p className="text-xs text-muted-foreground mt-1">待学习课时</p>
             </div>
           </div>
         </div>
 
-        <div className="lg:col-span-8 bg-white p-6 shadow-sm flex flex-col">
+        <div className="lg:col-span-8 bg-card p-6 shadow-sm flex flex-col rounded-xl">
           <div className="flex justify-between items-start mb-8">
-            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">学习时长</h2>
+            <h2 className="text-sm font-bold text-foreground uppercase tracking-wide">学习时长</h2>
             <select
-              className="text-xs border-none bg-[#F4F3F0] px-3 py-1.5 rounded-md text-gray-700 font-medium outline-none cursor-pointer hover:bg-gray-200 transition-colors"
+              className="text-xs border border-border bg-muted px-3 py-1.5 rounded-md text-foreground font-medium outline-none cursor-pointer hover:bg-secondary transition-colors"
               value={timeView}
               onChange={(e) => setTimeView(e.target.value as 'month' | 'week')}
             >
@@ -272,7 +274,7 @@ export default function LearningPlanPage() {
           </div>
         </div>
 
-        <div className="lg:col-span-4 bg-[#4A6FA5] p-6 shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[300px] group rounded-xl">
+        <div className="lg:col-span-4 bg-gradient-to-br from-indigo-500 to-purple-600 p-6 shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[300px] group rounded-xl">
           <div className="flex justify-between items-start relative z-10">
             <h2 className="text-sm font-bold text-white uppercase tracking-wide">升级高级版</h2>
             <Link
@@ -323,13 +325,13 @@ export default function LearningPlanPage() {
           </Link>
         </div>
 
-        <div className="lg:col-span-4 bg-white p-6 shadow-sm flex flex-col rounded-xl">
+        <div className="lg:col-span-4 bg-card p-6 shadow-sm flex flex-col rounded-xl">
           <div className="flex justify-between items-start mb-2">
             <div>
-              <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide">
+              <h2 className="text-sm font-bold text-foreground uppercase tracking-wide">
                 最近学习知识点
               </h2>
-              <p className="text-xs text-gray-500 mt-1">基于课堂场景统计</p>
+              <p className="text-xs text-muted-foreground mt-1">基于课堂场景统计</p>
             </div>
           </div>
 
@@ -338,13 +340,13 @@ export default function LearningPlanPage() {
           </div>
         </div>
 
-        <div className="lg:col-span-4 bg-white p-6 shadow-sm flex flex-col rounded-xl">
+        <div className="lg:col-span-4 bg-card p-6 shadow-sm flex flex-col rounded-xl">
           <div className="mb-6 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-gray-900 uppercase tracking-wide flex items-center gap-2">
-              <Target className="h-4 w-4 text-[#E0573D]" />
+            <h2 className="text-sm font-bold text-foreground uppercase tracking-wide flex items-center gap-2">
+              <Target className="h-4 w-4 text-chart-3" />
               今日建议学习
             </h2>
-            <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md">
+            <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">
               共 {recommendedTasks.length} 项
             </span>
           </div>
@@ -355,34 +357,34 @@ export default function LearningPlanPage() {
                 <Link
                   key={task.id}
                   href={`/preview-class?classroomId=${encodeURIComponent(task.id)}`}
-                  className="group flex items-start gap-3 p-3 bg-[#F9F9F9] hover:bg-gray-50 rounded-lg transition-all border border-transparent hover:border-gray-200 cursor-pointer"
+                  className="group flex items-start gap-3 p-3 bg-muted/60 hover:bg-secondary rounded-lg transition-all border border-transparent hover:border-border cursor-pointer"
                 >
                   <div className="mt-0.5">
-                    <CheckCircle2 className="h-5 w-5 text-gray-300 group-hover:text-[#4CAF50] transition-colors" />
+                    <CheckCircle2 className="h-5 w-5 text-muted-foreground/40 group-hover:text-emerald-500 transition-colors" />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-600">
+                      <span className="text-xs font-bold px-2 py-0.5 rounded bg-card border border-border text-muted-foreground">
                         {task.type}
                       </span>
-                      <span className="text-xs text-gray-400 flex items-center gap-1">
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
                         {task.duration}
                       </span>
                     </div>
-                    <p className="text-sm font-medium text-gray-900 group-hover:text-[#E0573D] transition-colors">
+                    <p className="text-sm font-medium text-foreground group-hover:text-chart-1 transition-colors">
                       {task.title}
                     </p>
                   </div>
                 </Link>
               ))
             ) : (
-              <p className="text-sm text-gray-500">暂无推荐任务，先创建课堂吧。</p>
+              <p className="text-sm text-muted-foreground">暂无推荐任务，先创建课堂吧。</p>
             )}
           </div>
 
           <Link
             href={startLearningHref}
-            className="mt-4 w-full py-2.5 min-h-[44px] bg-[#111827] hover:bg-black text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+            className="mt-4 w-full py-2.5 min-h-[44px] bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <BookOpen className="h-4 w-4" />
             开始今日学习

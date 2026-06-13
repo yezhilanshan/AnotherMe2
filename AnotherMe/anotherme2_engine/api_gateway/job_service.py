@@ -33,6 +33,10 @@ from agents.foundation.trace_event import TraceEvent, TraceEventEmitter
 from .queueing import QueueMessage
 from .schemas import CreateJobRequest, JobStatus, JobType, validate_job_payload
 from .storage import ObjectStorage
+from tutor_engine.utils.document_extractor import (
+    DocumentExtractionError,
+    extract_text_from_bytes,
+)
 
 
 RUNNING_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
@@ -44,6 +48,15 @@ class QueueClientLike(Protocol):
         ...
 
     def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None:
+        ...
+
+    def dlq_length(self, dlq_name: str) -> int:
+        ...
+
+    def peek_dead_letters(self, dlq_name: str, offset: int = 0, limit: int = 50) -> list[QueueMessage]:
+        ...
+
+    def requeue_dead_letter(self, dlq_name: str, target_queue: str, count: int = 1) -> int:
         ...
 
 
@@ -178,6 +191,8 @@ def add_artifact(
 
 
 def serialize_job(job: Job) -> Dict[str, Any]:
+    engine_state = job.engine_state or {}
+    partial_result = engine_state.get("partial_result") if isinstance(engine_state, dict) else None
     return {
         "job_id": job.id,
         "job_type": job.job_type,
@@ -186,7 +201,7 @@ def serialize_job(job: Job) -> Dict[str, Any]:
         "step": job.step,
         "error_code": job.error_code,
         "error_message": job.error_message,
-        "result": job.result_payload,
+        "result": job.result_payload or (partial_result if isinstance(partial_result, dict) else None),
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
     }
@@ -208,6 +223,8 @@ def create_or_get_job(
     )
     if existing and existing.status in RUNNING_STATUSES.union({JobStatus.SUCCEEDED.value}):
         return existing, False
+    if existing:
+        idem_key = f"{idem_key}:retry:{uuid4().hex}"
 
     queue_name = settings.queue_mapping[request.job_type.value]
     job = Job(
@@ -234,7 +251,7 @@ def create_or_get_job(
             .order_by(Job.created_at.desc())
             .first()
         )
-        if existing:
+        if existing and existing.status in RUNNING_STATUSES.union({JobStatus.SUCCEEDED.value}):
             return existing, False
         raise
 
@@ -592,11 +609,47 @@ def _try_claim_queued_job(session: Session, job_id: str) -> bool:
     return (claimed.rowcount or 0) == 1
 
 
+def _prepare_course_payload(
+    payload: Dict[str, Any],
+    settings: Settings,
+    storage: ObjectStorage,
+) -> Dict[str, Any]:
+    source_text = str(payload.get("source_text") or "").strip()
+    source_object_key = str(payload.get("source_object_key") or "").strip()
+    source_file_name = Path(str(payload.get("source_file_name") or "").strip()).name or "material"
+
+    if not source_text and source_object_key:
+        tmp_dir = Path(mkdtemp(prefix="course-source-", dir=settings.worker_temp_root))
+        local_path = tmp_dir / source_file_name
+        try:
+            storage.download_file(source_object_key, str(local_path))
+            source_text = extract_text_from_bytes(source_file_name, local_path.read_bytes())
+        except DocumentExtractionError as exc:
+            raise AnotherMeError(f"Failed to extract course material: {exc}") from exc
+        except FileNotFoundError as exc:
+            raise MissingInputObjectError(f"required course material object missing: {source_object_key}") from exc
+        except Exception as exc:
+            raise AnotherMeError(f"Failed to read course material: {exc}") from exc
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not source_text:
+        return payload
+
+    prepared = dict(payload)
+    prepared["pdf_content"] = {
+        "text": f"[File: {source_file_name}]\n{source_text}",
+        "images": [],
+    }
+    return prepared
+
+
 def _run_course_generate(
     session: Session,
     job: Job,
     payload: Dict[str, Any],
     settings: Settings,
+    storage: ObjectStorage,
 ) -> Dict[str, Any]:
     client = AnotherMeClient(settings.anotherme_base_url)
     trace = TraceEventEmitter(job_id=job.id)
@@ -607,7 +660,8 @@ def _run_course_generate(
         session.commit()
 
         trace.start_step("submit", "Submitting to AnotherMe engine")
-        submitted = provider.submit(payload)
+        prepared_payload = _prepare_course_payload(payload, settings, storage)
+        submitted = provider.submit(prepared_payload)
         anotherme_job_id = submitted.get("jobId") or submitted.get("job_id")
         if not anotherme_job_id:
             raise AnotherMeError(f"AnotherMe submit response missing jobId: {submitted}")
@@ -629,6 +683,20 @@ def _run_course_generate(
             progress = int(poll.get("progress") or 0)
             step = str(poll.get("step") or "polling")
             message = str(poll.get("message") or "Polling AnotherMe job")
+            result = poll.get("result") if isinstance(poll.get("result"), dict) else {}
+            if result:
+                classroom_id = result.get("classroomId") or result.get("classroom_id") or result.get("id")
+                if classroom_id:
+                    classroom_url = result.get("url") or result.get("classroom_url")
+                    scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
+                    job.engine_state = {
+                        **(job.engine_state or {}),
+                        "partial_result": {
+                            "classroom_id": classroom_id,
+                            "classroom_url": classroom_url,
+                            "scenes_count": scenes_count,
+                        },
+                    }
 
             _mark_running(session, job, step, message, progress)
             session.commit()
@@ -641,7 +709,6 @@ def _run_course_generate(
             done = bool(poll.get("done")) or status in {"succeeded", "failed"}
             if done:
                 if status == "succeeded":
-                    result = poll.get("result") or {}
                     classroom_id = result.get("classroomId") or result.get("classroom_id")
                     classroom_url = result.get("url") or result.get("classroom_url")
                     scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
@@ -1006,7 +1073,7 @@ def _run_study_package(
                 },
                 settings,
             )
-            course_result = _run_course_generate(session, child, child.input_payload, settings)
+            course_result = _run_course_generate(session, child, child.input_payload, settings, storage)
             _mark_succeeded(session, child, course_result)
             session.commit()
             _mark_parent_task_done("course", "topic_course_done", "Topic course generated")
@@ -1085,7 +1152,7 @@ def _run_study_package(
                 },
                 settings,
             )
-            course_result = _run_course_generate(session, child, child.input_payload, settings)
+            course_result = _run_course_generate(session, child, child.input_payload, settings, storage)
             _mark_succeeded(session, child, course_result)
             session.commit()
             _mark_parent_task_done("course", "photo_course_done", "Photo-derived course generated")
@@ -1118,7 +1185,7 @@ def execute_job(session: Session, job: Job, settings: Settings, storage: ObjectS
     payload = job.normalized_payload
 
     if job.job_type == JobType.COURSE_GENERATE.value:
-        return _run_course_generate(session, job, payload, settings)
+        return _run_course_generate(session, job, payload, settings, storage)
     if job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value:
         return _run_problem_video_generate(session, job, payload, settings, storage)
     if job.job_type == JobType.STUDY_PACKAGE_GENERATE.value:
@@ -1160,6 +1227,12 @@ def handle_worker_message(
     except Exception as exc:
         if _is_non_retriable_execution_error(job, exc):
             _mark_failed(session, job, "JOB_INPUT_MISSING", str(exc))
+            # Alert on non-retriable failure
+            try:
+                from .alert_service import get_alert_service
+                get_alert_service(settings).notify_job_failed(job.id, job.job_type, "JOB_INPUT_MISSING", str(exc))
+            except Exception:
+                pass
             return
 
         job.attempt_count += 1
@@ -1191,3 +1264,13 @@ def handle_worker_message(
             _mark_failed(session, job, "JOB_EXECUTION_FAILED", error_message)
             dlq_name = settings.dlq_mapping.get(job.queue_name, f"{settings.queue_dead_letter_prefix}.{job.queue_name}")
             queue_client.push_dead_letter(dlq_name, message)
+
+            # Alert on permanent failure
+            try:
+                from .alert_service import get_alert_service
+                alert = get_alert_service(settings)
+                alert.notify_job_failed(job.id, job.job_type, "JOB_EXECUTION_FAILED", error_message)
+                dlq_depth = queue_client.dlq_length(dlq_name)
+                alert.notify_dlq_depth(dlq_name, dlq_depth)
+            except Exception:
+                pass  # Alert failure must not break job processing

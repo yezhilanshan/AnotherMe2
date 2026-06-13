@@ -22,6 +22,7 @@ import type { ImageProviderId, ImageGenerationOptions } from '@/lib/media/types'
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
+import { isContentSensitiveError } from '@/lib/fallback';
 
 const log = createLogger('ImageGeneration API');
 
@@ -75,8 +76,8 @@ export async function POST(request: NextRequest) {
     return apiSuccess({ result });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    // Detect content safety filter rejections (e.g. Seedream OutputImageSensitiveContentDetected)
-    if (message.includes('SensitiveContent') || message.includes('sensitive information')) {
+    // Use unified Fallback framework's error classifier (consistent across all providers)
+    if (isContentSensitiveError(error)) {
       log.warn(`Image blocked by content safety filter: ${message}`);
       return apiError('CONTENT_SENSITIVE', 400, message);
     }

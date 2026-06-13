@@ -1,7 +1,7 @@
 """
-Capability Registry - Capability/Tool separation inspired by DeepTutor.
+Capability Registry - Capability/Tool separation inspired by AnotherMe.
 
-DeepTutor separates Capability (what the system can do for learning) from
+AnotherMe separates Capability (what the system can do for learning) from
 Tool (how the system does it). This provides a clean architecture:
 
 Capabilities (learning-focused):

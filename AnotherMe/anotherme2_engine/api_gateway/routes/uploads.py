@@ -11,7 +11,7 @@ from .auth import require_token
 
 
 def create_uploads_router(settings: Settings, storage: ObjectStorage) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["uploads"])
 
     @router.post("/v1/uploads", response_model=UploadResponse)
     async def upload_problem_image(

@@ -323,6 +323,12 @@ class VisionAgent(BaseAgent):
                     ),
                 }
             )
+
+            # Add user-visible fallback notification
+            fallback_notification = self._build_fallback_notification(vision_quality)
+            if fallback_notification:
+                state["messages"].append(fallback_notification)
+
             return state
 
         semantic_graph = self.coordinate_scene_compiler.derive_semantic_graph(coordinate_scene)
@@ -408,6 +414,12 @@ class VisionAgent(BaseAgent):
                 "content": f"Problem recognition completed: {problem_text[:50]}...",
             }
         )
+
+        # Add user-visible fallback notification if quality is degraded
+        fallback_notification = self._build_fallback_notification(vision_quality)
+        if fallback_notification:
+            state["messages"].append(fallback_notification)
+
         return state
 
     def _extract_and_stabilize_bundle(
@@ -454,6 +466,59 @@ class VisionAgent(BaseAgent):
             "problem_text": problem_text,
             "geometry_facts": geometry_facts,
             "vision_quality": vision_quality,
+        }
+
+    def _build_fallback_notification(
+        self,
+        vision_quality: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Build a user-visible notification when fallback/degradation occurred."""
+        quality_level = vision_quality.get("vision_quality_level", "unknown")
+        fallback_events = list(vision_quality.get("fallback_events") or [])
+
+        if quality_level == "exact" or not fallback_events:
+            return None
+
+        severity_map = {
+            "recovered": "info",
+            "schematic": "warning",
+            "degraded": "warning",
+        }
+        severity = severity_map.get(quality_level, "info")
+
+        descriptions = {
+            "recover_problem_bundle": "题目内容识别不完整，已使用备用方案恢复",
+            "ocr_fallback": "主要识别方式失败，已切换到 OCR 文字提取",
+            "recover_problem_text_fallback": "题目文本提取失败，已使用备用 OCR",
+            "recover_geometry_facts_fallback": "几何信息提取失败，已使用备用方案",
+            "problem_text_fallback": "题目文本提取失败，已使用备用方案",
+            "problem_text_upgrade": "题目文本质量较低，已尝试优化",
+            "geometry_facts_fallback": "几何信息提取失败，已使用备用方案",
+            "geometry_spec_compile_fallback": "几何规格编译失败，已使用空规格继续",
+            "coordinate_scene_fallback": "坐标系构建失败，已使用示意图模式",
+            "fold_solver_failed_safe_fallback": "折叠类题目处理失败，已使用安全降级模式",
+            "fold_safe_fallback_pruned": "已裁剪不可靠的折叠反射数据",
+        }
+
+        triggered = []
+        for event in fallback_events:
+            desc = descriptions.get(event, event)
+            if desc not in triggered:
+                triggered.append(desc)
+
+        return {
+            "role": "assistant",
+            "content": (
+                f"⚠️ 题目识别使用了降级模式（{quality_level}）。"
+                f"以下环节使用了备用方案：{'；'.join(triggered)}。"
+                "结果可能不够精确，建议核实题目内容。"
+            ),
+            "metadata": {
+                "type": "vision_fallback_warning",
+                "severity": severity,
+                "quality_level": quality_level,
+                "fallback_events": fallback_events,
+            },
         }
 
     def _compile_and_infer(

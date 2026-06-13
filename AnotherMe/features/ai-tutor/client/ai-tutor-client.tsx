@@ -42,7 +42,6 @@ import {
   VisualPreview,
 } from '@/features/ai-tutor/pages/ai-tutor/tool-previews';
 import {
-  AI_TUTOR_DETAILED_SYSTEM_PROMPT,
   CAPABILITIES,
   CHAT_TOOLS,
   LEGACY_STORAGE_KEY,
@@ -186,10 +185,15 @@ export default function AITutorPage() {
     setShowScrollToBottom(false);
   }, []);
 
-  // 处理滚动事件 - 用户主动滚动时暂停自动滚动并显示返回底部按钮
+  // 处理滚动事件 - 用户主动上滚时暂停自动滚动，回到附近时恢复
   const handleScroll = useCallback(() => {
-    isUserScrollingRef.current = true;
-    setShowScrollToBottom(!isNearBottom());
+    const nearBottom = isNearBottom();
+    if (!nearBottom) {
+      isUserScrollingRef.current = true;
+    } else {
+      isUserScrollingRef.current = false;
+    }
+    setShowScrollToBottom(!nearBottom);
   }, [isNearBottom]);
 
   useEffect(() => {
@@ -538,7 +542,6 @@ export default function AITutorPage() {
             config: {
               agentIds: [UNIFIED_MENTOR_PRESET.id],
               sessionType: 'qa',
-              systemPromptAddendum: AI_TUTOR_DETAILED_SYSTEM_PROMPT,
               enabledTutorTools: selectedTools,
               tutorToolConfig: {},
               useAgenticPipeline: selectedTools.length > 0 ? useAgenticPipeline : false,
@@ -727,7 +730,7 @@ export default function AITutorPage() {
   }
 
   return (
-    <div className="fixed inset-0 z-20 flex overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64">
+    <div className="fixed inset-0 z-20 flex flex-col overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64 md:flex-row">
       {/* 会话列表侧边栏 */}
       <aside className="hidden md:flex bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 md:flex-col h-full overflow-hidden w-60 shrink-0">
         <div className="p-4 border-b border-gray-200/60 dark:border-gray-800/60">
@@ -773,7 +776,7 @@ export default function AITutorPage() {
                     e.stopPropagation();
                     handleDeleteSession(session.id);
                   }}
-                  className="shrink-0 p-2 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-0"
+                  className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-0"
                   title="删除会话"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -827,7 +830,7 @@ export default function AITutorPage() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 scroll-touch">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 pb-safe scroll-touch">
               {orderedSessions.map((session) => {
                 const active = session.id === activeSessionId;
                 return (
@@ -869,7 +872,7 @@ export default function AITutorPage() {
             <button
               type="button"
               onClick={() => setMobileSessionsOpen(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm md:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm md:hidden"
               aria-label="打开会话列表"
             >
               <Menu className="h-5 w-5" />
@@ -1063,8 +1066,10 @@ export default function AITutorPage() {
                       </div>
                       <div
                         className={cn(
-                          'flex gap-1 mt-2 transition-opacity duration-200 md:opacity-0 md:group-hover/message:opacity-100',
-                          tappedMessageId === msg.id ? 'opacity-100' : 'opacity-0 md:opacity-0',
+                          'flex gap-1 mt-2 transition-opacity duration-200',
+                          'md:opacity-0 md:group-hover/message:opacity-100',
+                          'max-md:opacity-60',
+                          tappedMessageId === msg.id ? '!opacity-100' : '',
                           msg.role === 'user' ? 'justify-end' : 'justify-start',
                         )}
                         onClick={(e) => e.stopPropagation()}
@@ -1075,7 +1080,7 @@ export default function AITutorPage() {
                               type="button"
                               onClick={() => handleEditMessage(msg.id, msg.content)}
                               disabled={isTyping}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 text-xs transition-colors"
                               title="编辑"
                             >
                               <Pencil className="h-3.5 w-3.5" />
@@ -1083,7 +1088,7 @@ export default function AITutorPage() {
                             <button
                               type="button"
                               onClick={() => handleCopy(msg.content)}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs transition-colors"
                               title="复制"
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1094,7 +1099,7 @@ export default function AITutorPage() {
                             <button
                               type="button"
                               onClick={() => handleCopy(msg.content)}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs transition-colors"
                               title="复制"
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1103,7 +1108,7 @@ export default function AITutorPage() {
                               type="button"
                               onClick={() => handleRetry(msg.id)}
                               disabled={isTyping}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 text-xs transition-colors"
                               title="重试"
                             >
                               <RefreshCw className="h-3.5 w-3.5" />
@@ -1115,7 +1120,7 @@ export default function AITutorPage() {
                               }
                               disabled={isTyping}
                               className={cn(
-                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                'min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 text-xs transition-colors',
                                 msg.feedback === 'up'
                                   ? 'text-orange-600'
                                   : 'text-gray-400 hover:text-orange-600',
@@ -1131,7 +1136,7 @@ export default function AITutorPage() {
                               }
                               disabled={isTyping}
                               className={cn(
-                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                'min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 text-xs transition-colors',
                                 msg.feedback === 'down'
                                   ? 'text-orange-600'
                                   : 'text-gray-400 hover:text-orange-600',
@@ -1172,7 +1177,7 @@ export default function AITutorPage() {
           {showScrollToBottom && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 px-3 py-2 rounded-full bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 shadow-lg text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#2a241f] hover:text-gray-900 dark:hover:text-gray-100 transition-all"
+              className="absolute bottom-4 right-6 z-10 flex min-h-[44px] items-center gap-1.5 px-3 py-2 rounded-full bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 shadow-lg text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#2a241f] hover:text-gray-900 dark:hover:text-gray-100 transition-all"
             >
               <ArrowDown className="w-3.5 h-3.5" />
               回到底部
@@ -1189,7 +1194,7 @@ export default function AITutorPage() {
           <div className="mx-auto w-full px-0 sm:px-4 lg:px-10">
             <div className="relative">
               {showCapabilityMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   {CAPABILITIES.map((cap) => {
                     const Icon = cap.icon;
                     const isActive = cap.id === activeCapability;
@@ -1226,7 +1231,7 @@ export default function AITutorPage() {
               )}
 
               {showToolsMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(240px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(240px,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800">
                     <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
                       工具

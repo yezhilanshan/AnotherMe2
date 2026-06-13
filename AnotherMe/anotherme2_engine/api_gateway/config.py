@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 try:
@@ -13,6 +14,22 @@ except ModuleNotFoundError:
 
 
 load_project_env()
+
+_ENGINE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_runtime_path(value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return value
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str((_ENGINE_ROOT / path).resolve())
+
+
+def _runtime_path_env(name: str, default: str) -> str:
+    return _resolve_runtime_path(os.getenv(name, default))
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -43,6 +60,8 @@ class Settings:
     queue_dead_letter_prefix: str = os.getenv("GATEWAY_DLQ_PREFIX", "q.dlq")
     max_retries: int = int(os.getenv("GATEWAY_MAX_RETRIES", "2"))
     retry_base_seconds: int = int(os.getenv("GATEWAY_RETRY_BASE_SECONDS", "5"))
+    alert_webhook_url: str = os.getenv("GATEWAY_ALERT_WEBHOOK_URL", "")
+    dlq_alert_threshold: int = int(os.getenv("GATEWAY_DLQ_ALERT_THRESHOLD", "10"))
     running_job_stale_seconds: int = int(os.getenv("GATEWAY_RUNNING_JOB_STALE_SECONDS", "1800"))
     running_job_recover_batch: int = int(os.getenv("GATEWAY_RUNNING_JOB_RECOVER_BATCH", "8"))
     running_job_result_reconcile_batch: int = int(os.getenv("GATEWAY_RUNNING_JOB_RESULT_RECONCILE_BATCH", "12"))
@@ -72,14 +91,18 @@ class Settings:
     object_storage_secret_key: str = os.getenv("OBJECT_STORAGE_SECRET_KEY", "")
     object_storage_region: str = os.getenv("OBJECT_STORAGE_REGION", "us-east-1")
     object_storage_public_base_url: str = os.getenv("OBJECT_STORAGE_PUBLIC_BASE_URL", "")
-    local_storage_root: str = os.getenv("LOCAL_STORAGE_ROOT", "./gateway_data/objects")
+    local_storage_root: str = _runtime_path_env("LOCAL_STORAGE_ROOT", "./gateway_data/objects")
 
-    worker_temp_root: str = os.getenv("GATEWAY_WORKER_TEMP_ROOT", "./gateway_data/tmp")
-    worker_output_root: str = os.getenv("GATEWAY_WORKER_OUTPUT_ROOT", "./gateway_data/runs")
+    worker_temp_root: str = _runtime_path_env("GATEWAY_WORKER_TEMP_ROOT", "./gateway_data/tmp")
+    worker_output_root: str = _runtime_path_env("GATEWAY_WORKER_OUTPUT_ROOT", "./gateway_data/runs")
     keep_run_output: bool = _bool_env("GATEWAY_KEEP_RUN_OUTPUT", True)
 
     # Optional static token for phase-1 single-tenant auth.
     api_token: str = os.getenv("GATEWAY_API_TOKEN", "")
+
+    def __post_init__(self) -> None:
+        for field_name in ("local_storage_root", "worker_temp_root", "worker_output_root"):
+            object.__setattr__(self, field_name, _resolve_runtime_path(getattr(self, field_name)))
 
     @property
     def queue_mapping(self) -> dict[str, str]:

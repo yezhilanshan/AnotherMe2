@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "镜我",
+    "slug": "anotherme-mobile",
+    "scheme": "anotherme",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anotherme.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.anotherme.mobile",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许访问相册以选择题目图片",
+          "cameraPermission": "允许使用相机拍摄题目"
+        }
+      ]
+    ]
+  }
+}

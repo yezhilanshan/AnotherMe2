@@ -176,9 +176,89 @@ PROVIDER_PRIORITY = [
     "grok",
 ]
 
+PROVIDER_ALIASES = {
+    "google": "gemini",
+    "dashscope": "qwen",
+    "bailian": "qwen",
+    "ark": "doubao",
+    "volcengine": "doubao",
+    "xai": "grok",
+}
+
+PROVIDER_MODEL_ENV_PREFIXES = {
+    "openai": "OPENAI",
+    "anthropic": "ANTHROPIC",
+    "gemini": "GOOGLE",
+    "deepseek": "DEEPSEEK",
+    "qwen": "QWEN",
+    "kimi": "KIMI",
+    "minimax": "MINIMAX",
+    "glm": "GLM",
+    "siliconflow": "SILICONFLOW",
+    "doubao": "DOUBAO",
+    "grok": "GROK",
+}
+
+
+def _normalise_provider(provider: str | None) -> str | None:
+    value = str(provider or "").strip().lower()
+    if not value:
+        return None
+    return PROVIDER_ALIASES.get(value, value)
+
+
+def _provider_from_model(model: str | None) -> str | None:
+    value = str(model or "").strip()
+    if ":" not in value:
+        return None
+    provider, model_name = value.split(":", 1)
+    if not provider.strip() or not model_name.strip():
+        return None
+    return _normalise_provider(provider)
+
+
+def _strip_model_provider(model: str | None) -> str:
+    value = str(model or "").strip()
+    if ":" in value:
+        _provider, model_name = value.split(":", 1)
+        return model_name.strip()
+    return value
+
+
+def _env_first(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _provider_for_model_type(model_type: str) -> Optional[str]:
+    role = str(model_type or "text").strip().upper()
+    explicit = _normalise_provider(_env_first(f"PROBLEM_VIDEO_{role}_PROVIDER", f"{role}_PROVIDER"))
+    if explicit:
+        return explicit
+
+    model_names = [f"PROBLEM_VIDEO_{role}_MODEL", f"{role}_MODEL"]
+    if role == "TEXT":
+        model_names.append("DEFAULT_MODEL")
+    for name in model_names:
+        provider = _provider_from_model(os.getenv(name))
+        if provider:
+            return provider
+    return _detect_provider()
+
 
 def _detect_provider() -> Optional[str]:
     """Detect which provider to use based on environment variables."""
+    explicit = _normalise_provider(_env_first("DEFAULT_PROVIDER", "LLM_PROVIDER"))
+    if explicit and _get_provider_api_key(explicit):
+        return explicit
+
+    model_provider = _provider_from_model(os.getenv("DEFAULT_MODEL"))
+    if model_provider and _get_provider_api_key(model_provider):
+        return model_provider
+
     provider_checks = {
         "openai": OPENAI_API_KEY_ENV_NAMES,
         "anthropic": ANTHROPIC_API_KEY_ENV_NAMES,
@@ -238,49 +318,78 @@ def _get_provider_api_key(provider: str) -> str:
 
 def _get_model_for_provider(provider: str, model_type: str = "text") -> str:
     """Get default model for a provider and model type."""
+    provider = _normalise_provider(provider) or provider
+    if model_type == "text":
+        env_prefix = PROVIDER_MODEL_ENV_PREFIXES.get(provider)
+        provider_models = os.getenv(f"{env_prefix}_MODELS", "") if env_prefix else ""
+        first_configured_model = next(
+            (model.strip() for model in provider_models.split(",") if model.strip()),
+            "",
+        )
+        if first_configured_model:
+            return _strip_model_provider(first_configured_model)
+
     models = PROVIDER_MODELS.get(provider, {})
     return models.get(model_type, models.get("text", "gpt-4o"))
 
 
 # Legacy functions (maintain backward compatibility)
 def _text_api_key() -> str:
-    provider = _detect_provider()
+    provider = _provider_for_model_type("text")
     if provider:
         return _get_provider_api_key(provider)
     return FALLBACK_ARK_API_KEY
 
 
 def _vision_api_key() -> str:
+    provider = _provider_for_model_type("vision")
+    if provider:
+        return _get_provider_api_key(provider)
     return _text_api_key()
 
 
 def _text_base_url() -> str:
-    provider = _detect_provider()
+    provider = _provider_for_model_type("text")
     if provider:
         return _get_provider_base_url(provider)
     return FALLBACK_ARK_BASE_URL
 
 
 def _vision_base_url() -> str:
+    provider = _provider_for_model_type("vision")
+    if provider:
+        return _get_provider_base_url(provider)
     return _text_base_url()
 
 
 def _text_model() -> str:
-    provider = _detect_provider()
+    configured_model = _env_first("PROBLEM_VIDEO_TEXT_MODEL", "TEXT_MODEL", "DEFAULT_MODEL")
+    if configured_model:
+        return _strip_model_provider(configured_model)
+
+    provider = _provider_for_model_type("text")
     if provider:
         return _get_model_for_provider(provider, "text")
     return FALLBACK_TEXT_MODEL
 
 
 def _vision_model() -> str:
-    provider = _detect_provider()
+    configured_model = _env_first("PROBLEM_VIDEO_VISION_MODEL", "VISION_MODEL")
+    if configured_model:
+        return _strip_model_provider(configured_model)
+
+    provider = _provider_for_model_type("vision")
     if provider:
         return _get_model_for_provider(provider, "vision")
     return FALLBACK_VISION_MODEL
 
 
 def _ocr_model() -> str:
-    provider = _detect_provider()
+    configured_model = _env_first("PROBLEM_VIDEO_OCR_MODEL", "OCR_MODEL")
+    if configured_model:
+        return _strip_model_provider(configured_model)
+
+    provider = _provider_for_model_type("ocr")
     if provider:
         return _get_model_for_provider(provider, "ocr")
     return FALLBACK_OCR_MODEL

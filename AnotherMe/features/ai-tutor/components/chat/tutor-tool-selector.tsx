@@ -114,7 +114,7 @@ export function TutorToolSelector({
 
   return (
     <div ref={containerRef} className={cn('relative', className)}>
-      {/* 触发按钮 - 参考 DeepTutor 风格 */}
+      {/* 触发按钮 - 参考 AnotherMe 风格 */}
       <div className="flex items-center gap-1">
         <button
           onClick={() => !disabled && setIsOpen(!isOpen)}
@@ -151,7 +151,7 @@ export function TutorToolSelector({
           />
         </button>
 
-        {/* 已选工具标签列表 - 参考 DeepTutor 用"·"分隔 */}
+        {/* 已选工具标签列表 - 参考 AnotherMe 用"·"分隔 */}
         {selectedToolLabels.length > 0 && (
           <div className="flex items-center gap-[3px] overflow-hidden">
             {selectedToolLabels.map((label, i) => (
@@ -184,7 +184,7 @@ export function TutorToolSelector({
         )}
       </div>
 
-      {/* 下拉面板 - 参考 DeepTutor 风格 */}
+      {/* 下拉面板 - 参考 AnotherMe 风格 */}
       <AnimatePresence>
         {isOpen && (
           <motion.div
@@ -230,7 +230,7 @@ export function TutorToolSelector({
                     </div>
                     <div className="text-[10px] text-gray-400 dark:text-gray-500">
                       {isAgenticMode
-                        ? '模型按需选择工具 (DeepTutor风格)'
+                        ? '模型按需选择工具 (AnotherMe风格)'
                         : '回答前执行所有工具'}
                     </div>
                   </div>

@@ -1,0 +1,2478 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AnotherMe Gateway API",
+    "version": "0.3.0",
+    "description": "Unified backend gateway for AnotherMe Web and Mobile clients.\n\nCapabilities follow the registry defined in `agents/foundation/capability_registry.py`.\nValid capability ids: `course_generate`, `problem_video_generate`, `quiz_practice`,\n`interactive_demo`, `ai_tutor_chat`, `deep_solve`, `deep_research`,\n`math_animator`, `visualize`, `co_writer`.\n\nP1 changes:\n  - Capability endpoints (P0-3) are now wired.\n  - Global error envelope (`{ error_code, message, request_id, details? }`).\n  - Live-book / co-writer / courses routes are first-class.\n\nAuth: Phase 0 uses static `Bearer <GATEWAY_API_TOKEN>`. Phase 2 will switch to Supabase JWT.",
+    "contact": {
+      "name": "AnotherMe",
+      "url": "https://github.com/anotherme/anotherme"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    { "name": "core" },
+    { "name": "capabilities" },
+    { "name": "jobs" },
+    { "name": "uploads" },
+    { "name": "ai-chat" },
+    { "name": "ai-learning" },
+    { "name": "messages" },
+    { "name": "knowledge" },
+    { "name": "classroom" },
+    { "name": "live-book" },
+    { "name": "co-writer" },
+    { "name": "media" },
+    { "name": "documents" },
+    { "name": "tools" },
+    { "name": "server-config" },
+    { "name": "users" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Phase 0: static token from GATEWAY_API_TOKEN env var. Phase 2: Supabase JWT."
+      }
+    },
+    "schemas": {
+      "APIError": {
+        "type": "object",
+        "required": ["error_code", "message"],
+        "properties": {
+          "error_code": { "type": "string", "example": "JOB_ENQUEUE_FAILED" },
+          "message": { "type": "string", "example": "Failed to enqueue job" },
+          "details": { "type": "object", "additionalProperties": true },
+          "request_id": { "type": "string" }
+        }
+      },
+      "JobType": {
+        "type": "string",
+        "enum": [
+          "course_generate",
+          "problem_video_generate",
+          "study_package_generate",
+          "learning_record_extract"
+        ]
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": ["queued", "running", "succeeded", "failed"]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": {
+          "ok": { "type": "boolean" },
+          "redis": { "type": "boolean" },
+          "queue_backend": { "type": "string" },
+          "env": { "type": "string" }
+        }
+      },
+      "RootResponse": {
+        "type": "object",
+        "required": ["service", "ok"],
+        "properties": {
+          "service": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "health": { "type": "string" },
+          "api": { "type": "string" }
+        }
+      },
+      "Capability": {
+        "type": "object",
+        "required": ["id", "name", "description", "required_tools", "optional_tools", "enabled"],
+        "properties": {
+          "id": { "type": "string", "example": "ai_tutor_chat" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "required_tools": { "type": "array", "items": { "type": "string" } },
+          "optional_tools": { "type": "array", "items": { "type": "string" } },
+          "enabled": { "type": "boolean" },
+          "status": { "type": "string" },
+          "config": { "type": "object", "additionalProperties": true },
+          "icon": { "type": "string" },
+          "category": { "type": "string" }
+        }
+      },
+      "Tool": {
+        "type": "object",
+        "required": ["id", "name", "description", "available"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "available": { "type": "boolean" },
+          "config": { "type": "object", "additionalProperties": true },
+          "provider": { "type": "string" },
+          "last_health_check": { "type": "string", "format": "date-time" },
+          "error_message": { "type": "string" }
+        }
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "required": ["capabilities", "effective", "tools"],
+        "properties": {
+          "capabilities": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/Capability" } },
+          "effective": { "type": "array", "items": { "$ref": "#/components/schemas/Capability" } },
+          "tools": { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/Tool" } }
+        }
+      },
+      "CapabilityGuardResponse": {
+        "type": "object",
+        "properties": {
+          "job_id": { "type": "string" },
+          "capability_id": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "missing_tools": { "type": "array", "items": { "type": "string" } },
+          "degraded": { "type": "boolean" }
+        }
+      },
+      "CreateJobRequest": {
+        "type": "object",
+        "required": ["job_type", "payload"],
+        "properties": {
+          "job_type": { "$ref": "#/components/schemas/JobType" },
+          "payload": { "type": "object", "additionalProperties": true },
+          "user_id": { "type": "string", "default": "default_user" }
+        }
+      },
+      "JobSummary": {
+        "type": "object",
+        "required": ["job_id", "job_type", "status", "progress", "step", "created_at", "updated_at"],
+        "properties": {
+          "job_id": { "type": "string" },
+          "job_type": { "$ref": "#/components/schemas/JobType" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "step": { "type": "string" },
+          "error_code": { "type": "string" },
+          "error_message": { "type": "string" },
+          "result": { "type": "object", "additionalProperties": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "JobResultResponse": {
+        "type": "object",
+        "required": ["job_id", "status", "result"],
+        "properties": {
+          "job_id": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "result": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "TraceEvent": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "UploadResponse": {
+        "type": "object",
+        "required": ["object_key", "url", "size", "content_type"],
+        "properties": {
+          "object_key": { "type": "string" },
+          "url": { "type": "string" },
+          "size": { "type": "integer" },
+          "content_type": { "type": "string" }
+        }
+      },
+      "ChatMessage": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+          "content": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type", "text"],
+                  "properties": {
+                    "type": { "type": "string" },
+                    "text": { "type": "string" }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "ChatRequest": {
+        "type": "object",
+        "required": ["messages", "model", "api_key"],
+        "properties": {
+          "messages": { "type": "array", "items": { "$ref": "#/components/schemas/ChatMessage" } },
+          "model": { "type": "string", "default": "gpt-4o" },
+          "api_key": { "type": "string", "default": "" },
+          "base_url": { "type": "string" },
+          "temperature": { "type": "number", "default": 0.1 },
+          "max_tokens": { "type": "integer", "default": 4096 },
+          "system_prompt": { "type": "string" },
+          "capability": {
+            "type": "string",
+            "default": "ai_tutor_chat",
+            "description": "One of: ai_tutor_chat, deep_solve, deep_research, course_generate, problem_video_generate, math_animator, visualize, co_writer, quiz_practice, interactive_demo"
+          },
+          "streaming": { "type": "boolean", "default": true },
+          "user_id": { "type": "string", "default": "anonymous" },
+          "request_id": { "type": "string" },
+          "learning_context": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ChatNonStreamingResponse": {
+        "type": "object",
+        "required": ["success", "assistant_text", "request_id"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "assistant_text": { "type": "string" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "StreamEvent_AgentStart": {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+          "type": { "type": "string", "const": "agent_start" },
+          "data": {
+            "type": "object",
+            "required": ["messageId", "agentId", "agentName"],
+            "properties": {
+              "messageId": { "type": "string" },
+              "agentId": { "type": "string" },
+              "agentName": { "type": "string" }
+            }
+          }
+        }
+      },
+      "StreamEvent_Thinking": {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+          "type": { "type": "string", "const": "thinking" },
+          "data": {
+            "type": "object",
+            "required": ["stage", "agentId", "reasoning"],
+            "properties": {
+              "stage": { "type": "string" },
+              "agentId": { "type": "string" },
+              "reasoning": { "type": "string" }
+            }
+          }
+        }
+      },
+      "StreamEvent_TextDelta": {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+          "type": { "type": "string", "const": "text_delta" },
+          "data": {
+            "type": "object",
+            "required": ["content", "messageId"],
+            "properties": {
+              "content": { "type": "string" },
+              "messageId": { "type": "string" }
+            }
+          }
+        }
+      },
+      "StreamEvent_Done": {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+          "type": { "type": "string", "const": "done" },
+          "data": {
+            "type": "object",
+            "required": ["totalActions", "totalAgents", "agentHadContent"],
+            "properties": {
+              "totalActions": { "type": "integer" },
+              "totalAgents": { "type": "integer" },
+              "agentHadContent": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "StreamEvent_Error": {
+        "type": "object",
+        "required": ["type", "data"],
+        "properties": {
+          "type": { "type": "string", "const": "error" },
+          "data": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "message": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ClassroomSummary": {
+        "type": "object",
+        "required": ["id", "title", "created_at", "scenes_count"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "created_at": { "type": "string" },
+          "scenes_count": { "type": "integer" }
+        }
+      },
+      "ClassroomListResponse": {
+        "type": "object",
+        "required": ["success", "classrooms"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "classrooms": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ClassroomSummary" }
+          }
+        }
+      },
+      "ClassroomData": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ClassroomDetailResponse": {
+        "type": "object",
+        "required": ["success", "classroom"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "classroom": { "$ref": "#/components/schemas/ClassroomData" }
+        }
+      },
+      "CreateClassroomRequest": {
+        "type": "object",
+        "required": ["stage"],
+        "properties": {
+          "stage": { "type": "object", "additionalProperties": true },
+          "scenes": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "CreateClassroomResponse": {
+        "type": "object",
+        "required": ["success", "id"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "id": { "type": "string" }
+        }
+      },
+      "DeleteClassroomResponse": {
+        "type": "object",
+        "required": ["success", "deleted"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "deleted": { "type": "boolean" }
+        }
+      },
+      "ImageGenerationRequest": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string" },
+          "negative_prompt": { "type": "string" },
+          "width": { "type": "integer", "default": 1024 },
+          "height": { "type": "integer", "default": 1024 },
+          "aspect_ratio": { "type": "string" },
+          "style": { "type": "string" }
+        }
+      },
+      "ImageGenerationResult": {
+        "type": "object",
+        "required": ["base64", "format", "width", "height"],
+        "properties": {
+          "base64": { "type": "string" },
+          "format": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" }
+        }
+      },
+      "ImageGenerationResponse": {
+        "type": "object",
+        "required": ["success", "result"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "result": { "$ref": "#/components/schemas/ImageGenerationResult" }
+        }
+      },
+      "TTSRequest": {
+        "type": "object",
+        "required": ["text", "audio_id", "tts_voice"],
+        "properties": {
+          "text": { "type": "string" },
+          "audio_id": { "type": "string" },
+          "tts_provider_id": { "type": "string", "default": "openai-tts" },
+          "tts_voice": { "type": "string", "default": "alloy" },
+          "tts_model_id": { "type": "string" },
+          "tts_speed": { "type": "number", "default": 1.0 },
+          "tts_api_key": { "type": "string" },
+          "tts_base_url": { "type": "string" }
+        }
+      },
+      "TTSResponse": {
+        "type": "object",
+        "required": ["success", "url"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "url": { "type": "string" },
+          "audio_id": { "type": "string" }
+        }
+      },
+      "VideoGenerationRequest": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string" },
+          "duration": { "type": "integer", "default": 5 },
+          "aspect_ratio": { "type": "string", "default": "16:9" },
+          "resolution": { "type": "string", "default": "720p" }
+        }
+      },
+      "VideoGenerationResponse": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "url": { "type": "string" }
+        }
+      },
+      "ConversationSummary": {
+        "type": "object",
+        "required": ["conversation_id", "type", "name", "creator_id", "created_at", "updated_at"],
+        "properties": {
+          "conversation_id": { "type": "string" },
+          "type": { "type": "string" },
+          "name": { "type": "string" },
+          "creator_id": { "type": "string" },
+          "last_message_id": { "type": "string" },
+          "last_message_time": { "type": "string" },
+          "unread_count": { "type": "integer" },
+          "created_at": { "type": "string" },
+          "updated_at": { "type": "string" }
+        }
+      },
+      "CreateConversationRequest": {
+        "type": "object",
+        "required": ["user_id", "name"],
+        "properties": {
+          "user_id": { "type": "string" },
+          "type": { "type": "string", "default": "single" },
+          "name": { "type": "string" },
+          "creator_id": { "type": "string" },
+          "member_ids": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CreateMessageRequest": {
+        "type": "object",
+        "required": ["sender_id", "content"],
+        "properties": {
+          "sender_id": { "type": "string" },
+          "message_type": { "type": "string", "default": "text" },
+          "content": { "type": "string" },
+          "reply_to_message_id": { "type": "string" },
+          "status": { "type": "string", "default": "sent" },
+          "source_type": { "type": "string", "default": "manual" },
+          "source_ref_id": { "type": "string" },
+          "attachments": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "MessageOutput": {
+        "type": "object",
+        "required": ["message_id", "conversation_id", "seq", "sender_id", "message_type", "content", "status", "source_type", "created_at"],
+        "properties": {
+          "message_id": { "type": "string" },
+          "conversation_id": { "type": "string" },
+          "seq": { "type": "integer" },
+          "sender_id": { "type": "string" },
+          "message_type": { "type": "string" },
+          "content": { "type": "string" },
+          "reply_to_message_id": { "type": "string" },
+          "status": { "type": "string" },
+          "source_type": { "type": "string" },
+          "source_ref_id": { "type": "string" },
+          "recalled_flag": { "type": "boolean" },
+          "deleted_flag": { "type": "boolean" },
+          "created_at": { "type": "string" },
+          "attachments": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "StudentProfileOutput": {
+        "type": "object",
+        "required": ["user_id", "learning_stats", "computed_at", "profile_source"],
+        "properties": {
+          "user_id": { "type": "string" },
+          "weak_subjects": { "type": "array", "items": { "type": "string" } },
+          "weak_knowledge_points": { "type": "array", "items": { "type": "string" } },
+          "recent_focus": { "type": "string" },
+          "ability_scores": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "learning_stats": { "type": "object", "additionalProperties": true },
+          "updated_at": { "type": "string" },
+          "computed_at": { "type": "string" },
+          "profile_source": { "type": "string" },
+          "knowledge_tracing": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "StudentKnowledgeStateOutput": {
+        "type": "object",
+        "required": ["user_id", "knowledge_point_id", "p_mastery", "p_learn", "p_guess", "p_slip", "attempts", "correct_attempts"],
+        "properties": {
+          "user_id": { "type": "string" },
+          "knowledge_point_id": { "type": "string" },
+          "p_mastery": { "type": "number" },
+          "p_learn": { "type": "number" },
+          "p_guess": { "type": "number" },
+          "p_slip": { "type": "number" },
+          "p_forget": { "type": "number" },
+          "attempts": { "type": "integer" },
+          "correct_attempts": { "type": "integer" },
+          "last_updated_at": { "type": "string" }
+        }
+      },
+      "ProcessQuizAnswerInput": {
+        "type": "object",
+        "required": ["question_id", "is_correct"],
+        "properties": {
+          "question_id": { "type": "string" },
+          "is_correct": { "type": "boolean" },
+          "knowledge_point_ids": { "type": "array", "items": { "type": "string" } },
+          "payload": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "QuizAnswerResultOutput": {
+        "type": "object",
+        "required": ["knowledge_point_id", "prior_mastery", "posterior_mastery", "attempts", "correct_attempts", "weight"],
+        "properties": {
+          "knowledge_point_id": { "type": "string" },
+          "prior_mastery": { "type": "number" },
+          "posterior_mastery": { "type": "number" },
+          "attempts": { "type": "integer" },
+          "correct_attempts": { "type": "integer" },
+          "weight": { "type": "number" },
+          "difficulty": { "type": "string" }
+        }
+      },
+      "DiagnosticProbeOutput": {
+        "type": "object",
+        "required": ["probe_id", "knowledge_point_id", "question", "correct_answer", "explanation", "difficulty", "probe_type", "hints", "teaching_action", "reason"],
+        "properties": {
+          "probe_id": { "type": "string" },
+          "knowledge_point_id": { "type": "string" },
+          "question": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" } },
+          "correct_answer": { "type": "string" },
+          "explanation": { "type": "string" },
+          "difficulty": { "type": "string" },
+          "probe_type": { "type": "string" },
+          "hints": { "type": "array", "items": { "type": "string" } },
+          "teaching_action": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      },
+      "LearningEventOutput": {
+        "type": "object",
+        "required": ["event_id", "user_id", "event_type", "weight", "created_at"],
+        "properties": {
+          "event_id": { "type": "string" },
+          "user_id": { "type": "string" },
+          "event_type": { "type": "string" },
+          "session_id": { "type": "string" },
+          "classroom_id": { "type": "string" },
+          "scene_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "knowledge_points": { "type": "array", "items": { "type": "string" } },
+          "payload": { "type": "object", "additionalProperties": true },
+          "weight": { "type": "number" },
+          "created_at": { "type": "string" }
+        }
+      },
+      "CreateLearningEventRequest": {
+        "type": "object",
+        "required": ["event_type"],
+        "properties": {
+          "user_id": { "type": "string" },
+          "event_type": { "type": "string" },
+          "session_id": { "type": "string" },
+          "classroom_id": { "type": "string" },
+          "scene_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "knowledge_points": { "type": "array", "items": { "type": "string" } },
+          "payload": { "type": "object", "additionalProperties": true },
+          "weight": { "type": "number", "default": 1.0 }
+        }
+      },
+      "LearningEventStatsOutput": {
+        "type": "object",
+        "required": ["total_events"],
+        "properties": {
+          "total_events": { "type": "integer" },
+          "by_type": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "knowledge_points_involved": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "KnowledgePointOutput": {
+        "type": "object",
+        "required": ["id", "name", "prerequisites", "created_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "subject": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "parent_id": { "type": "string" },
+          "prerequisites": { "type": "array", "items": { "type": "string" } },
+          "difficulty": { "type": "string" },
+          "created_at": { "type": "string" }
+        }
+      },
+      "KnowledgePointInput": {
+        "type": "object",
+        "required": ["kp_id", "name"],
+        "properties": {
+          "kp_id": { "type": "string" },
+          "name": { "type": "string" },
+          "subject": { "type": "string" },
+          "description": { "type": "string" },
+          "parent_id": { "type": "string" },
+          "prerequisites": { "type": "array", "items": { "type": "string" } },
+          "difficulty": { "type": "string" }
+        }
+      },
+      "LiveBook": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "LiveBookPage": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "Block": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "CoWriterDoc": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "TranscriptionRequest": {
+        "type": "object",
+        "required": ["audio_id", "object_key"],
+        "properties": {
+          "audio_id": { "type": "string" },
+          "object_key": { "type": "string" },
+          "language": { "type": "string", "default": "zh" },
+          "asr_provider_id": { "type": "string" },
+          "asr_model_id": { "type": "string" }
+        }
+      },
+      "TranscriptionResponse": {
+        "type": "object",
+        "required": ["success", "text"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "text": { "type": "string" },
+          "language": { "type": "string" },
+          "segments": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean" }
+        }
+      },
+      "APIError": {
+        "type": "object",
+        "required": ["error_code", "message", "request_id"],
+        "properties": {
+          "error_code": {
+            "type": "string",
+            "example": "INTERNAL_ERROR",
+            "description": "Machine-readable error code (UPPER_SNAKE_CASE)."
+          },
+          "message": { "type": "string", "example": "Internal server error" },
+          "request_id": { "type": "string", "description": "Echoed from X-Request-Id header, or auto-minted." },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error_code", "message", "request_id"],
+        "properties": {
+          "error_code": { "type": "string" },
+          "message": { "type": "string" },
+          "request_id": { "type": "string" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["user_id"],
+        "properties": {
+          "user_id": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "display_name": { "type": "string" },
+          "avatar_url": { "type": "string", "format": "uri" },
+          "locale": { "type": "string", "example": "zh-CN" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "UserUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": { "type": "string" },
+          "avatar_url": { "type": "string", "format": "uri" },
+          "locale": { "type": "string" }
+        }
+      },
+      "Book": {
+        "type": "object",
+        "required": ["id", "title", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "subject": { "type": "string" },
+          "grade": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "spine_ready", "compiling", "ready", "error", "archived"]
+          },
+          "spine": { "type": "array", "items": { "$ref": "#/components/schemas/SpineEntry" } },
+          "metadata": { "type": "object", "additionalProperties": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "SpineEntry": {
+        "type": "object",
+        "required": ["page_id", "title", "order"],
+        "properties": {
+          "page_id": { "type": "string" },
+          "title": { "type": "string" },
+          "order": { "type": "integer" },
+          "content_type": {
+            "type": "string",
+            "enum": ["theory", "derivation", "history", "practice", "concept", "overview"]
+          },
+          "objective": { "type": "string" }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "required": ["id", "book_id", "title", "status", "order", "blocks"],
+        "properties": {
+          "id": { "type": "string" },
+          "book_id": { "type": "string" },
+          "title": { "type": "string" },
+          "order": { "type": "integer" },
+          "content_type": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "planning", "generating", "ready", "partial", "error"]
+          },
+          "blocks": { "type": "array", "items": { "$ref": "#/components/schemas/Block" } },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Block": {
+        "type": "object",
+        "required": ["id", "type", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text", "callout", "quiz", "user_note",
+              "figure", "interactive", "animation", "code", "timeline", "flash_cards",
+              "deep_dive", "section", "concept_graph"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "generating", "ready", "error", "hidden"]
+          },
+          "payload": { "type": "object", "additionalProperties": true },
+          "fingerprint": { "type": "string" }
+        }
+      },
+      "BookProposal": {
+        "type": "object",
+        "required": ["title", "spine"],
+        "properties": {
+          "title": { "type": "string" },
+          "subject": { "type": "string" },
+          "grade": { "type": "string" },
+          "intent": { "type": "string" },
+          "source_refs": { "type": "array", "items": { "type": "string" } },
+          "spine": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SpineEntry" }
+          }
+        }
+      },
+      "ConfirmProposalRequest": {
+        "type": "object",
+        "required": ["proposal"],
+        "properties": {
+          "proposal": { "$ref": "#/components/schemas/BookProposal" }
+        }
+      },
+      "ConfirmSpineRequest": {
+        "type": "object",
+        "required": ["book_id", "spine"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "spine": { "type": "array", "items": { "$ref": "#/components/schemas/SpineEntry" } }
+        }
+      },
+      "CompilePageRequest": {
+        "type": "object",
+        "required": ["book_id", "page_id"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "page_id": { "type": "string" },
+          "force": { "type": "boolean", "default": false }
+        }
+      },
+      "RegenerateBlockRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "feedback": { "type": "string" }
+        }
+      },
+      "InsertBlockRequest": {
+        "type": "object",
+        "required": ["book_id", "page_id", "type", "order"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "page_id": { "type": "string" },
+          "type": { "type": "string" },
+          "payload": { "type": "object", "additionalProperties": true },
+          "order": { "type": "integer" }
+        }
+      },
+      "DeleteBlockRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" }
+        }
+      },
+      "MoveBlockRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id", "new_order"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "new_order": { "type": "integer" }
+        }
+      },
+      "ChangeBlockTypeRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id", "new_type"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "new_type": { "type": "string" }
+        }
+      },
+      "QuizAttemptRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id", "answer"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "answer": { "type": "string" }
+        }
+      },
+      "DeepDiveRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id", "topic"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "topic": { "type": "string" }
+        }
+      },
+      "SupplementRequest": {
+        "type": "object",
+        "required": ["book_id", "block_id", "query"],
+        "properties": {
+          "book_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "query": { "type": "string" }
+        }
+      },
+      "SourceOption": {
+        "type": "object",
+        "required": ["id", "label", "kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "kind": { "type": "string" }
+        }
+      },
+      "SourceListResponse": {
+        "type": "object",
+        "required": ["sources"],
+        "properties": {
+          "sources": { "type": "array", "items": { "$ref": "#/components/schemas/SourceOption" } }
+        }
+      },
+      "CreateSourceRequest": {
+        "type": "object",
+        "required": ["label", "kind"],
+        "properties": {
+          "label": { "type": "string" },
+          "kind": { "type": "string" },
+          "config": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "CourseGenerateRequest": {
+        "type": "object",
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string" },
+          "subject": { "type": "string" },
+          "grade": { "type": "string" },
+          "duration_minutes": { "type": "integer", "default": 45 },
+          "capability": {
+            "type": "string",
+            "default": "course_generate",
+            "description": "Must equal `course_generate`."
+          }
+        }
+      },
+      "CoWriterDocument": {
+        "type": "object",
+        "required": ["id", "title", "content", "created_at", "updated_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "content": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "metadata": { "type": "object", "additionalProperties": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CoWriterCreateRequest": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "content": { "type": "string", "default": "" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CoWriterUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "content": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CoWriterEditRequest": {
+        "type": "object",
+        "required": ["doc_id", "selection", "instruction"],
+        "properties": {
+          "doc_id": { "type": "string" },
+          "selection": { "type": "string" },
+          "instruction": { "type": "string" }
+        }
+      },
+      "CoWriterEditResponse": {
+        "type": "object",
+        "required": ["doc_id", "patched_selection"],
+        "properties": {
+          "doc_id": { "type": "string" },
+          "patched_selection": { "type": "string" },
+          "diff": { "type": "string" }
+        }
+      },
+      "CoWriterAutoMarkRequest": {
+        "type": "object",
+        "required": ["doc_id"],
+        "properties": {
+          "doc_id": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error envelope (unified across all routes since P1)",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/APIError" }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing or invalid bearer token",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/APIError" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/APIError" }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Capability unavailable (missing tools)",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/APIError" }
+          }
+        }
+      }
+    }
+  },
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": ["core"],
+        "summary": "Gateway root",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Gateway metadata",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RootResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": ["core"],
+        "summary": "Liveness + Redis check",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Health status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "tags": ["capabilities"],
+        "summary": "List all capabilities, effective capabilities, and tools",
+        "responses": {
+          "200": {
+            "description": "Capability registry snapshot",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CapabilitiesResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/v1/capabilities/{capability_id}": {
+      "get": {
+        "tags": ["capabilities"],
+        "summary": "Get a single capability",
+        "parameters": [
+          {
+            "name": "capability_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capability definition",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Capability" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/v1/tools/{tool_id}/health": {
+      "post": {
+        "tags": ["capabilities"],
+        "summary": "Update a tool's health status",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["available"],
+                "properties": {
+                  "available": { "type": "boolean" },
+                  "error_message": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool health updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tool_id": { "type": "string" },
+                    "available": { "type": "boolean" },
+                    "affected_capabilities": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Create a generation job (course / problem video / study package / learning record)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateJobRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Job created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobSummary" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Get a job's status",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job summary",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobSummary" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/result": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Get a job's final result payload",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JobResultResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/trace-events": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Get trace events emitted by the job",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "event_type", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trace events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/TraceEvent" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/capability-guard": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Re-check capability availability for a job",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Capability guard result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CapabilityGuardResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/uploads": {
+      "post": {
+        "tags": ["uploads"],
+        "summary": "Upload a file (typically a problem photo)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": { "type": "string", "format": "binary" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upload accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UploadResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/v1/ai/chat": {
+      "post": {
+        "tags": ["ai-chat"],
+        "summary": "Stream chat via Server-Sent Events",
+        "description": "Streams `agent_start`, `thinking`, `text_delta`, `done`/`error` events.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of chat events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/StreamEvent_AgentStart" },
+                    { "$ref": "#/components/schemas/StreamEvent_Thinking" },
+                    { "$ref": "#/components/schemas/StreamEvent_TextDelta" },
+                    { "$ref": "#/components/schemas/StreamEvent_Done" },
+                    { "$ref": "#/components/schemas/StreamEvent_Error" }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ai/chat/non-streaming": {
+      "post": {
+        "tags": ["ai-chat"],
+        "summary": "Non-streaming chat (collects all events and returns final text)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Final assistant text",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ChatNonStreamingResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ai/learning/sessions": {
+      "post": {
+        "tags": ["ai-learning"],
+        "summary": "Create an AI chat session",
+        "responses": {
+          "200": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ai/learning/sessions/{session_id}/messages": {
+      "get": {
+        "tags": ["ai-learning"],
+        "summary": "List messages in an AI chat session",
+        "parameters": [
+          { "name": "session_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "object", "additionalProperties": true }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["ai-learning"],
+        "summary": "Append a message to an AI chat session",
+        "parameters": [
+          { "name": "session_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateMessageRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message stored",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/MessageOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/messages/conversations": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "List conversations for a user",
+        "parameters": [
+          { "name": "user_id", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ConversationSummary" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["messages"],
+        "summary": "Create a conversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateConversationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ConversationSummary" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/messages/conversations/{conversation_id}/messages": {
+      "get": {
+        "tags": ["messages"],
+        "summary": "List messages in a conversation",
+        "parameters": [
+          { "name": "conversation_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/MessageOutput" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/profile": {
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "Get a student's learning profile",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Student profile",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/StudentProfileOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/knowledge-states": {
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "List knowledge states for a student",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "knowledge_point_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Knowledge states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/StudentKnowledgeStateOutput" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/knowledge-tracing": {
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "Get a student's knowledge tracing summary",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Knowledge tracing summary",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/quiz-answers": {
+      "post": {
+        "tags": ["knowledge"],
+        "summary": "Process a quiz answer and update knowledge state",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProcessQuizAnswerInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quiz answer result",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuizAnswerResultOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/learning-events": {
+      "post": {
+        "tags": ["knowledge"],
+        "summary": "Record a learning event",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateLearningEventRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Event recorded",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LearningEventOutput" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "List learning events for a student",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Learning events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/LearningEventOutput" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/learning-events/stats": {
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "Get learning event statistics",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Statistics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/LearningEventStatsOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/students/{user_id}/diagnostic-probes": {
+      "post": {
+        "tags": ["knowledge"],
+        "summary": "Generate a diagnostic probe",
+        "parameters": [
+          { "name": "user_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated probe",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DiagnosticProbeOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/knowledge-points": {
+      "get": {
+        "tags": ["knowledge"],
+        "summary": "List knowledge points",
+        "parameters": [
+          { "name": "subject", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "parent_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 500 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Knowledge points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/KnowledgePointOutput" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["knowledge"],
+        "summary": "Upsert a knowledge point",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/KnowledgePointInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Knowledge point stored",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KnowledgePointOutput" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/classrooms": {
+      "get": {
+        "tags": ["classroom"],
+        "summary": "List classrooms (most recent first)",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 50 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Classrooms",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ClassroomListResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["classroom"],
+        "summary": "Create a classroom (called by Web app via Next.js)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateClassroomRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Classroom created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateClassroomResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/classrooms/{classroom_id}": {
+      "get": {
+        "tags": ["classroom"],
+        "summary": "Get a classroom (mobile entry-point)",
+        "parameters": [
+          { "name": "classroom_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Classroom data",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ClassroomDetailResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "delete": {
+        "tags": ["classroom"],
+        "summary": "Delete a classroom",
+        "parameters": [
+          { "name": "classroom_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Classroom deleted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DeleteClassroomResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/v1/live-book/health": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Live-book subsystem health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Engine availability + book counts",
+            "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } }
+          }
+        }
+      }
+    },
+    "/v1/live-book/books": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "List books",
+        "responses": {
+          "200": {
+            "description": "Books",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Book" } } } }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Create a new book from a proposal",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfirmProposalRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Book created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Book" } } }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/confirm-proposal": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Confirm a book proposal (alias of POST /books)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfirmProposalRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Book created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Book" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/confirm-spine": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Confirm/override a book's spine",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfirmSpineRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Book updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Book" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/compile-page": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Compile a single page (trigger block generation)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompilePageRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Page compile started", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Page" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/regenerate-block": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Regenerate a block (with optional user feedback)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegenerateBlockRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Block regenerated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Block" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/insert-block": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Insert a new block into a page",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InsertBlockRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Block inserted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Block" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/delete-block": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Delete a block",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeleteBlockRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Block deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/move-block": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Re-order a block within its page",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MoveBlockRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Block moved", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Page" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/change-block-type": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Change a block's type (e.g. text -> callout)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChangeBlockTypeRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Block type changed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Block" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/quiz-attempt": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Submit a quiz answer; returns feedback + updated mastery",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/QuizAttemptRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Quiz graded", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/deep-dive": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Open a deep-dive expansion of a block",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeepDiveRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Deep-dive created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Block" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/supplement": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Supplements a block with extra materials (RAG / web)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SupplementRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Supplement added", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Block" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/{book_id}": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Get a single book",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Book", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Book" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "tags": ["live-book"],
+        "summary": "Delete a book",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Book deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/{book_id}/spine": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Get a book's spine (table of contents)",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Spine", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/SpineEntry" } } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/{book_id}/pages/{page_id}": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Get a single page (incl. blocks)",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "page_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Page" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/{book_id}/health": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Per-book health / state snapshot",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Health", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/books/{book_id}/refresh-fingerprints": {
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Refresh all block fingerprints (cache busting)",
+        "parameters": [
+          { "name": "book_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Refreshed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/sources": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "List available book sources",
+        "responses": {
+          "200": { "description": "Sources", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SourceListResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["live-book"],
+        "summary": "Create a new book source",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateSourceRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Source created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SourceOption" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/live-book/jobs/{job_id}": {
+      "get": {
+        "tags": ["live-book"],
+        "summary": "Get a live-book job's status",
+        "parameters": [
+          { "name": "job_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Job", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobSummary" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/documents": {
+      "get": {
+        "tags": ["co-writer"],
+        "summary": "List co-writer documents",
+        "responses": {
+          "200": { "description": "Documents", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/CoWriterDocument" } } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "tags": ["co-writer"],
+        "summary": "Create a co-writer document",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterCreateRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Document created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterDocument" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/documents/{doc_id}": {
+      "get": {
+        "tags": ["co-writer"],
+        "summary": "Get a co-writer document",
+        "parameters": [
+          { "name": "doc_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Document", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterDocument" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "put": {
+        "tags": ["co-writer"],
+        "summary": "Update a co-writer document",
+        "parameters": [
+          { "name": "doc_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterUpdateRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Document updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterDocument" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "delete": {
+        "tags": ["co-writer"],
+        "summary": "Delete a co-writer document",
+        "parameters": [
+          { "name": "doc_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Document deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/edit": {
+      "post": {
+        "tags": ["co-writer"],
+        "summary": "One-shot edit (selection + instruction)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterEditRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Edit result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterEditResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/edit_react/stream": {
+      "post": {
+        "tags": ["co-writer"],
+        "summary": "Streaming ReAct-style edit (SSE)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterEditRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "SSE stream of edit events", "content": { "text/event-stream": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/edit_react": {
+      "post": {
+        "tags": ["co-writer"],
+        "summary": "Non-streaming ReAct-style edit (full result)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterEditRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Edit result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterEditResponse" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/automark": {
+      "post": {
+        "tags": ["co-writer"],
+        "summary": "Auto-mark a document (highlight issues)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CoWriterAutoMarkRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Auto-mark result", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/history": {
+      "get": {
+        "tags": ["co-writer"],
+        "summary": "List edit history for the current user",
+        "responses": {
+          "200": { "description": "History", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/history/{operation_id}": {
+      "get": {
+        "tags": ["co-writer"],
+        "summary": "Get a single history entry",
+        "parameters": [
+          { "name": "operation_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Operation", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/co-writer/tool_calls/{operation_id}": {
+      "get": {
+        "tags": ["co-writer"],
+        "summary": "Get tool-call trace for a history entry",
+        "parameters": [
+          { "name": "operation_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Tool calls", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/users/me": {
+      "get": {
+        "tags": ["users"],
+        "summary": "Get the current user (stub in Phase 0 / Phase 1)",
+        "responses": {
+          "200": { "description": "User", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "patch": {
+        "tags": ["users"],
+        "summary": "Update the current user",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserUpdateRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "User updated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/courses/generate": {
+      "post": {
+        "tags": ["classroom"],
+        "summary": "Generate a course (alias of POST /v1/jobs with job_type=course_generate)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CourseGenerateRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Job created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/JobSummary" } } } },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/v1/generate/image": {
+      "post": {
+        "tags": ["media"],
+        "summary": "Generate an image (Seedream/Qwen/NanoBanana/etc.)",
+        "parameters": [
+          { "name": "x-image-provider", "in": "header", "required": false, "schema": { "type": "string", "default": "seedream" } },
+          { "name": "x-api-key", "in": "header", "required": false, "schema": { "type": "string" } },
+          { "name": "x-base-url", "in": "header", "required": false, "schema": { "type": "string" } },
+          { "name": "x-image-model", "in": "header", "required": false, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ImageGenerationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Image generated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImageGenerationResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/generate/tts": {
+      "post": {
+        "tags": ["media"],
+        "summary": "Generate TTS audio (OpenAI/Azure/MiniMax/etc.)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TTSRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Audio generated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TTSResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/generate/video": {
+      "post": {
+        "tags": ["media"],
+        "summary": "Generate a video (Seedance/Kling/Veo/MiniMax/etc.)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/VideoGenerationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Video generated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/VideoGenerationResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transcribe": {
+      "post": {
+        "tags": ["media"],
+        "summary": "Transcribe an audio object to text",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TranscriptionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TranscriptionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/parse": {
+      "post": {
+        "tags": ["documents"],
+        "summary": "Parse a PDF/document into structured content",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Parsed document",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/web-search": {
+      "post": {
+        "tags": ["tools"],
+        "summary": "Web search",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                  "query": { "type": "string" },
+                  "top_k": { "type": "integer", "default": 5 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/server-config": {
+      "get": {
+        "tags": ["server-config"],
+        "summary": "Get public server configuration (feature flags, model list)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Server config",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

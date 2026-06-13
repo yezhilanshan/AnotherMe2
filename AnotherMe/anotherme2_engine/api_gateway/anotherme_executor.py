@@ -209,19 +209,6 @@ def _generation_subprocess_entry(
               f"vision_model={cleaned_config.get('vision_model', '')}, "
               f"ocr_model={cleaned_config.get('ocr_model', '')}")
 
-        # Require both api_key and base_url from the frontend.
-        # No env auto-detection — the frontend is the single source of truth.
-        if not cleaned_config.get("api_key") or not cleaned_config.get("base_url"):
-            missing = []
-            if not cleaned_config.get("api_key"):
-                missing.append("api_key")
-            if not cleaned_config.get("base_url"):
-                missing.append("base_url")
-            raise RuntimeError(
-                f"前端未提供完整的模型配置（缺少: {', '.join(missing)}）。"
-                f"请在设置页面配置 API Key 和 Base URL。"
-            )
-
         llm_config, vision_config, ocr_config = _merge_runtime_configs(
             base_llm_config=build_default_llm_config(),
             base_vision_config=build_vision_model_config(),
@@ -252,7 +239,7 @@ def _generation_subprocess_entry(
                     missing.append("Base URL")
                 raise RuntimeError(
                     f"{role}配置不完整（缺少: {', '.join(missing)}，model={model}）。"
-                    f"请在设置页面同时配置 API Key 和 Base URL。"
+                    "请在 AnotherMe/.env.local 或服务端环境变量中配置对应 provider 的 API Key 和 Base URL。"
                 )
 
         generator = MathVideoGenerator(

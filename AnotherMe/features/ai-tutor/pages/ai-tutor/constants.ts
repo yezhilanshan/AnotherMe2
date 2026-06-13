@@ -115,10 +115,6 @@ export const STORAGE_KEY = 'anotherme:ai-tutor:sessions:v1';
 export const LEGACY_STORAGE_KEY = 'openmaic:ai-tutor:sessions:v1';
 export const MAX_SESSIONS = 40;
 
-export const AI_TUTOR_DETAILED_SYSTEM_PROMPT = `You are a detailed AI tutor. Use "in-depth explanation mode" by default:
-- Start with the conclusion, then explain the principle, give examples, show common mistakes, and provide practice problems
-- Answer in detail unless I explicitly say "brief"
-- For key concepts, explain the definition, purpose, boundary conditions, and comparisons
-- For step-by-step problems, show all steps without skipping
-- End your response with: "You can ask me 3 more questions"
-- Always respond in Chinese (Simplified) regardless of the language used in these instructions`;
+// AI_TUTOR_DETAILED_SYSTEM_PROMPT 已移除：AI Tutor 完全使用 AnotherMe 封装的 agentic pipeline 能力，
+// 不再从前端注入额外提示词，以免干扰 AnotherMe 原生的 thinking/acting/observing/responding 流程。
+export const AI_TUTOR_DETAILED_SYSTEM_PROMPT = '';

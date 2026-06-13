@@ -1,5 +1,5 @@
 """
-LearningContext - Unified learning context inspired by DeepTutor's UnifiedContext.
+LearningContext - Unified learning context inspired by AnotherMe's UnifiedContext.
 
 Provides a single source of truth for learning state across all features:
 course generation, classroom Q&A, problem video, review planning, and chat.

@@ -40,7 +40,7 @@ from .auth import require_token
 
 
 def create_messages_router(settings: Settings, event_bus, conversation_hub) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["messages"])
 
     @router.get("/v1/messages/conversations", response_model=list[ConversationSummary])
     def get_conversations(
@@ -66,6 +66,7 @@ def create_messages_router(settings: Settings, event_bus, conversation_hub) -> A
             name=request.name,
             creator_id=request.creator_id,
             member_ids=request.member_ids,
+            metadata=request.metadata,
         )
         db.commit()
         db.refresh(conversation)
@@ -227,7 +228,12 @@ def create_messages_router(settings: Settings, event_bus, conversation_hub) -> A
         websocket: WebSocket,
         conversation_id: str,
         user_id: str = Query(..., min_length=1),
+        token: str = Query(...),
     ):
+        if settings.api_token and token != settings.api_token:
+            await websocket.close(code=4001)
+            return
+
         session_factory = db_module.SessionLocal
         if session_factory is None:
             await websocket.close(code=1011)
@@ -263,6 +269,7 @@ def create_messages_router(settings: Settings, event_bus, conversation_hub) -> A
     async def live_book_ws(
         websocket: WebSocket,
         book_id: str = Query(..., min_length=1),
+        token: str = Query(...),
     ):
         """WebSocket stream for live-book job events.
 
@@ -270,6 +277,10 @@ def create_messages_router(settings: Settings, event_bus, conversation_hub) -> A
         gateway exposes the strict WS contract for runtimes that support socket
         upgrades.
         """
+
+        if settings.api_token and token != settings.api_token:
+            await websocket.close(code=4001)
+            return
 
         session_factory = db_module.SessionLocal
         if session_factory is None:

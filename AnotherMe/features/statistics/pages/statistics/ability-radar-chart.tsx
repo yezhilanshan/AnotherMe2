@@ -28,23 +28,24 @@ export function AbilityRadarChart({ data }: { data: AbilityRadarDatum[] }) {
   return (
     <ResponsiveContainer width="100%" height={280} minWidth={0}>
       <RadarChart data={data}>
-        <PolarGrid stroke="#E5E7EB" />
-        <PolarAngleAxis dataKey="metric" tick={{ fill: '#374151', fontSize: 12 }} />
-        <PolarRadiusAxis domain={[0, 100]} tickCount={6} tick={{ fill: '#9CA3AF', fontSize: 10 }} />
+        <PolarGrid stroke="#e2e8f0" />
+        <PolarAngleAxis dataKey="metric" tick={{ fill: '#64748b', fontSize: 12 }} />
+        <PolarRadiusAxis domain={[0, 100]} tickCount={6} tick={{ fill: '#94a3b8', fontSize: 10 }} />
         <Radar
           name="能力值"
           dataKey="value"
-          stroke="#E0573D"
-          fill="#E0573D"
-          fillOpacity={0.28}
+          stroke="#6366f1"
+          fill="#6366f1"
+          fillOpacity={0.2}
           strokeWidth={2}
         />
         <RechartsTooltip
           formatter={(value) => [`${value} 分`, '能力值']}
           contentStyle={{
-            border: 'none',
-            borderRadius: '8px',
-            boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+            background: '#fff',
           }}
         />
       </RadarChart>

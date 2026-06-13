@@ -1,5 +1,5 @@
 """
-DeepTutor Integration Usage Example.
+AnotherMe Integration Usage Example.
 
 This example demonstrates how all 5 innovations work together in a realistic
 problem video generation workflow.
@@ -20,7 +20,7 @@ from agents.foundation import (
 
 def example_problem_video_workflow():
     """
-    Example: Problem video generation with full DeepTutor integration.
+    Example: Problem video generation with full AnotherMe integration.
     
     This shows how the 5 innovations work together:
     1. LearningContext provides unified context
@@ -31,7 +31,7 @@ def example_problem_video_workflow():
     """
     
     print("=" * 60)
-    print("DeepTutor Integration Example: Problem Video Generation")
+    print("AnotherMe Integration Example: Problem Video Generation")
     print("=" * 60)
     
     # Step 1: Create unified learning context

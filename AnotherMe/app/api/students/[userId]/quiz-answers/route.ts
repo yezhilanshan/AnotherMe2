@@ -6,10 +6,7 @@ import { AuthError } from '@/lib/auth/types';
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  request: NextRequest,
-  context: { params: Promise<{ userId: string }> },
-) {
+export async function POST(request: NextRequest, context: { params: Promise<{ userId: string }> }) {
   try {
     const { userId: routeUserId } = await context.params;
     if (!routeUserId) {
@@ -21,6 +18,13 @@ export async function POST(
 
     const questionId = typeof body.question_id === 'string' ? body.question_id : '';
     const isCorrect = body.is_correct === true;
+    const knowledgePointIds = Array.isArray(body.knowledge_point_ids)
+      ? body.knowledge_point_ids.filter(
+          (item): item is string => typeof item === 'string' && item.trim().length > 0,
+        )
+      : typeof body.knowledge_point_id === 'string' && body.knowledge_point_id.trim()
+        ? [body.knowledge_point_id.trim()]
+        : undefined;
 
     if (!questionId) {
       return apiError('INVALID_REQUEST', 400, 'Missing question_id');
@@ -30,8 +34,11 @@ export async function POST(
       userId,
       questionId,
       isCorrect,
+      knowledgePointIds,
       payload: {
-        knowledge_point_id: typeof body.knowledge_point_id === 'string' ? body.knowledge_point_id : undefined,
+        knowledge_point_id:
+          typeof body.knowledge_point_id === 'string' ? body.knowledge_point_id : undefined,
+        knowledge_point_ids: knowledgePointIds,
         probe_type: typeof body.probe_type === 'string' ? body.probe_type : undefined,
         client_timestamp: new Date().toISOString(),
       },

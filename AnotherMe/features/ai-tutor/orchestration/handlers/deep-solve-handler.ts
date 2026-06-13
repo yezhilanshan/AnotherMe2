@@ -144,7 +144,7 @@ export const deepSolveHandler: CapabilityHandler<DeepSolvePayload> = {
             output: {
               agentEvent: {
                 type: 'thinking',
-                data: { content: chunk, stage: 'planning' },
+                data: { reasoning: chunk, content: chunk, stage: 'planning' },
               },
             },
             durationMs: Date.now() - planningStart,

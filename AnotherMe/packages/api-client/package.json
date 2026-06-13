@@ -1,0 +1,20 @@
+{
+  "name": "@anotherme/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "generate": "tsx scripts/generate.ts",
+    "generate:offline": "cross-env GENERATE_OFFLINE=1 tsx scripts/generate.ts",
+    "generate:gateway": "cross-env GENERATE_REMOTE=1 tsx scripts/generate.ts",
+    "build": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "openapi-typescript": "^7.8.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

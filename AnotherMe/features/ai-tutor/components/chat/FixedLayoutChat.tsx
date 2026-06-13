@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { motion, AnimatePresence } from 'motion/react';
@@ -170,10 +170,12 @@ export function FixedLayoutChat({ className }: FixedLayoutChatProps) {
     );
   }, [activeSessionId, input, createNewSession]);
 
-  // Initialize a session during render if none exist
-  if (sessions.length === 0) {
-    createNewSession();
-  }
+  // Initialize a session on mount if none exist
+  useEffect(() => {
+    if (sessions.length === 0) {
+      createNewSession();
+    }
+  }, [sessions.length, createNewSession]);
 
   return (
     <div
@@ -379,7 +381,7 @@ export function FixedLayoutChat({ className }: FixedLayoutChatProps) {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing && !e.shiftKey) {
                         e.preventDefault();
                         handleSend();
                       }

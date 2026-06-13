@@ -15,7 +15,7 @@ export class AnotherMe2GatewayError extends Error {
   }
 }
 
-function getGatewayBaseUrl(): string {
+export function getGatewayBaseUrl(): string {
   const value = process.env.ANOTHERME2_GATEWAY_BASE_URL?.trim();
   if (!value) {
     throw new AnotherMe2GatewayError(
@@ -30,7 +30,7 @@ export function isAnotherMe2GatewayConfigured(): boolean {
   return Boolean(process.env.ANOTHERME2_GATEWAY_BASE_URL?.trim());
 }
 
-function buildGatewayHeaders(headers?: HeadersInit): Headers {
+export function buildGatewayHeaders(headers?: HeadersInit): Headers {
   const merged = new Headers(headers);
   const token = process.env.ANOTHERME2_GATEWAY_TOKEN?.trim();
   if (token) {

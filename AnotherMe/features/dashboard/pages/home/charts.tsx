@@ -47,9 +47,10 @@ export function CompletionPieChart({ data }: { data: PieDatum[] }) {
         </Pie>
         <RechartsTooltip
           contentStyle={{
-            borderRadius: '8px',
-            border: 'none',
-            boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+            borderRadius: '12px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+            background: '#fff',
           }}
         />
       </PieChart>
@@ -70,57 +71,59 @@ export function LearningTimeChart({
     <ResponsiveContainer width="100%" height={250}>
       {view === 'month' ? (
         <LineChart data={monthData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
           <XAxis
             dataKey="name"
             axisLine={false}
             tickLine={false}
-            tick={{ fontSize: 12, fill: '#6B7280' }}
+            tick={{ fontSize: 12, fill: '#94a3b8' }}
             dy={10}
           />
-          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
           <RechartsTooltip
-            cursor={{ stroke: '#E5E7EB', strokeWidth: 2, strokeDasharray: '4 4' }}
+            cursor={{ stroke: '#cbd5e1', strokeWidth: 2, strokeDasharray: '4 4' }}
             contentStyle={{
-              borderRadius: '8px',
-              border: 'none',
-              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+              borderRadius: '12px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+              background: '#fff',
             }}
           />
           <Line
             type="monotone"
             dataKey="hours"
             name="学习时长(小时)"
-            stroke="#111827"
+            stroke="#6366f1"
             strokeWidth={3}
-            dot={{ r: 4, fill: '#111827', strokeWidth: 0 }}
-            activeDot={{ r: 6, fill: '#E0573D', strokeWidth: 0 }}
+            dot={{ r: 4, fill: '#6366f1', strokeWidth: 0 }}
+            activeDot={{ r: 6, fill: '#818cf8', strokeWidth: 0 }}
             animationDuration={1500}
           />
         </LineChart>
       ) : (
         <BarChart data={weekData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
+          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
           <XAxis
             dataKey="name"
             axisLine={false}
             tickLine={false}
-            tick={{ fontSize: 12, fill: '#6B7280' }}
+            tick={{ fontSize: 12, fill: '#94a3b8' }}
             dy={10}
           />
-          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#6B7280' }} />
+          <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#94a3b8' }} />
           <RechartsTooltip
-            cursor={{ fill: '#F3F4F6' }}
+            cursor={{ fill: '#f1f5f9' }}
             contentStyle={{
-              borderRadius: '8px',
-              border: 'none',
-              boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+              borderRadius: '12px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+              background: '#fff',
             }}
           />
           <Bar
             dataKey="hours"
             name="学习时长(小时)"
-            fill="#111827"
+            fill="#6366f1"
             radius={[4, 4, 0, 0]}
             animationDuration={1000}
           />
@@ -151,16 +154,17 @@ export function TopicPieChart({ data }: { data: PieDatum[] }) {
         <RechartsTooltip
           formatter={(value) => `${value}`}
           contentStyle={{
-            borderRadius: '8px',
-            border: 'none',
-            boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+            borderRadius: '12px',
+            border: '1px solid #e2e8f0',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+            background: '#fff',
           }}
         />
         <Legend
           verticalAlign="bottom"
           height={36}
           iconType="circle"
-          wrapperStyle={{ fontSize: '12px', color: '#4B5563' }}
+          wrapperStyle={{ fontSize: '12px', color: '#64748b' }}
         />
       </PieChart>
     </ResponsiveContainer>

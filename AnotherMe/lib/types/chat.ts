@@ -391,6 +391,7 @@ export type StatelessEvent =
     }
   | { type: 'agent_end'; data: { messageId: string; agentId: string } }
   | { type: 'text_delta'; data: { content: string; messageId?: string } }
+  | { type: 'code_delta'; data: { code: string; stage?: string; format?: string } }
   | {
       type: 'action';
       data: {
@@ -403,7 +404,7 @@ export type StatelessEvent =
     }
   | {
       type: 'thinking';
-      data: { stage: 'director' | 'agent_loading'; agentId?: string; reasoning?: string };
+      data: { stage: 'director' | 'agent_loading' | 'planning' | 'reasoning' | 'rephrasing' | 'decomposing' | 'analyzing' | 'reviewing' | 'designing'; agentId?: string; reasoning?: string; content?: string };
     }
   | { type: 'cue_user'; data: { fromAgentId?: string; prompt?: string } }
   | {

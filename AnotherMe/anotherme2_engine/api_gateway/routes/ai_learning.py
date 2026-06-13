@@ -38,7 +38,7 @@ from .auth import require_token
 
 
 def create_ai_learning_router(settings: Settings) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["ai-learning"])
 
     @router.get("/v1/ai/sessions", response_model=list[AIChatSessionSummary])
     def get_ai_sessions(
@@ -120,6 +120,9 @@ def create_ai_learning_router(settings: Settings) -> APIRouter:
             content=request.content,
             user_id=request.user_id,
             content_type=request.content_type,
+            capability=request.capability,
+            events=request.events,
+            attachments=request.attachments,
             model_name=request.model_name,
             prompt_tokens=request.prompt_tokens,
             completion_tokens=request.completion_tokens,
