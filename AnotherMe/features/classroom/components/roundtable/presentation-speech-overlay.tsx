@@ -134,6 +134,11 @@ function MobileSubtitleBar({
   readonly isPaused?: boolean;
 }) {
   const { t } = useI18n();
+  const playbackButtonLabel =
+    buttonState === 'play' || buttonState === 'restart' || isPaused
+      ? 'Play classroom playback'
+      : 'Pause classroom playback';
+
   return (
     <div
       onClick={onClick}
@@ -203,7 +208,9 @@ function MobileSubtitleBar({
 
         {/* Play/pause indicator */}
         {bubble.role !== 'user' && !bubble.isLoading && buttonState && buttonState !== 'none' && (
-          <div
+          <button
+            type="button"
+            aria-label={playbackButtonLabel}
             onClick={(e) => {
               e.stopPropagation();
               onClick?.();
@@ -217,7 +224,7 @@ function MobileSubtitleBar({
             ) : (
               <Pause className="w-4 h-4 text-white" />
             )}
-          </div>
+          </button>
         )}
       </div>
     </div>
@@ -565,10 +572,10 @@ export function PresentationSpeechOverlay({
 
   /* ── Left-side overlay: absolute covers stage, renders left bubble + cue ── */
   if (side === 'left') {
-    // Mobile: full-width subtitle bar above the interaction dock
+    // Mobile: full-width subtitle bar pinned to the very bottom of the screen
     if (isMobile) {
       return (
-        <div className="absolute inset-x-0 bottom-24 z-30 pointer-events-auto">
+        <div className="absolute inset-x-0 bottom-0 z-30 pointer-events-auto">
           <AnimatePresence mode="wait">
             {matchesSide && bubble && (
               <motion.div
@@ -578,6 +585,14 @@ export function PresentationSpeechOverlay({
                 exit={{ opacity: 0, y: 10 }}
                 transition={{ duration: 0.22, ease: [0.21, 1, 0.36, 1] }}
                 className="w-full px-3"
+                style={{
+                  paddingRight:
+                    'calc(env(safe-area-inset-right, 0px) + 12px)',
+                  paddingLeft:
+                    'calc(env(safe-area-inset-left, 0px) + 12px)',
+                  paddingBottom:
+                    'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+                }}
               >
                 <MobileSubtitleBar
                   bubble={bubble}

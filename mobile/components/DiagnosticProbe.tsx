@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { DiagnosticProbe as ProbeType } from '../lib/types';
+import { colors } from '../lib/theme';
 
 interface DiagnosticProbeProps {
   probe: ProbeType;
@@ -62,9 +64,16 @@ export function DiagnosticProbe({ probe, onSubmit }: DiagnosticProbeProps) {
       {/* Difficulty badge */}
       <View style={styles.badgeRow}>
         <View style={styles.diffBadge}>
-          <Text style={styles.diffText}>
-            {'★'.repeat(Math.min(probe.difficulty, 5))}{'☆'.repeat(Math.max(0, 5 - probe.difficulty))}
-          </Text>
+          <View style={{ flexDirection: 'row', gap: 2 }}>
+            {Array.from({ length: 5 }, (_, i) => (
+              <Ionicons
+                key={i}
+                name={i < probe.difficulty ? 'star' : 'star-outline'}
+                size={12}
+                color={i < probe.difficulty ? colors.warning : colors.apricotLight}
+              />
+            ))}
+          </View>
         </View>
         {probe.knowledgePointId && (
           <View style={styles.kpBadge}>
@@ -117,7 +126,7 @@ export function DiagnosticProbe({ probe, onSubmit }: DiagnosticProbeProps) {
           value={fillAnswer}
           onChangeText={setFillAnswer}
           placeholder="输入答案..."
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.textMuted}
           editable={!submitted}
         />
       )}
@@ -140,16 +149,31 @@ export function DiagnosticProbe({ probe, onSubmit }: DiagnosticProbeProps) {
                 onPress={() => toggleStep(i)}
                 disabled={submitted}
               >
-                <Text
-                  style={[
-                    styles.optionText,
-                    isSelected && styles.optionTextSelected,
-                    isCorrectStep && styles.optionTextCorrect,
-                    isWrongStep && styles.optionTextWrong,
-                  ]}
-                >
-                  {isSelected ? '☑' : '☐'} {opt}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons
+                    name={isSelected ? 'checkbox' : 'square-outline'}
+                    size={18}
+                    color={
+                      isCorrectStep
+                        ? colors.success
+                        : isWrongStep
+                        ? colors.error
+                        : isSelected
+                        ? colors.primary
+                        : colors.textSecondary
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.optionText,
+                      isSelected && styles.optionTextSelected,
+                      isCorrectStep && styles.optionTextCorrect,
+                      isWrongStep && styles.optionTextWrong,
+                    ]}
+                  >
+                    {opt}
+                  </Text>
+                </View>
               </TouchableOpacity>
             );
           })}
@@ -190,12 +214,12 @@ export function DiagnosticProbe({ probe, onSubmit }: DiagnosticProbeProps) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     borderRadius: 12,
     padding: 16,
     marginVertical: 8,
     marginHorizontal: 16,
-    shadowColor: '#000',
+    shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 3,
@@ -207,29 +231,29 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   diffBadge: {
-    backgroundColor: '#FFF3E0',
+    backgroundColor: colors.apricotLight,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
   },
   diffText: {
     fontSize: 12,
-    color: '#E65100',
+    color: colors.warning,
   },
   kpBadge: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: colors.infoLight,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
   },
   kpText: {
     fontSize: 12,
-    color: '#1565C0',
+    color: colors.info,
   },
   question: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#333',
+    color: colors.textPrimary,
     lineHeight: 24,
     marginBottom: 12,
   },
@@ -241,65 +265,65 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FAFAFA',
+    borderColor: colors.border,
+    backgroundColor: colors.bgInput,
   },
   optionSelected: {
-    borderColor: '#007AFF',
-    backgroundColor: '#F0F8FF',
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
   },
   optionCorrect: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#E8F5E9',
+    borderColor: colors.success,
+    backgroundColor: colors.successLight,
   },
   optionWrong: {
-    borderColor: '#FF3B30',
-    backgroundColor: '#FFEBEE',
+    borderColor: colors.error,
+    backgroundColor: colors.errorLight,
   },
   optionText: {
     fontSize: 15,
-    color: '#333',
+    color: colors.textPrimary,
   },
   optionTextSelected: {
-    color: '#007AFF',
+    color: colors.primary,
     fontWeight: '500',
   },
   optionTextCorrect: {
-    color: '#2E7D32',
+    color: colors.success,
     fontWeight: '500',
   },
   optionTextWrong: {
-    color: '#C62828',
+    color: colors.error,
   },
   fillInput: {
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: colors.border,
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
     fontSize: 15,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: colors.bgInput,
   },
   fillCorrect: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#E8F5E9',
+    borderColor: colors.success,
+    backgroundColor: colors.successLight,
   },
   fillWrong: {
-    borderColor: '#FF3B30',
-    backgroundColor: '#FFEBEE',
+    borderColor: colors.error,
+    backgroundColor: colors.errorLight,
   },
   submitButton: {
     marginTop: 12,
     paddingVertical: 12,
     borderRadius: 10,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     alignItems: 'center',
   },
   submitDisabled: {
-    backgroundColor: '#99C5FF',
+    backgroundColor: colors.primaryLight,
   },
   submitText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -309,14 +333,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   resultCorrect: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: colors.successLight,
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: colors.success,
   },
   resultWrong: {
-    backgroundColor: '#FFEBEE',
+    backgroundColor: colors.errorLight,
     borderLeftWidth: 4,
-    borderLeftColor: '#FF3B30',
+    borderLeftColor: colors.error,
   },
   resultTitle: {
     fontSize: 16,
@@ -325,7 +349,7 @@ const styles = StyleSheet.create({
   },
   explanation: {
     fontSize: 14,
-    color: '#555',
+    color: colors.textSecondary,
     lineHeight: 20,
   },
   hintsContainer: {
@@ -334,12 +358,12 @@ const styles = StyleSheet.create({
   hintsTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#666',
+    color: colors.textSecondary,
     marginBottom: 4,
   },
   hintText: {
     fontSize: 13,
-    color: '#666',
+    color: colors.textSecondary,
     lineHeight: 18,
   },
 });

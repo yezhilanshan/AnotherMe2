@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { api } from '../../lib/api';
 import { USER_ID, GATEWAY_URL, WEB_URL, testWebBffConnection } from '../../lib/config';
 import { useChatStore } from '../../lib/store';
+import { colors } from '../../lib/theme';
 import type { LearningEventStats } from '../../lib/types';
 
 export default function ProfileScreen() {
@@ -69,12 +70,12 @@ export default function ProfileScreen() {
   const SettingRow = ({ label, value, icon, onPress }: { label: string; value?: string; icon: string; onPress?: () => void }) => (
     <TouchableOpacity style={styles.settingRow} onPress={onPress} disabled={!onPress}>
       <View style={styles.settingLeft}>
-        <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={20} color="#666" />
+        <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={20} color={colors.textSecondary} />
         <Text style={styles.settingLabel}>{label}</Text>
       </View>
       <View style={styles.settingRight}>
         {value && <Text style={styles.settingValue}>{value}</Text>}
-        <Ionicons name="chevron-forward" size={18} color="#CCC" />
+        <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
       </View>
     </TouchableOpacity>
   );
@@ -82,7 +83,7 @@ export default function ProfileScreen() {
   if (loading) {
     return (
       <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -101,9 +102,9 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}>
         {/* Stats */}
         <View style={styles.statsRow}>
-          <StatCard label="对话数" value={sessions.length} icon="chatbubble" color="#007AFF" />
-          <StatCard label="学习事件" value={stats?.total_events || 0} icon="school" color="#34C759" />
-          <StatCard label="事件类型" value={Object.keys(stats?.event_types || {}).length} icon="layers" color="#FF9500" />
+          <StatCard label="对话数" value={sessions.length} icon="chatbubble" color={colors.primary} />
+          <StatCard label="学习事件" value={stats?.total_events || 0} icon="school" color={colors.success} />
+          <StatCard label="事件类型" value={Object.keys(stats?.event_types || {}).length} icon="layers" color={colors.warning} />
         </View>
 
         {/* Profile Info */}
@@ -145,6 +146,7 @@ export default function ProfileScreen() {
             <SettingRow label="用户 ID" value={USER_ID} icon="person" />
             <SettingRow label="诊断测试" icon="medkit" onPress={() => router.push('/diagnostic')} />
             <SettingRow label="知识追踪" icon="stats-chart" onPress={() => router.push('/knowledge')} />
+            <SettingRow label="API 连接测试" icon="pulse" onPress={() => router.push('/explore')} />
           </View>
         </View>
 
@@ -162,50 +164,50 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  container: { flex: 1, backgroundColor: colors.bgPage },
   center: { justifyContent: 'center', alignItems: 'center' },
   header: {
     alignItems: 'center',
     paddingVertical: 24,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     marginBottom: 8,
   },
   avatar: {
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  avatarText: { color: '#FFFFFF', fontSize: 24, fontWeight: '700' },
-  userName: { fontSize: 20, fontWeight: '600', color: '#333' },
-  userRole: { fontSize: 13, color: '#999', marginTop: 4 },
+  avatarText: { color: colors.textInverse, fontSize: 24, fontWeight: '700' },
+  userName: { fontSize: 20, fontWeight: '600', color: colors.textPrimary },
+  userRole: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     marginBottom: 8,
   },
   statCard: { alignItems: 'center', gap: 4 },
   statIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  statValue: { fontSize: 18, fontWeight: '700', color: '#333' },
-  statLabel: { fontSize: 11, color: '#999' },
+  statValue: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
+  statLabel: { fontSize: 11, color: colors.textMuted },
   section: { marginBottom: 8 },
-  sectionTitle: { fontSize: 13, color: '#999', fontWeight: '600', paddingHorizontal: 20, paddingVertical: 8 },
-  infoCard: { backgroundColor: '#FFFFFF', paddingHorizontal: 20 },
+  sectionTitle: { fontSize: 13, color: colors.textMuted, fontWeight: '600', paddingHorizontal: 20, paddingVertical: 8 },
+  infoCard: { backgroundColor: colors.bgCard, paddingHorizontal: 20 },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: colors.divider,
   },
-  infoLabel: { fontSize: 15, color: '#333' },
-  infoValue: { fontSize: 15, color: '#666' },
-  settingsCard: { backgroundColor: '#FFFFFF' },
+  infoLabel: { fontSize: 15, color: colors.textPrimary },
+  infoValue: { fontSize: 15, color: colors.textSecondary },
+  settingsCard: { backgroundColor: colors.bgCard },
   settingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -213,10 +215,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: colors.divider,
   },
   settingLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  settingLabel: { fontSize: 15, color: '#333' },
+  settingLabel: { fontSize: 15, color: colors.textPrimary },
   settingRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  settingValue: { fontSize: 13, color: '#999', maxWidth: 180 },
+  settingValue: { fontSize: 13, color: colors.textMuted, maxWidth: 180 },
 });

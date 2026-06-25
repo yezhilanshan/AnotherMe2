@@ -52,6 +52,14 @@ class VideoProject:
 
     # 合成阶段输出
     final_video_path: Optional[str] = None
+
+    # Matplotlib 可视化输出
+    matplotlib_image_path: Optional[str] = None
+
+    # 交互可视化输出
+    interactive_html_path: Optional[str] = None
+    scene_package_path: Optional[str] = None
+
     status: str = "pending"  # pending, running, completed, failed
     error_message: Optional[str] = None
 

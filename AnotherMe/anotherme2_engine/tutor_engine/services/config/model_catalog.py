@@ -218,6 +218,37 @@ class ModelCatalogService:
             )
             return profile, model
 
+        def select_or_create_model(
+            service: dict[str, Any],
+            profile: dict[str, Any],
+            service_name: str,
+            model_name: str,
+            fallback_model: dict[str, Any],
+        ) -> dict[str, Any]:
+            models = cast(list[dict[str, Any]], profile.setdefault("models", []))
+            for item in models:
+                if str(item.get("model") or "").strip() == model_name:
+                    if service.get("active_model_id") != item.get("id"):
+                        service["active_model_id"] = item.get("id")
+                    return item
+
+            if not models:
+                fallback_model["id"] = fallback_model.get("id") or f"{service_name}-model-default"
+                fallback_model["name"] = model_name
+                fallback_model["model"] = model_name
+                models.append(fallback_model)
+                service["active_model_id"] = fallback_model["id"]
+                return fallback_model
+
+            new_model = {
+                "id": f"{service_name}-model-{uuid4().hex[:8]}",
+                "name": model_name,
+                "model": model_name,
+            }
+            models.append(new_model)
+            service["active_model_id"] = new_model["id"]
+            return new_model
+
         def ensure_embedding_profile() -> tuple[dict[str, Any], dict[str, Any]]:
             service = cast(dict[str, Any], services.setdefault("embedding", _service_shell()))
             profiles = cast(list[dict[str, Any]], service.setdefault("profiles", []))
@@ -295,12 +326,17 @@ class ModelCatalogService:
                 profile["api_version"] = summary.llm["api_version"]
                 changed = True
             if "LLM_MODEL" in env_values:
-                if model.get("model") != summary.llm["model"]:
-                    model["model"] = summary.llm["model"]
+                env_model = summary.llm["model"]
+                selected = select_or_create_model(
+                    cast(dict[str, Any], services["llm"]),
+                    profile,
+                    "llm",
+                    env_model,
+                    model,
+                )
+                if selected is not model or selected.get("model") != model.get("model"):
                     changed = True
-                if summary.llm["model"] and model.get("name") != summary.llm["model"]:
-                    model["name"] = summary.llm["model"]
-                    changed = True
+                model = selected
 
         embedding_keys = {
             "EMBEDDING_BINDING",
@@ -338,12 +374,17 @@ class ModelCatalogService:
                 profile["api_version"] = summary.embedding["api_version"]
                 changed = True
             if "EMBEDDING_MODEL" in env_values:
-                if model.get("model") != summary.embedding["model"]:
-                    model["model"] = summary.embedding["model"]
+                env_model = summary.embedding["model"]
+                selected = select_or_create_model(
+                    cast(dict[str, Any], services["embedding"]),
+                    profile,
+                    "embedding",
+                    env_model,
+                    model,
+                )
+                if selected is not model or selected.get("model") != model.get("model"):
                     changed = True
-                if summary.embedding["model"] and model.get("name") != summary.embedding["model"]:
-                    model["name"] = summary.embedding["model"]
-                    changed = True
+                model = selected
             if (
                 "EMBEDDING_DIMENSION" in env_values
                 and model.get("dimension") != summary.embedding["dimension"]

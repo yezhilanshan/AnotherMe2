@@ -15,8 +15,13 @@
  */
 
 import type { LanguageModel } from 'ai';
-import type { CapabilityHandler, CapabilityRequest, CapabilityStageResult, CapabilityResult } from '../capability-runtime';
-import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
+import type {
+  CapabilityHandler,
+  CapabilityRequest,
+  CapabilityStageResult,
+  CapabilityResult,
+} from '../capability-runtime';
+import type { StatelessChatRequest, StatelessEvent, SocraticChainState } from '@/lib/types/chat';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import { statelessGenerate } from '@/lib/orchestration/stateless-generate';
 import { globalStreamBus } from '../stream-bus';
@@ -78,11 +83,12 @@ type CoreMessage =
 function convertToCoreMessages(messages: StatelessChatRequest['messages']): CoreMessage[] {
   return messages.map((msg): CoreMessage => {
     // 从 parts 中提取文本内容
-    const textContent = msg.parts
-      ?.filter((part) => part.type === 'text')
-      .map((part) => (part as { text?: string }).text)
-      .filter((text): text is string => typeof text === 'string')
-      .join('') || '';
+    const textContent =
+      msg.parts
+        ?.filter((part) => part.type === 'text')
+        .map((part) => (part as { text?: string }).text)
+        .filter((text): text is string => typeof text === 'string')
+        .join('') || '';
 
     return {
       role: msg.role === 'user' ? 'user' : 'assistant',
@@ -95,15 +101,15 @@ function convertToCoreMessages(messages: StatelessChatRequest['messages']): Core
  * 提取用户消息的文本内容
  */
 function extractUserMessageText(chatRequest: StatelessChatRequest): string {
-  const lastUserMessage = chatRequest.messages
-    .filter((m) => m.role === 'user')
-    .pop();
+  const lastUserMessage = chatRequest.messages.filter((m) => m.role === 'user').pop();
 
-  return lastUserMessage?.parts
-    ?.filter((part) => part.type === 'text')
-    .map((part) => (part as { text?: string }).text)
-    .filter(Boolean)
-    .join('') || '';
+  return (
+    lastUserMessage?.parts
+      ?.filter((part) => part.type === 'text')
+      .map((part) => (part as { text?: string }).text)
+      .filter(Boolean)
+      .join('') || ''
+  );
 }
 
 /**
@@ -111,7 +117,7 @@ function extractUserMessageText(chatRequest: StatelessChatRequest): string {
  */
 function buildToolContext(
   chatRequest: StatelessChatRequest,
-  languageModel: LanguageModel
+  languageModel: LanguageModel,
 ): ToolExecutionContext {
   return {
     message: extractUserMessageText(chatRequest),
@@ -150,7 +156,9 @@ export const aiTutorChatHandler: CapabilityHandler<ChatCapabilityPayload> = {
     };
   },
 
-  async *execute(request: CapabilityRequest<ChatCapabilityPayload>): AsyncGenerator<CapabilityStageResult, CapabilityResult, unknown> {
+  async *execute(
+    request: CapabilityRequest<ChatCapabilityPayload>,
+  ): AsyncGenerator<CapabilityStageResult, CapabilityResult, unknown> {
     const startTime = Date.now();
     const { chatRequest, useAgenticPipeline } = request.payload;
 
@@ -178,7 +186,7 @@ export const aiTutorChatHandler: CapabilityHandler<ChatCapabilityPayload> = {
  */
 async function* executeAgenticPipeline(
   request: CapabilityRequest<ChatCapabilityPayload>,
-  startTime: number
+  startTime: number,
 ): AsyncGenerator<CapabilityStageResult, CapabilityResult, unknown> {
   const { chatRequest, languageModel, thinkingConfig } = request.payload;
   const signal = request.signal;
@@ -202,6 +210,7 @@ async function* executeAgenticPipeline(
   const toolTraces: ToolTrace[] = [];
   let thinking = '';
   let observation = '';
+  let updatedChainState: SocraticChainState | null | undefined = undefined;
   const messageId = `agentic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   try {
@@ -213,6 +222,10 @@ async function* executeAgenticPipeline(
       languageModel,
       thinkingConfig,
       signal,
+      learningContext: request.learningContext ?? null,
+      socraticHintLevel: chatRequest.config?.socraticHintLevel ?? 0,
+      socraticChainState: chatRequest.socraticChainState ?? null,
+      studentLevel: chatRequest.config?.studentLevel,
     };
 
     // 使用 AsyncLocalStorage 包装工具上下文
@@ -226,7 +239,7 @@ async function* executeAgenticPipeline(
           log.info(`[AgenticPipeline] Tool completed: ${name}`, { success: result.success });
         },
       },
-      () => runAgenticPipeline(pipelineOptions)
+      () => runAgenticPipeline(pipelineOptions),
     );
 
     for await (const event of pipelineGenerator) {
@@ -239,17 +252,37 @@ async function* executeAgenticPipeline(
       yield* handleAgenticEvent(event, invokeStart, messageId);
 
       // 收集最终结果
-      if (event.type === 'thinking_end' && event.data && typeof event.data === 'object' && 'thinking' in event.data) {
+      if (
+        event.type === 'thinking_end' &&
+        event.data &&
+        typeof event.data === 'object' &&
+        'thinking' in event.data
+      ) {
         thinking = (event.data as { thinking: string }).thinking;
       }
-      if (event.type === 'observation_end' && event.data && typeof event.data === 'object' && 'observation' in event.data) {
+      if (
+        event.type === 'observation_end' &&
+        event.data &&
+        typeof event.data === 'object' &&
+        'observation' in event.data
+      ) {
         observation = (event.data as { observation: string }).observation;
       }
-      if (event.type === 'responding_chunk' && event.data && typeof event.data === 'object' && 'chunk' in event.data) {
+      if (
+        event.type === 'responding_chunk' &&
+        event.data &&
+        typeof event.data === 'object' &&
+        'chunk' in event.data
+      ) {
         assistantText += (event.data as { chunk: string }).chunk;
       }
       if (event.type === 'tool_end' && event.data) {
-        const toolData = event.data as { toolName: string; toolId: string; success: boolean; output: string };
+        const toolData = event.data as {
+          toolName: string;
+          toolId: string;
+          success: boolean;
+          output: string;
+        };
         toolTraces.push({
           id: toolData.toolId,
           name: toolData.toolName,
@@ -259,6 +292,10 @@ async function* executeAgenticPipeline(
           startTime: Date.now(),
           endTime: Date.now(),
         });
+      }
+      if (event.type === 'complete' && event.data) {
+        const cd = event.data as { updatedChainState?: SocraticChainState | null };
+        if (cd.updatedChainState) updatedChainState = cd.updatedChainState;
       }
     }
   } catch (error) {
@@ -283,6 +320,7 @@ async function* executeAgenticPipeline(
       totalAgents: 1,
       wasAborted,
       cueUserReceived: false,
+      updatedChainState,
     },
     durationMs: Date.now() - invokeStart,
     completedAt: Date.now(),
@@ -456,7 +494,7 @@ function* handleAgenticEvent(
  */
 async function* executeLegacyPipeline(
   request: CapabilityRequest<ChatCapabilityPayload>,
-  startTime: number
+  startTime: number,
 ): AsyncGenerator<CapabilityStageResult, CapabilityResult, unknown> {
   const { chatRequest, languageModel, thinkingConfig } = request.payload;
   const signal = request.signal;
@@ -557,15 +595,19 @@ async function* executeLegacyPipeline(
           ...chatRequest,
           config: {
             ...chatRequest.config,
-            systemPromptAddendum: [
-              chatRequest.config?.systemPromptAddendum || '',
-              toolResultsText,
-            ].filter(Boolean).join('\n\n'),
+            systemPromptAddendum: [chatRequest.config?.systemPromptAddendum || '', toolResultsText]
+              .filter(Boolean)
+              .join('\n\n'),
           },
         }
       : chatRequest;
 
-    const generator = statelessGenerate(enhancedChatRequest, signal || new AbortController().signal, languageModel, thinkingConfig);
+    const generator = statelessGenerate(
+      enhancedChatRequest,
+      signal || new AbortController().signal,
+      languageModel,
+      thinkingConfig,
+    );
 
     for await (const event of generator) {
       if (signal?.aborted) {
@@ -671,10 +713,11 @@ async function* finalizePipeline(
   // Stage: post_process
   const postStart = Date.now();
   try {
-    const knowledgePointIds =
-      (chatRequest.learningContext?.knowledgeTracing?.teachingDecisions || [])
-        .map((d: { knowledgePointId: string }) => d.knowledgePointId)
-        .filter(Boolean);
+    const knowledgePointIds = (
+      chatRequest.learningContext?.knowledgeTracing?.teachingDecisions || []
+    )
+      .map((d: { knowledgePointId: string }) => d.knowledgePointId)
+      .filter(Boolean);
 
     yield {
       stage: 'post_process',

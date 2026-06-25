@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useStageStore } from '@/lib/store';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
@@ -15,6 +16,7 @@ import type { EngineMode, TriggerEvent, Effect } from '@/lib/playback';
 import { ActionEngine } from '@/lib/action/engine';
 import { createAudioPlayer } from '@/lib/utils/audio-player';
 import { useDiscussionTTS } from '@/lib/hooks/use-discussion-tts';
+import { useAudioRecorder } from '@/lib/hooks/use-audio-recorder';
 import type { AudioIndicatorState } from '@/features/classroom/components/roundtable/audio-indicator';
 import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action';
 import type { TutorToolState } from '@/lib/types/tutor-tools';
@@ -25,6 +27,7 @@ import { agentsToParticipants, useAgentRegistry } from '@/lib/orchestration/regi
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useIsMobileLandscape } from '@/hooks/use-landscape';
+import { useSwipeGestures } from '@/hooks/use-swipe-gestures';
 import { PresentationSpeechOverlay } from '@/features/classroom/components/roundtable/presentation-speech-overlay';
 import {
   AlertDialog,
@@ -34,11 +37,26 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
-import { AlertTriangle, Play, Pause, Repeat } from 'lucide-react';
+import {
+  AlertTriangle,
+  Play,
+  Pause,
+  Repeat,
+  Mic,
+  MicOff,
+  MessageSquare,
+  Send,
+  Loader2,
+} from 'lucide-react';
 import { VisuallyHidden } from 'radix-ui';
 import { AvatarDisplay } from '@/components/ui/avatar-display';
-import { DEFAULT_TEACHER_AVATAR, DEFAULT_STUDENT_AVATAR } from '@/features/classroom/components/roundtable/constants';
+import {
+  DEFAULT_TEACHER_AVATAR,
+  DEFAULT_STUDENT_AVATAR,
+  DEFAULT_USER_AVATAR,
+} from '@/features/classroom/components/roundtable/constants';
 import type { Participant } from '@/lib/types/roundtable';
+import { toast } from 'sonner';
 
 /**
  * Stage Component
@@ -419,11 +437,15 @@ export function Stage({
     // Reset all roundtable/live state so scenes are fully isolated
     resetSceneState();
 
+    let cancelled = false;
+
     if (!currentScene || !currentScene.actions || currentScene.actions.length === 0) {
       engineRef.current = null;
       setEngineMode('idle');
 
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Stop previous engine
@@ -437,12 +459,14 @@ export function Stage({
     // Create new PlaybackEngine
     const engine = new PlaybackEngine([currentScene], actionEngine, audioPlayerRef.current, {
       onModeChange: (mode) => {
+        if (cancelled || engineRef.current !== engine) return;
         setEngineMode(mode);
       },
       onSceneChange: (_sceneId) => {
         // Scene change handled by engine
       },
       onSpeechStart: (text) => {
+        if (cancelled || engineRef.current !== engine) return;
         setLectureSpeech(text);
         // Add to lecture session with incrementing index for dedup
         // Chat area pacing is handled by the StreamBuffer (onTextReveal)
@@ -460,12 +484,14 @@ export function Stage({
         }
       },
       onSpeechEnd: () => {
+        if (cancelled || engineRef.current !== engine) return;
         // Don't clear lectureSpeech — let it persist until the next
         // onSpeechStart replaces it or the scene transitions.
         // Clearing here causes fallback to idleText (first sentence).
         setActiveBubbleId(null);
       },
       onEffectFire: (effect: Effect) => {
+        if (cancelled || engineRef.current !== engine) return;
         // Add to lecture session with incrementing index
         if (
           lectureSessionIdRef.current &&
@@ -484,6 +510,7 @@ export function Stage({
         }
       },
       onProactiveShow: (trigger) => {
+        if (cancelled || engineRef.current !== engine) return;
         if (!trigger.agentId) {
           // Mutate in-place so engine.currentTrigger also gets the agentId
           // (confirmDiscussion reads agentId from the same object reference)
@@ -492,13 +519,16 @@ export function Stage({
         setDiscussionTrigger(trigger);
       },
       onProactiveHide: () => {
+        if (cancelled || engineRef.current !== engine) return;
         setDiscussionTrigger(null);
       },
       onDiscussionConfirmed: (topic, prompt, agentId) => {
+        if (cancelled || engineRef.current !== engine) return;
         // Start SSE discussion via ChatArea
         handleDiscussionSSE(topic, prompt, agentId);
       },
       onDiscussionEnd: () => {
+        if (cancelled || engineRef.current !== engine) return;
         // Abort any active SSE
         if (discussionAbortRef.current) {
           discussionAbortRef.current.abort();
@@ -522,6 +552,7 @@ export function Stage({
         }
       },
       onUserInterrupt: (text) => {
+        if (cancelled || engineRef.current !== engine) return;
         // User interrupted → start a discussion via chat
         chatAreaRef.current?.sendMessage(text);
       },
@@ -531,6 +562,7 @@ export function Stage({
       },
       getPlaybackSpeed: () => useSettingsStore.getState().playbackSpeed || 1,
       onComplete: () => {
+        if (cancelled || engineRef.current !== engine) return;
         // lectureSpeech intentionally NOT cleared — last sentence stays visible
         // until scene transition (auto-play) or user restarts. Scene change
         // effect handles the reset.
@@ -585,9 +617,14 @@ export function Stage({
     const doAutoStart = async () => {
       if (currentScene && chatAreaRef.current) {
         const sessionId = await chatAreaRef.current.startLecture(currentScene.id);
+        if (cancelled || engineRef.current !== engine) {
+          chatAreaRef.current?.endSession(sessionId);
+          return;
+        }
         lectureSessionIdRef.current = sessionId;
         lectureActionCounterRef.current = 0;
       }
+      if (cancelled || engineRef.current !== engine) return;
       engine.start();
     };
 
@@ -600,6 +637,14 @@ export function Stage({
       // Desktop: auto-start if autoPlayLecture is enabled
       doAutoStart();
     }
+    return () => {
+      cancelled = true;
+      if (engineRef.current === engine) {
+        engine.stop();
+        actionEngine.dispose();
+        engineRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run when scene changes, functions are stable refs
   }, [currentScene]);
 
@@ -640,6 +685,29 @@ export function Stage({
   useEffect(() => {
     audioPlayerRef.current.setPlaybackRate(playbackSpeed);
   }, [playbackSpeed]);
+
+  // Audio unlock for mobile WebViews — required before Audio.play() can succeed.
+  // Mobile browsers (iOS WKWebView, Android WebView) block programmatic audio
+  // playback until the user has interacted with the page at least once.
+  const audioUnlockAttemptedRef = useRef(false);
+  const handleAudioUnlock = useCallback(async () => {
+    if (audioUnlockAttemptedRef.current) return;
+    if (audioPlayerRef.current.isAudioUnlocked()) {
+      audioUnlockAttemptedRef.current = true;
+      return;
+    }
+    audioUnlockAttemptedRef.current = true;
+    try {
+      await audioPlayerRef.current.unlockAudio();
+      // After unlocking, any pending HTML5 Audio play request in processNext()
+      // will automatically resolve. Also retry browser-native TTS if it was blocked.
+      engineRef.current?.retryBrowserTTSAfterUnlock();
+    } finally {
+      if (!audioPlayerRef.current.isAudioUnlocked()) {
+        audioUnlockAttemptedRef.current = false;
+      }
+    }
+  }, []);
 
   /**
    * Handle discussion SSE — POST /api/chat and push events to engine
@@ -746,6 +814,8 @@ export function Stage({
 
   // play/pause toggle
   const handlePlayPause = useCallback(async () => {
+    await handleAudioUnlock();
+
     const engine = engineRef.current;
     if (!engine) return;
 
@@ -753,13 +823,17 @@ export function Stage({
     if (mode === 'playing' || mode === 'live') {
       engine.pause();
       // Pause lecture buffer so text stops immediately
-      if (lectureSessionIdRef.current) {
+      if (chatAreaRef.current?.pauseAllLectureBuffers) {
+        chatAreaRef.current.pauseAllLectureBuffers();
+      } else if (lectureSessionIdRef.current) {
         chatAreaRef.current?.pauseBuffer(lectureSessionIdRef.current);
       }
     } else if (mode === 'paused') {
       engine.resume();
       // Resume lecture buffer
-      if (lectureSessionIdRef.current) {
+      if (chatAreaRef.current?.resumeAllLectureBuffers) {
+        chatAreaRef.current.resumeAllLectureBuffers();
+      } else if (lectureSessionIdRef.current) {
         chatAreaRef.current?.resumeBuffer(lectureSessionIdRef.current);
       }
     } else {
@@ -779,7 +853,7 @@ export function Stage({
         engine.continuePlayback();
       }
     }
-  }, [playbackCompleted, currentScene]);
+  }, [handleAudioUnlock, playbackCompleted, currentScene]);
 
   // get scene information
   const isPendingScene = currentSceneId === PENDING_SCENE_ID;
@@ -962,6 +1036,27 @@ export function Stage({
     return () => window.removeEventListener('keydown', onF11);
   }, [togglePresentation]);
 
+  // Mobile: horizontal swipe on the stage to switch between scenes.
+  // Left swipe → next scene; right swipe → previous scene.
+  // Active only during playback on touch devices and outside the discussion
+  // overlays so it doesn't fight with the chat / voice panels.
+  const swipeEnabled = isMobile && mode === 'playback';
+  useSwipeGestures(stageRef, {
+    onSwipeLeft: swipeEnabled ? handleNextScene : undefined,
+    onSwipeRight: swipeEnabled ? handlePreviousScene : undefined,
+    shouldHandle: (target) => {
+      if (!(target instanceof Element)) return true;
+      // Don't hijack swipes that started on interactive controls.
+      if (target.closest('input, textarea, select, button, [role="button"]')) {
+        return false;
+      }
+      // Don't hijack when the canvas toolbar is open / when user is
+      // interacting with a chalkboard draw stroke.
+      if (target.closest('[data-no-swipe]')) return false;
+      return true;
+    },
+  });
+
   // Map engine mode to the CanvasArea's expected engine state
   const canvasEngineState = (() => {
     switch (engineMode) {
@@ -1006,6 +1101,8 @@ export function Stage({
         'flex-1 flex overflow-hidden bg-[#f6f4f0] dark:bg-gray-950 relative',
         isPresenting && !controlsVisible && 'cursor-none',
       )}
+      onClick={handleAudioUnlock}
+      onTouchStart={handleAudioUnlock}
     >
       {/* Scene Sidebar */}
       <SceneSidebar
@@ -1270,6 +1367,16 @@ export function Stage({
               }
               isPaused={engineMode === 'paused'}
             />
+
+            {/* Right-side participation dock — recording (Mic) + typing (MessageSquare) */}
+            <MobileLandscapeDock
+              chatAreaRef={chatAreaRef}
+              onInputActivate={() => {
+                if (engineRef.current && (engineMode === 'playing' || engineMode === 'live')) {
+                  engineRef.current.pause();
+                }
+              }}
+            />
           </div>
         )}
       </div>
@@ -1418,7 +1525,9 @@ function MobileSubtitleBar({
 }) {
   const teacherParticipant = participants.find((p) => p.role === 'teacher');
   const speakingStudent = speakingAgentId
-    ? participants.find((p) => p.id === speakingAgentId && p.role !== 'teacher' && p.role !== 'user')
+    ? participants.find(
+        (p) => p.id === speakingAgentId && p.role !== 'teacher' && p.role !== 'user',
+      )
     : null;
 
   const name =
@@ -1438,6 +1547,11 @@ function MobileSubtitleBar({
         : '';
 
   if (!text || !role) return null;
+
+  const playbackButtonLabel =
+    buttonState === 'play' || buttonState === 'restart' || isPaused
+      ? 'Play classroom playback'
+      : 'Pause classroom playback';
 
   return (
     <div className="shrink-0 px-3 pb-1">
@@ -1489,7 +1603,9 @@ function MobileSubtitleBar({
           </div>
 
           {buttonState && buttonState !== 'none' && role !== 'user' && (
-            <div
+            <button
+              type="button"
+              aria-label={playbackButtonLabel}
               onClick={(e) => {
                 e.stopPropagation();
                 onBubbleClick?.();
@@ -1503,10 +1619,293 @@ function MobileSubtitleBar({
               ) : (
                 <Pause className="w-4 h-4 text-white" />
               )}
-            </div>
+            </button>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Mobile landscape right-side participation dock.
+ *
+ * Mirrors the recording (Mic) and typing (MessageSquare) controls that exist
+ * in the desktop Roundtable. Renders as a floating pill on the right edge of
+ * the screen, stacked above the bottom subtitle bar.
+ */
+function MobileLandscapeDock({
+  chatAreaRef,
+  onInputActivate,
+}: {
+  readonly chatAreaRef: React.RefObject<ChatAreaRef | null>;
+  readonly onInputActivate?: () => void;
+}) {
+  const { t } = useI18n();
+  const asrEnabled = useSettingsStore((s) => s.asrEnabled);
+
+  const [isInputOpen, setIsInputOpen] = useState(false);
+  const [isVoiceOpen, setIsVoiceOpen] = useState(false);
+  const [inputValue, setInputValue] = useState('');
+  const [isSendCooldown, setIsSendCooldown] = useState(false);
+  const isSendCooldownRef = useRef(false);
+
+  const { isRecording, isProcessing, startRecording, stopRecording, cancelRecording } =
+    useAudioRecorder({
+      onTranscription: (text) => {
+        if (!text.trim()) {
+          toast.info(t('roundtable.noSpeechDetected'));
+          setIsVoiceOpen(false);
+          return;
+        }
+        if (isSendCooldownRef.current) {
+          setIsVoiceOpen(false);
+          return;
+        }
+        chatAreaRef.current?.sendMessage(text);
+        setIsSendCooldown(true);
+        isSendCooldownRef.current = true;
+        setIsVoiceOpen(false);
+      },
+      onError: (error) => {
+        toast.error(error);
+        setIsVoiceOpen(false);
+      },
+    });
+
+  const handleSendMessage = useCallback(() => {
+    if (!inputValue.trim() || isSendCooldown) return;
+    chatAreaRef.current?.sendMessage(inputValue);
+    setIsSendCooldown(true);
+    isSendCooldownRef.current = true;
+    setInputValue('');
+    setIsInputOpen(false);
+  }, [chatAreaRef, inputValue, isSendCooldown]);
+
+  const handleToggleInput = useCallback(() => {
+    if (isSendCooldown) return;
+    if (!isInputOpen) {
+      onInputActivate?.();
+    }
+    setIsInputOpen(!isInputOpen);
+    if (isVoiceOpen || isProcessing) {
+      cancelRecording();
+      setIsVoiceOpen(false);
+    }
+  }, [cancelRecording, isInputOpen, isProcessing, isSendCooldown, isVoiceOpen, onInputActivate]);
+
+  const handleToggleVoice = useCallback(() => {
+    if (isVoiceOpen) {
+      if (isRecording) {
+        stopRecording();
+      }
+      setIsVoiceOpen(false);
+    } else {
+      if (isSendCooldown || isProcessing) return;
+      onInputActivate?.();
+      setIsVoiceOpen(true);
+      setIsInputOpen(false);
+      startRecording();
+    }
+  }, [
+    isProcessing,
+    isRecording,
+    isSendCooldown,
+    isVoiceOpen,
+    onInputActivate,
+    startRecording,
+    stopRecording,
+  ]);
+
+  // Clear cooldown when agent starts speaking
+  useEffect(() => {
+    if (!isSendCooldown) return;
+    const timer = setTimeout(() => {
+      setIsSendCooldown(false);
+      isSendCooldownRef.current = false;
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [isSendCooldown]);
+
+  // Voice wave bars (lighter weight than Roundtable's full waveform)
+  const VOICE_BARS = [16, 22, 14, 20, 24, 17, 21, 15] as const;
+
+  return (
+    <div
+      className="absolute z-40 flex flex-col items-end gap-2 pointer-events-none"
+      style={{
+        right: 'calc(env(safe-area-inset-right, 0px) + 12px)',
+        bottom: 'calc(env(safe-area-inset-bottom, 0px) + 80px)',
+      }}
+      aria-label={t('roundtable.dock') || '参与课堂'}
+    >
+      {/* Text input panel — opens above the dock */}
+      <AnimatePresence>
+        {isInputOpen && (
+          <motion.div
+            key="ml-input"
+            initial={{ opacity: 0, y: 8, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="w-[min(320px,calc(100vw-2.5rem))] pointer-events-auto"
+          >
+            <div className="flex items-center gap-2 px-3 py-2 rounded-2xl border bg-white/85 dark:bg-black/70 backdrop-blur-xl border-gray-200/60 dark:border-white/10 shadow-lg">
+              <textarea
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                placeholder={t('roundtable.inputPlaceholder')}
+                autoFocus
+                rows={1}
+                className="flex-1 resize-none bg-transparent border-none focus:ring-0 focus:outline-none text-sm text-gray-900 dark:text-white placeholder:text-gray-400 max-h-[80px] leading-[28px]"
+                style={{ fieldSizing: 'content' } as Record<string, string>}
+              />
+              <button
+                onClick={handleSendMessage}
+                disabled={isSendCooldown}
+                className={cn(
+                  'w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all',
+                  isSendCooldown
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-purple-600 hover:bg-purple-700',
+                )}
+                aria-label={t('roundtable.send') || '发送'}
+              >
+                {isSendCooldown ? (
+                  <Loader2 className="w-3.5 h-3.5 text-white animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5 text-white" />
+                )}
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Voice recording pill */}
+      <AnimatePresence>
+        {isVoiceOpen && (
+          <motion.div
+            key="ml-voice"
+            initial={{ opacity: 0, y: 8, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.92 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="pointer-events-auto"
+          >
+            <div className="flex items-center gap-3 px-4 py-2 rounded-full bg-white/85 dark:bg-black/70 backdrop-blur-xl border border-purple-200/60 dark:border-purple-700/40 shadow-lg">
+              <div className="flex items-end gap-0.5 h-5">
+                {VOICE_BARS.map((peak, i) => (
+                  <motion.div
+                    key={i}
+                    animate={{ height: [3, peak, 3], opacity: [0.4, 1, 0.4] }}
+                    transition={{
+                      repeat: Infinity,
+                      duration: 0.5 + (i % 3) * 0.1,
+                      delay: i * 0.05,
+                      ease: 'easeInOut',
+                    }}
+                    className="w-[2px] rounded-full bg-gradient-to-t from-purple-500 to-indigo-500"
+                  />
+                ))}
+              </div>
+              <span className="text-[10px] font-semibold tracking-wider text-purple-600 dark:text-purple-300 uppercase">
+                {isProcessing ? t('roundtable.processing') : t('roundtable.listening')}
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleVoice}
+                className="relative w-9 h-9 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 flex items-center justify-center shadow-md border border-white/20"
+                aria-label={t('roundtable.stopRecording') || '停止录音'}
+              >
+                <Mic className="w-4 h-4 text-white" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* The dock pill with the two participation buttons */}
+      <div className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-white/80 dark:bg-black/60 backdrop-blur-xl border border-gray-200/60 dark:border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.12)] px-2 py-2">
+        {isSendCooldown ? (
+          <div className="flex items-center justify-center w-9 h-9">
+            <div className="flex items-center gap-[3px]">
+              {[0, 1, 2].map((i) => (
+                <motion.div
+                  key={i}
+                  animate={{ y: [0, -3, 0], opacity: [0.35, 0.9, 0.35] }}
+                  transition={{
+                    repeat: Infinity,
+                    duration: 0.9,
+                    delay: i * 0.12,
+                    ease: 'easeInOut',
+                  }}
+                  className="w-[3px] h-[3px] rounded-full bg-purple-400"
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Mic (recording) button */}
+            <button
+              type="button"
+              aria-label={
+                asrEnabled ? t('roundtable.voiceInput') : t('roundtable.voiceInputDisabled')
+              }
+              onClick={() => {
+                if (asrEnabled) handleToggleVoice();
+              }}
+              disabled={!asrEnabled}
+              className={cn(
+                'w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95',
+                !asrEnabled
+                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  : isVoiceOpen
+                    ? 'bg-purple-600 text-white shadow-md'
+                    : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-white/10',
+              )}
+            >
+              {asrEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+            </button>
+
+            {/* MessageSquare (typing) button */}
+            <button
+              type="button"
+              aria-label={t('roundtable.textInput')}
+              onClick={handleToggleInput}
+              className={cn(
+                'w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95',
+                isInputOpen
+                  ? 'bg-purple-600 text-white shadow-md'
+                  : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-white/10',
+              )}
+            >
+              <MessageSquare className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Tap-outside backdrop to dismiss input/voice */}
+      {(isInputOpen || isVoiceOpen) && (
+        <button
+          type="button"
+          aria-label="关闭输入面板"
+          className="fixed inset-0 z-[-1] cursor-default"
+          onClick={() => {
+            setIsInputOpen(false);
+            setIsVoiceOpen(false);
+            if (isRecording || isProcessing) cancelRecording();
+          }}
+        />
+      )}
     </div>
   );
 }

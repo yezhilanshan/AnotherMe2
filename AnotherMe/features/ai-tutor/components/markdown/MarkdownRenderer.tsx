@@ -27,11 +27,7 @@ interface MarkdownRendererProps {
 function detectMathContent(content: string): boolean {
   if (/(^|[^\\])\$\$[\s\S]+?\$\$/.test(content)) return true;
   if (/\\\(|\\\[/.test(content)) return true;
-  if (
-    /(?:^|[^$\\])\$(?!\$|\s)(?:[^$\n]*(?:\\[a-zA-Z]+|[{}_^]))[^$\n]*\$(?!\$)/m.test(
-      content,
-    )
-  )
+  if (/(?:^|[^$\\])\$(?!\$|\s)(?:[^$\n]*(?:\\[a-zA-Z]+|[{}_^]))[^$\n]*\$(?!\$)/m.test(content))
     return true;
   return false;
 }
@@ -72,7 +68,12 @@ export function MarkdownRenderer({
 
   const customComponents = useMemo(
     () => ({
-      code({ inline, className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { inline?: boolean }) {
+      code({
+        inline,
+        className,
+        children,
+        ...props
+      }: React.ComponentPropsWithoutRef<'code'> & { inline?: boolean }) {
         const match = /language-(\w+)/.exec(className || '');
         const language = match ? match[1] : 'text';
 
@@ -83,10 +84,13 @@ export function MarkdownRenderer({
               style={vscDarkPlus as unknown as SyntaxHighlighterStyle}
               language={language}
               PreTag="div"
+              wrapLongLines={false}
               customStyle={{
                 margin: '0.5em 0',
                 borderRadius: '0.5rem',
                 fontSize: '0.875em',
+                maxWidth: '100%',
+                overflowX: 'auto',
               }}
             >
               {String(children).replace(/\n$/, '')}
@@ -97,7 +101,7 @@ export function MarkdownRenderer({
         return (
           <code
             className={cn(
-              'rounded bg-gray-100 dark:bg-gray-800 px-1 py-0.5 font-mono text-sm',
+              'rounded bg-gray-100 dark:bg-gray-800 px-1 py-0.5 font-mono text-sm break-words',
               className,
             )}
             {...props}
@@ -109,7 +113,7 @@ export function MarkdownRenderer({
       // 自定义表格样式
       table({ children }: React.ComponentPropsWithoutRef<'table'>) {
         return (
-          <div className="overflow-x-auto my-4">
+          <div className="my-4 max-w-full overflow-x-auto">
             <table className="min-w-full border-collapse border border-gray-200 dark:border-gray-700">
               {children}
             </table>
@@ -157,7 +161,9 @@ export function MarkdownRenderer({
 
   if (variant === 'trace') {
     return (
-      <div className={cn('text-[11px] leading-relaxed text-gray-600 dark:text-gray-400', className)}>
+      <div
+        className={cn('text-[11px] leading-relaxed text-gray-600 dark:text-gray-400', className)}
+      >
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{

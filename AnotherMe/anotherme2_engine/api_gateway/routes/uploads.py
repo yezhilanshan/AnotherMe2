@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from ..config import Settings
 from ..schemas import UploadResponse
@@ -38,5 +39,26 @@ def create_uploads_router(settings: Settings, storage: ObjectStorage) -> APIRout
             size = 0
 
         return UploadResponse(object_key=object_key, url=url, size=size, content_type=content_type)
+
+    @router.get("/v1/objects/{object_key:path}")
+    async def get_local_object(
+        object_key: str,
+    ):
+        resolve_path = getattr(storage, "_path", None)
+        if not callable(resolve_path):
+            raise HTTPException(status_code=404, detail={"error_code": "OBJECT_NOT_LOCAL", "message": "Object is not served locally"})
+
+        try:
+            path = resolve_path(object_key)
+        except Exception:
+            raise HTTPException(status_code=400, detail={"error_code": "INVALID_OBJECT_KEY", "message": "Invalid object key"})
+
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail={"error_code": "OBJECT_NOT_FOUND", "message": "Object not found"})
+
+        return FileResponse(
+            str(path),
+            media_type=guess_content_type(path.name),
+        )
 
     return router

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
@@ -16,6 +17,7 @@ import { useChatStore } from '../lib/store';
 import { DiagnosticProbe } from '../components/DiagnosticProbe';
 import { KnowledgeStateCard } from '../components/KnowledgeStateCard';
 import type { DiagnosticProbe as ProbeType, KnowledgeState } from '../lib/types';
+import { colors } from '../lib/theme';
 
 type Tab = 'probes' | 'states';
 
@@ -101,9 +103,21 @@ export default function DiagnosticScreen() {
     }
   };
 
+  // ── 将 teachingDecisions 转为 Map 做 O(1) 查找 ──
+  const teachingDecisionMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of teachingDecisions) {
+      const kpId = (d.knowledge_point_id || d.knowledgePointId) as string;
+      const suggestion = (d.teaching_action || d.teachingAction || d.reason) as string;
+      if (kpId && suggestion) {
+        map.set(kpId, suggestion);
+      }
+    }
+    return map;
+  }, [teachingDecisions]);
+
   const getTeachingSuggestion = (kpId: string): string | undefined => {
-    const decision = teachingDecisions.find(d => d.knowledge_point_id === kpId || d.knowledgePointId === kpId);
-    return (decision?.teaching_action || decision?.teachingAction || decision?.reason) as string | undefined;
+    return teachingDecisionMap.get(kpId);
   };
 
   const renderStats = () => (
@@ -113,11 +127,11 @@ export default function DiagnosticScreen() {
         <Text style={styles.statLabel}>总题数</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={[styles.statValue, { color: '#4CAF50' }]}>{stats.correct}</Text>
+        <Text style={[styles.statValue, { color: colors.success }]}>{stats.correct}</Text>
         <Text style={styles.statLabel}>正确</Text>
       </View>
       <View style={styles.statItem}>
-        <Text style={[styles.statValue, { color: '#FF3B30' }]}>{stats.wrong}</Text>
+        <Text style={[styles.statValue, { color: colors.error }]}>{stats.wrong}</Text>
         <Text style={styles.statLabel}>错误</Text>
       </View>
     </View>
@@ -128,11 +142,11 @@ export default function DiagnosticScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={24} color={colors.textInverse} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>诊断测评</Text>
         <TouchableOpacity onPress={() => router.push('/knowledge')} style={styles.headerRight}>
-          <Ionicons name="stats-chart" size={22} color="#FFFFFF" />
+          <Ionicons name="stats-chart" size={22} color={colors.textInverse} />
         </TouchableOpacity>
       </View>
 
@@ -162,31 +176,24 @@ export default function DiagnosticScreen() {
       )}
 
       {activeTab === 'probes' ? (
-        <FlatList
-          data={[]}
-          renderItem={null}
-          ListHeaderComponent={
-            <>
-              {renderStats()}
-              <TouchableOpacity
-                style={[styles.generateButton, generating && styles.generateDisabled]}
-                onPress={generateProbe}
-                disabled={generating}
-              >
-                {generating ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Ionicons name="bulb" size={20} color="#FFFFFF" />
-                )}
-                <Text style={styles.generateText}>
-                  {generating ? '正在生成...' : '生成新题目'}
-                </Text>
-              </TouchableOpacity>
-              {probe && <DiagnosticProbe probe={probe} onSubmit={handleSubmitAnswer} />}
-            </>
-          }
-          contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
-        />
+        <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}>
+          {renderStats()}
+          <TouchableOpacity
+            style={[styles.generateButton, generating && styles.generateDisabled]}
+            onPress={generateProbe}
+            disabled={generating}
+          >
+            {generating ? (
+              <ActivityIndicator size="small" color={colors.textInverse} />
+            ) : (
+              <Ionicons name="bulb" size={20} color={colors.textInverse} />
+            )}
+            <Text style={styles.generateText}>
+              {generating ? '正在生成...' : '生成新题目'}
+            </Text>
+          </TouchableOpacity>
+          {probe && <DiagnosticProbe probe={probe} onSubmit={handleSubmitAnswer} />}
+        </ScrollView>
       ) : (
         <FlatList
           data={knowledgeStates}
@@ -200,7 +207,7 @@ export default function DiagnosticScreen() {
           ListHeaderComponent={
             <View style={styles.statesHeader}>
               <TouchableOpacity onPress={loadKnowledgeStates} style={styles.refreshButton}>
-                <Ionicons name="refresh" size={18} color="#007AFF" />
+                <Ionicons name="refresh" size={18} color={colors.primary} />
                 <Text style={styles.refreshText}>刷新</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => router.push('/knowledge')} style={styles.detailLink}>
@@ -210,7 +217,7 @@ export default function DiagnosticScreen() {
           }
           ListEmptyComponent={
             loading ? (
-              <ActivityIndicator size="large" color="#007AFF" style={{ marginTop: 40 }} />
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
             ) : (
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>暂无知识状态数据</Text>
@@ -228,12 +235,12 @@ export default function DiagnosticScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
@@ -244,7 +251,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 18,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: colors.textInverse,
     textAlign: 'center',
   },
   headerRight: {
@@ -252,9 +259,9 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: colors.divider,
   },
   tab: {
     flex: 1,
@@ -263,31 +270,31 @@ const styles = StyleSheet.create({
   },
   tabActive: {
     borderBottomWidth: 2,
-    borderBottomColor: '#007AFF',
+    borderBottomColor: colors.primary,
   },
   tabText: {
     fontSize: 15,
-    color: '#999',
+    color: colors.textMuted,
   },
   tabTextActive: {
-    color: '#007AFF',
+    color: colors.primary,
     fontWeight: '600',
   },
   errorBanner: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#FFE5E5',
+    backgroundColor: colors.errorLight,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   errorText: {
-    color: '#FF3B30',
+    color: colors.error,
     fontSize: 14,
     flex: 1,
   },
   errorDismiss: {
-    color: '#FF3B30',
+    color: colors.error,
     fontSize: 18,
     fontWeight: 'bold',
     paddingLeft: 12,
@@ -296,7 +303,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     marginBottom: 8,
   },
   statItem: {
@@ -305,11 +312,11 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#333',
+    color: colors.textPrimary,
   },
   statLabel: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textMuted,
     marginTop: 2,
   },
   generateButton: {
@@ -320,14 +327,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginVertical: 12,
     paddingVertical: 14,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     borderRadius: 12,
   },
   generateDisabled: {
-    backgroundColor: '#99C5FF',
+    backgroundColor: colors.primaryLight,
   },
   generateText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -344,14 +351,14 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   refreshText: {
-    color: '#007AFF',
+    color: colors.primary,
     fontSize: 14,
   },
   detailLink: {
     padding: 4,
   },
   detailLinkText: {
-    color: '#007AFF',
+    color: colors.primary,
     fontSize: 14,
   },
   empty: {
@@ -360,11 +367,11 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: '#999',
+    color: colors.textMuted,
   },
   emptyHint: {
     fontSize: 13,
-    color: '#BBB',
+    color: colors.textMuted,
     marginTop: 4,
   },
 });

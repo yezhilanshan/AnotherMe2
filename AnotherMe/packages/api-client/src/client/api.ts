@@ -81,7 +81,7 @@ export function createApiClient(config: ApiClientConfig) {
         http.request<Record<string, unknown>>('/v1/ai/sessions', { method: 'POST', body }),
       getSessionMessages: (sessionId: string, limit?: number) =>
         http.request<Record<string, unknown>[]>(`/v1/ai/sessions/${sessionId}/messages${limit ? `?limit=${limit}` : ''}`),
-      createSessionMessage: (sessionId: string, body: { role: string; content: string; user_id?: string; content_type?: string; model_name?: string; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; latency_ms?: number; request_id?: string; parent_message_id?: string }) =>
+      createSessionMessage: (sessionId: string, body: { role: string; content: string; user_id?: string; content_type?: string; capability?: string; events?: unknown[]; attachments?: unknown[]; model_name?: string; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; latency_ms?: number; request_id?: string; parent_message_id?: string }) =>
         http.request<Record<string, unknown>>(`/v1/ai/sessions/${sessionId}/messages`, { method: 'POST', body }),
       getSessionLearningRecords: (sessionId: string, params?: { user_id?: string; limit?: number }) => {
         const qs = new URLSearchParams();
@@ -113,7 +113,7 @@ export function createApiClient(config: ApiClientConfig) {
         http.request<Record<string, unknown>>('/v1/knowledge-points', { method: 'POST', body }),
       getQuestionPoints: (questionId: string) =>
         http.request<Record<string, unknown>[]>(`/v1/questions/${questionId}/knowledge-points`),
-      processQuizAnswer: (userId: string, body: { question_id: string; is_correct: boolean; knowledge_point_ids?: string[] }) =>
+      processQuizAnswer: (userId: string, body: { question_id: string; is_correct: boolean; knowledge_point_ids?: string[]; payload?: Record<string, unknown> }) =>
         http.request<Record<string, unknown>[]>(`/v1/users/${userId}/quiz-answers`, { method: 'POST', body }),
       getStates: (userId: string, params?: { knowledge_point_ids?: string[]; min_mastery?: number; limit?: number }) => {
         const qs = new URLSearchParams();

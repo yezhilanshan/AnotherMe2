@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Alert,
   TextInput,
+  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
@@ -17,6 +18,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { api, formatGatewayError } from '../../lib/api';
 import { BEARER_TOKEN, GATEWAY_URL, TUNNEL_HEADERS, USER_ID } from '../../lib/config';
+import { colors } from '../../lib/theme';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface ClassroomSummary {
   id: string;
@@ -224,6 +228,7 @@ export default function CoursesScreen() {
       language: 'zh-CN',
       options: {
         source: 'mobile',
+        enable_tts: true,
       },
     };
 
@@ -263,7 +268,7 @@ export default function CoursesScreen() {
           (result.id as string | undefined) ||
           null;
 
-        if (status === 'completed' || status === 'succeeded') {
+        if (classroomId) {
           if (pollRef.current) clearInterval(pollRef.current);
           setJob(prev => ({
             ...prev,
@@ -349,7 +354,7 @@ export default function CoursesScreen() {
       onLongPress={() => handleDelete(item)}
     >
       <View style={styles.cardIcon}>
-        <Ionicons name={getSceneIcon(item.scenes_count)} size={24} color="#007AFF" />
+        <Ionicons name={getSceneIcon(item.scenes_count)} size={24} color={colors.lavender} />
       </View>
       <View style={styles.cardInfo}>
         <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
@@ -357,7 +362,7 @@ export default function CoursesScreen() {
           {item.scenes_count} 个场景 · {formatDate(item.created_at)}
         </Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color="#CCC" />
+      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
     </TouchableOpacity>
   );
 
@@ -373,16 +378,25 @@ export default function CoursesScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>我的课堂</Text>
-        <Text style={styles.headerSub}>{classrooms.length} 个课堂</Text>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.headerTitle}>我的课堂</Text>
+            <Text style={styles.headerSub}>
+              共 {classrooms.length} 个课堂
+            </Text>
+          </View>
+          <View style={styles.headerIcon}>
+            <Ionicons name="school" size={28} color={colors.textInverse} />
+          </View>
+        </View>
       </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color={colors.lavender} />
           <Text style={styles.loadingText}>加载课堂...</Text>
         </View>
       ) : (
@@ -393,13 +407,17 @@ export default function CoursesScreen() {
           ListHeaderComponent={
             <View style={styles.createPanel}>
               <View style={styles.createTitleRow}>
-                <Ionicons name="sparkles" size={18} color="#007AFF" />
+                <View style={styles.createTitleIcon}>
+                  <Ionicons name="sparkles" size={16} color={colors.textInverse} />
+                </View>
                 <Text style={styles.createTitle}>生成课堂</Text>
               </View>
+
               <TextInput
                 value={topic}
                 onChangeText={setTopic}
                 placeholder="课堂主题，例如：牛顿第二定律"
+                placeholderTextColor={colors.textMuted}
                 style={styles.topicInput}
                 editable={!isProcessing}
                 returnKeyType="done"
@@ -408,6 +426,7 @@ export default function CoursesScreen() {
                 value={requirements}
                 onChangeText={setRequirements}
                 placeholder="补充要求，可选"
+                placeholderTextColor={colors.textMuted}
                 multiline
                 style={styles.requirementsInput}
                 textAlignVertical="top"
@@ -417,7 +436,7 @@ export default function CoursesScreen() {
               {selectedFile ? (
                 <View style={styles.fileCard}>
                   <View style={styles.fileIcon}>
-                    <Ionicons name="document-text" size={20} color="#007AFF" />
+                    <Ionicons name="document-text" size={18} color={colors.lavender} />
                   </View>
                   <View style={styles.fileInfo}>
                     <Text style={styles.fileName} numberOfLines={1}>{selectedFile.name}</Text>
@@ -427,20 +446,20 @@ export default function CoursesScreen() {
                   </View>
                   {!isProcessing && (
                     <TouchableOpacity onPress={removeMaterial} style={styles.fileRemove}>
-                      <Ionicons name="close-circle" size={20} color="#999" />
+                      <Ionicons name="close-circle" size={20} color={colors.textMuted} />
                     </TouchableOpacity>
                   )}
                 </View>
               ) : (
                 <TouchableOpacity style={styles.pickFileButton} onPress={pickMaterial} disabled={isProcessing}>
-                  <Ionicons name="cloud-upload-outline" size={20} color="#007AFF" />
+                  <Ionicons name="cloud-upload-outline" size={18} color={colors.lavender} />
                   <Text style={styles.pickFileText}>选择资料（可选）</Text>
                 </TouchableOpacity>
               )}
 
               {job.error && (
                 <View style={styles.inlineError}>
-                  <Ionicons name="warning" size={16} color="#FF3B30" />
+                  <Ionicons name="warning" size={16} color={colors.error} />
                   <Text style={styles.inlineErrorText}>{job.error}</Text>
                 </View>
               )}
@@ -457,7 +476,7 @@ export default function CoursesScreen() {
                       style={styles.earlyEnterButton}
                       onPress={() => router.push({ pathname: '/course/[id]', params: { id: job.classroomId! } })}
                     >
-                      <Ionicons name="play-circle" size={18} color="#007AFF" />
+                      <Ionicons name="play-circle" size={18} color={colors.lavender} />
                       <Text style={styles.earlyEnterText}>已生成可播放内容，先进入课堂</Text>
                     </TouchableOpacity>
                   ) : null}
@@ -474,7 +493,7 @@ export default function CoursesScreen() {
                       style={styles.primaryButton}
                       onPress={() => router.push({ pathname: '/course/[id]', params: { id: job.classroomId! } })}
                     >
-                      <Ionicons name="open" size={18} color="#FFF" />
+                      <Ionicons name="open" size={18} color={colors.textInverse} />
                       <Text style={styles.primaryButtonText}>进入课堂</Text>
                     </TouchableOpacity>
                   )}
@@ -484,11 +503,12 @@ export default function CoursesScreen() {
                   style={[styles.generateButton, isProcessing && styles.generateButtonDisabled]}
                   onPress={handleGenerate}
                   disabled={isProcessing}
+                  activeOpacity={0.8}
                 >
                   {isProcessing ? (
-                    <ActivityIndicator size="small" color="#FFF" />
+                    <ActivityIndicator size="small" color={colors.textInverse} />
                   ) : (
-                    <Ionicons name="school" size={20} color="#FFF" />
+                    <Ionicons name="school" size={20} color={colors.textInverse} />
                   )}
                   <Text style={styles.generateButtonText}>{isProcessing ? '生成中...' : '生成课堂'}</Text>
                 </TouchableOpacity>
@@ -496,16 +516,18 @@ export default function CoursesScreen() {
             </View>
           }
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#007AFF" />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.lavender} />
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Ionicons name="library-outline" size={48} color="#CCC" />
+              <View style={styles.emptyIconWrapper}>
+                <Ionicons name="library-outline" size={40} color={colors.borderLight} />
+              </View>
               <Text style={styles.emptyText}>暂无课堂</Text>
               <Text style={styles.emptyHint}>输入主题即可创建第一个课堂</Text>
             </View>
           }
-          contentContainerStyle={{ paddingBottom: insets.bottom + 20, paddingTop: 12 }}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 20, paddingTop: 0 }}
         />
       )}
     </View>
@@ -513,152 +535,186 @@ export default function CoursesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F5F5' },
+  container: { flex: 1, backgroundColor: colors.bgPage },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, fontSize: 15, color: '#999' },
+  loadingText: { marginTop: 12, fontSize: 15, color: colors.textMuted },
+
+  // Header
   header: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    backgroundColor: colors.lavender,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  headerTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF' },
-  headerSub: { fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
-  card: {
+  headerContent: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
   },
+  headerTitle: { fontSize: 24, fontWeight: '700', color: colors.textInverse },
+  headerSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 4 },
+  headerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Create panel
   createPanel: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     marginHorizontal: 16,
+    marginTop: -10,
     marginBottom: 4,
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: colors.lavender,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   createTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 10,
+    gap: 8,
+    marginBottom: 14,
   },
-  createTitle: { fontSize: 15, fontWeight: '600', color: '#333' },
+  createTitleIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.lavender,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+
+  // Inputs
   topicInput: {
     borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     fontSize: 14,
-    color: '#333',
-    backgroundColor: '#FAFAFA',
+    color: colors.textPrimary,
+    backgroundColor: colors.bgInput,
   },
   requirementsInput: {
-    minHeight: 70,
+    minHeight: 72,
     maxHeight: 120,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#E5E5E5',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     fontSize: 14,
-    color: '#333',
-    backgroundColor: '#FAFAFA',
+    color: colors.textPrimary,
+    backgroundColor: colors.bgInput,
   },
+
+  // File picker
   pickFileButton: {
-    marginTop: 10,
+    marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    borderWidth: 1,
-    borderColor: '#D6E8FF',
-    backgroundColor: '#F0F8FF',
+    borderWidth: 1.5,
+    borderColor: colors.borderLight,
+    backgroundColor: colors.lavenderLight,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 12,
   },
-  pickFileText: { color: '#007AFF', fontSize: 14, fontWeight: '500' },
+  pickFileText: { color: colors.lavender, fontSize: 14, fontWeight: '600' },
   fileCard: {
-    marginTop: 10,
+    marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: '#F8F8F8',
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: colors.lavenderLight,
   },
   fileIcon: {
     width: 36,
     height: 36,
-    borderRadius: 9,
-    backgroundColor: '#EAF4FF',
+    borderRadius: 10,
+    backgroundColor: colors.lavenderLight,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
   },
   fileInfo: { flex: 1 },
-  fileName: { fontSize: 14, fontWeight: '500', color: '#333' },
-  fileMeta: { fontSize: 11, color: '#999', marginTop: 2 },
+  fileName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  fileMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   fileRemove: { padding: 4 },
+
+  // Error
   inlineError: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 10,
+    marginTop: 12,
     padding: 10,
     borderRadius: 10,
-    backgroundColor: '#FFE5E5',
+    backgroundColor: colors.errorLight,
   },
-  inlineErrorText: { flex: 1, fontSize: 13, color: '#FF3B30' },
-  progressContainer: { marginTop: 12 },
+  inlineErrorText: { flex: 1, fontSize: 13, color: colors.error },
+
+  // Progress
+  progressContainer: { marginTop: 14 },
   progressBar: {
-    height: 6,
-    backgroundColor: '#E5E5E5',
-    borderRadius: 3,
+    height: 8,
+    backgroundColor: colors.border,
+    borderRadius: 4,
     overflow: 'hidden',
   },
-  progressFill: { height: '100%', backgroundColor: '#007AFF', borderRadius: 3 },
-  progressText: { fontSize: 13, color: '#333', fontWeight: '500', marginTop: 8 },
-  progressStep: { fontSize: 12, color: '#999', marginTop: 3 },
+  progressFill: { height: '100%', backgroundColor: colors.lavender, borderRadius: 4 },
+  progressText: { fontSize: 13, color: colors.textPrimary, fontWeight: '600', marginTop: 10 },
+  progressStep: { fontSize: 12, color: colors.textMuted, marginTop: 3 },
   earlyEnterButton: {
-    marginTop: 10,
+    marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    borderWidth: 1,
-    borderColor: '#D6E8FF',
-    backgroundColor: '#F0F8FF',
+    borderWidth: 1.5,
+    borderColor: colors.borderLight,
+    backgroundColor: colors.lavenderLight,
     paddingVertical: 10,
-    borderRadius: 10,
+    borderRadius: 12,
   },
-  earlyEnterText: { color: '#007AFF', fontSize: 13, fontWeight: '600' },
+  earlyEnterText: { color: colors.lavender, fontSize: 13, fontWeight: '600' },
+
+  // Generate button
   generateButton: {
-    marginTop: 12,
+    marginTop: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    borderRadius: 10,
+    backgroundColor: colors.lavender,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: colors.lavender,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   generateButtonDisabled: { opacity: 0.65 },
-  generateButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  generateButtonText: { color: colors.textInverse, fontSize: 16, fontWeight: '700' },
+
+  // Completed actions
   completedActions: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 12,
+    marginTop: 14,
   },
   primaryButton: {
     flex: 1,
@@ -666,34 +722,60 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.lavender,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 12,
   },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  primaryButtonText: { color: colors.textInverse, fontSize: 14, fontWeight: '600' },
   secondaryButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
+    borderWidth: 1.5,
+    borderColor: colors.border,
     paddingVertical: 12,
-    borderRadius: 10,
-  },
-  secondaryButtonText: { color: '#333', fontSize: 14, fontWeight: '500' },
-  cardIcon: {
-    width: 44,
-    height: 44,
     borderRadius: 12,
-    backgroundColor: '#F0F8FF',
+  },
+  secondaryButtonText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
+
+  // Cards
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bgCard,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  cardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: colors.lavenderLight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 14,
   },
   cardInfo: { flex: 1 },
-  cardTitle: { fontSize: 16, fontWeight: '500', color: '#333' },
-  cardMeta: { fontSize: 12, color: '#999', marginTop: 4 },
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 16, color: '#999', marginTop: 12 },
-  emptyHint: { fontSize: 13, color: '#BBB', marginTop: 4 },
+  cardTitle: { fontSize: 16, fontWeight: '600', color: colors.textPrimary },
+  cardMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
+
+  // Empty state
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyIconWrapper: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.lavenderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary, marginTop: 16 },
+  emptyHint: { fontSize: 13, color: colors.textMuted, marginTop: 6 },
 });

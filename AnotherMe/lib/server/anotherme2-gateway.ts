@@ -4,3 +4,5 @@ export * from './anotherme2-gateway/problem-video';
 export * from './anotherme2-gateway/messages';
 export * from './anotherme2-gateway/ai';
 export * from './anotherme2-gateway/learning';
+export * from './anotherme2-gateway/memory';
+export * from './anotherme2-gateway/metrics';

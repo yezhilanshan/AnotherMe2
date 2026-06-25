@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { CHAT_CAPABILITIES } from '../lib/config';
+import { colors } from '../lib/theme';
 
 interface CapabilityBarProps {
   selectedCapability: string;
@@ -20,15 +21,17 @@ interface CapabilityBarProps {
  * 横向滑动功能选择栏 — 固定在输入框上方
  * pill 固定尺寸，visible 控制显隐，带动画
  */
-export function CapabilityBar({ selectedCapability, onSelect, visible = true }: CapabilityBarProps) {
+export const CapabilityBar = React.memo(function CapabilityBar({ selectedCapability, onSelect, visible = true }: CapabilityBarProps) {
   const anim = useRef(new Animated.Value(visible ? 1 : 0)).current;
 
   useEffect(() => {
-    Animated.timing(anim, {
+    const animation = Animated.timing(anim, {
       toValue: visible ? 1 : 0,
       duration: 200,
       useNativeDriver: true,
-    }).start();
+    });
+    animation.start();
+    return () => animation.stop();
   }, [visible]);
 
   return (
@@ -66,7 +69,7 @@ export function CapabilityBar({ selectedCapability, onSelect, visible = true }: 
               <Ionicons
                 name={cap.icon as any}
                 size={14}
-                color={isSelected ? '#fff' : '#666'}
+                color={isSelected ? colors.textInverse : colors.textSecondary}
               />
               <Text style={[styles.pillText, isSelected && styles.pillTextSelected]} numberOfLines={1}>
                 {cap.label}
@@ -77,13 +80,11 @@ export function CapabilityBar({ selectedCapability, onSelect, visible = true }: 
       </ScrollView>
     </Animated.View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: '#fff',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5E5',
+    backgroundColor: colors.bgCard,
   },
   container: {
     paddingHorizontal: 10,
@@ -97,19 +98,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgInput,
     height: 32,
   },
   pillSelected: {
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
   },
   pillText: {
     fontSize: 13,
-    color: '#666',
+    color: colors.textSecondary,
     fontWeight: '500',
   },
   pillTextSelected: {
-    color: '#fff',
+    color: colors.textInverse,
     fontWeight: '600',
   },
 });

@@ -340,6 +340,13 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
         capabilities: { streaming: true, tools: true, vision: true },
       },
       {
+        id: 'qwen3.6-plus',
+        name: 'Qwen3.6 Plus',
+        contextWindow: 1000000,
+        outputWindow: 65536,
+        capabilities: { streaming: true, tools: true, vision: true },
+      },
+      {
         id: 'qwen3-max',
         name: 'Qwen3 Max',
         contextWindow: 262144,

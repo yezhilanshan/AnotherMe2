@@ -4,6 +4,7 @@
 
 import Constants from "expo-constants";
 import { Platform, NativeModules } from "react-native";
+import modelConfig from "../config/models.json";
 
 // ============================================================
 // 手动覆盖：如果自动检测不准，填入电脑 IP（去掉 undefined 改成实际 IP）
@@ -189,6 +190,8 @@ export const API_TIMEOUT = 30000;
 // 移动端历史上混用 `chat` / `question` / 注册 id，这里集中做归一化，
 // 避免前后端对不上。Gateway 侧有镜像归一化，客户端调用前再做一次更直观。
 export const CAPABILITY_IDS = {
+  /** 智能路由（苏格拉底式启发教学） */
+  auto: "auto",
   /** 一般对话 / 辅导聊天 */
   ai_tutor_chat: "chat",
   /** 拍题问答（多模态） */
@@ -231,16 +234,8 @@ export interface ModelDef {
   description: string;
 }
 
-export const AVAILABLE_MODELS: ModelDef[] = [
-  {
-    id: "qwen3.5-plus-2026-02-15",
-    label: "Qwen 3.5 Plus",
-    provider: "通义千问",
-    description: "阿里云通义千问大模型",
-  },
-];
-
-export const DEFAULT_MODEL = "qwen3.5-plus-2026-02-15";
+export const AVAILABLE_MODELS: ModelDef[] = modelConfig.availableModels;
+export const DEFAULT_MODEL = modelConfig.defaultModel;
 
 // ============================================================
 // AI 对话能力定义（与网页端 features/ai-tutor 对齐）
@@ -257,6 +252,12 @@ export interface CapabilityDef {
 // Gateway 实际接受: chat, deep_solve, deep_question, deep_research, math_animator, visualize
 export const CHAT_CAPABILITIES: CapabilityDef[] = [
   {
+    id: "auto",
+    label: "智能导师",
+    description: "苏格拉底式启发教学",
+    icon: "compass",
+  },
+  {
     id: "",
     label: "聊天",
     description: "灵活对话，可使用多种工具",
@@ -266,25 +267,25 @@ export const CHAT_CAPABILITIES: CapabilityDef[] = [
     id: "deep_solve",
     label: "深度解题",
     description: "多步骤推理与问题解决",
-    icon: "flash",
+    icon: "bulb",
   },
   {
     id: "deep_question",
     label: "练习生成",
     description: "自动生成练习题目",
-    icon: "book",
+    icon: "document-text",
   },
   {
     id: "deep_research",
     label: "深度研究",
     description: "多源搜索与研究报告",
-    icon: "search",
+    icon: "telescope",
   },
   {
     id: "math_animator",
     label: "数学动画",
     description: "生成数学视频或分镜图",
-    icon: "sparkles",
+    icon: "videocam",
   },
   {
     id: "visualize",

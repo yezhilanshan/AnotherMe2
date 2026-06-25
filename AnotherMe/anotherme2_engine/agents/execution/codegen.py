@@ -7,6 +7,7 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ..perception.pixel_anchor import scene_point_coordinates
 from .formal_video_validator import FormalVideoValidator
 
 
@@ -16,9 +17,15 @@ class TemplateCodeGenerator:
     def __init__(self, canvas_config: Dict[str, Any]):
         self.canvas_config = canvas_config
         self.prefer_mathtex = bool(canvas_config.get("prefer_mathtex", False))
-        self.formula_math_font_size = int(canvas_config.get("formula_math_font_size", 24))
-        self.formula_text_font_size = int(canvas_config.get("formula_text_font_size", 24))
-        self.formula_max_visible_slots = int(canvas_config.get("formula_max_visible_slots", 8))
+        self.formula_math_font_size = int(
+            canvas_config.get("formula_math_font_size", 24)
+        )
+        self.formula_text_font_size = int(
+            canvas_config.get("formula_text_font_size", 24)
+        )
+        self.formula_max_visible_slots = int(
+            canvas_config.get("formula_max_visible_slots", 8)
+        )
         self.validator = FormalVideoValidator(canvas_config)
 
     def generate(
@@ -35,22 +42,54 @@ class TemplateCodeGenerator:
 
         point_lookup = self._scene_points(initial_scene)
         point_payload_lookup = self._point_payload_lookup(initial_scene)
-        primitives = initial_scene.get("primitives", []) if isinstance(initial_scene, dict) else []
+        primitives = (
+            initial_scene.get("primitives", [])
+            if isinstance(initial_scene, dict)
+            else []
+        )
+        visual_geometry = self._visual_geometry_source(project, initial_scene)
+        geometry_render_mode = str(visual_geometry.get("mode", "vector_reconstruction"))
+        image_overlay_mode = geometry_render_mode == "image_overlay" and bool(
+            visual_geometry.get("image_path")
+        )
         if not point_lookup:
-            raise ValueError("template codegen requires a drawable scene with concrete points")
-        if not any(str(item.get("type", "")).strip().lower() == "segment" for item in primitives):
+            raise ValueError(
+                "template codegen requires a drawable scene with concrete points"
+            )
+        if not any(
+            str(item.get("type", "")).strip().lower() == "segment"
+            for item in primitives
+        ):
             raise ValueError("template codegen requires at least one drawable segment")
         self._validate_drawable_scene_semantics(initial_scene, point_lookup)
-        display = initial_scene.get("display", {}) if isinstance(initial_scene, dict) else {}
+        display = (
+            initial_scene.get("display", {}) if isinstance(initial_scene, dict) else {}
+        )
         point_display = display.get("points", {}) if isinstance(display, dict) else {}
-        primitive_display = display.get("primitives", {}) if isinstance(display, dict) else {}
+        primitive_display = (
+            display.get("primitives", {}) if isinstance(display, dict) else {}
+        )
         frame_height = float(self.canvas_config.get("frame_height", 8.0))
         frame_width = float(self.canvas_config.get("frame_width", 14.222))
         pixel_height = int(self.canvas_config.get("pixel_height", 1080))
         pixel_width = int(self.canvas_config.get("pixel_width", 1920))
         safe_margin = float(self.canvas_config.get("safe_margin", 0.4))
-        left_panel_x_max = float(self.canvas_config.get("left_panel_x_max", 0.75))
+        left_panel_x_max = float(self.canvas_config.get("left_panel_x_max", 1.45))
+        image_anchor_opacity = 0.0 if image_overlay_mode else 1.0
+        image_anchor_label_opacity = 0.0 if image_overlay_mode else 1.0
+        image_anchor_stroke_opacity = 0.0 if image_overlay_mode else 1.0
         geometry_bbox = self._coordinate_bbox(point_lookup)
+        image_scene_box = (
+            self._image_aligned_scene_box(
+                visual_geometry,
+                frame_width,
+                frame_height,
+                left_panel_x_max,
+                safe_margin,
+            )
+            if image_overlay_mode
+            else None
+        )
         screen_points = self._screen_point_map(
             point_lookup,
             geometry_bbox,
@@ -58,6 +97,9 @@ class TemplateCodeGenerator:
             frame_height,
             left_panel_x_max,
             safe_margin,
+            scene_box=image_scene_box,
+            point_payload_lookup=point_payload_lookup if image_overlay_mode else None,
+            visual_geometry=visual_geometry if image_overlay_mode else None,
         )
 
         step_by_id = {int(s.id): s for s in getattr(project, "script_steps", [])}
@@ -66,6 +108,12 @@ class TemplateCodeGenerator:
             point_id
             for point_id, payload in point_payload_lookup.items()
             if isinstance(payload.get("derived"), dict)
+            and self._display_bool(
+                point_display,
+                point_id,
+                "hide_until_revealed",
+                default=False,
+            )
         }
 
         code: List[str] = []
@@ -81,21 +129,56 @@ class TemplateCodeGenerator:
         code.append("")
         code.append(f"class {class_name}(Scene):")
         code.append("    def construct(self):")
-        code.append("        self.camera.background_color = '#1a1a2e'")
+        code.append("        self.camera.background_color = '#fbfaf7'")
         code.append("")
         code.append("        # 对象注册表：同一几何元素在全流程复用")
         code.append("        points = {}")
         code.append("        point_labels = {}")
         code.append("        lines = {}")
         code.append("        objects = {}")
-        code.append(f"        hidden_derived_points = {repr(sorted(hidden_derived_point_ids))}")
+        code.append(
+            f"        hidden_derived_points = {repr(sorted(hidden_derived_point_ids))}"
+        )
+        code.append(
+            f"        geometry_render_mode = '{self._safe_text(geometry_render_mode)}'"
+        )
         code.append("")
+        if image_overlay_mode:
+            image_path = self._safe_text(
+                str(visual_geometry.get("image_path", ""))
+            ).replace("\\\\", "/")
+            geometry_area = image_scene_box or self._geometry_area_scene_box(
+                frame_width, frame_height, left_panel_x_max, safe_margin
+            )
+            code.append("        # Layer 1: 原题图片底图，结构化坐标仅用于叠加层锚点")
+            code.append(f"        problem_image = ImageMobject(r'{image_path}')")
+            code.append("        problem_image.set_z_index(0)")
+            code.append("        problem_image.set_opacity(0.96)")
+            code.append(
+                f"        image_max_width = {geometry_area[2] - geometry_area[0]:.6f}"
+            )
+            code.append(
+                f"        image_max_height = {geometry_area[3] - geometry_area[1]:.6f}"
+            )
+            code.append(
+                "        if problem_image.width > 0 and problem_image.height > 0:"
+            )
+            code.append(
+                "            problem_image.scale(min(image_max_width / problem_image.width, image_max_height / problem_image.height))"
+            )
+            code.append(
+                f"        problem_image.move_to(np.array([{(geometry_area[0] + geometry_area[2]) / 2.0:.6f}, {(geometry_area[1] + geometry_area[3]) / 2.0:.6f}, 0]))"
+            )
+            code.append("        self.add(problem_image)")
+            code.append("")
 
         for point_id in point_ids:
             sx, sy = screen_points.get(point_id, (0.0, 0.0))
             safe_id = self._safe_text(point_id)
             label_text = self._safe_text(
-                self._point_label_text(point_id, point_display, point_payload_lookup.get(point_id))
+                self._point_label_text(
+                    point_id, point_display, point_payload_lookup.get(point_id)
+                )
             )
             label_dx, label_dy = self._label_offset(
                 point_id,
@@ -103,37 +186,89 @@ class TemplateCodeGenerator:
                 point_display,
                 point_payload_lookup.get(point_id),
             )
-            point_ctor = (
-                f"Dot(point=np.array([{sx:.3f}, {sy:.3f}, 0]), radius=0.05, color=WHITE)"
-            )
+            point_ctor = f"Dot(point=np.array([{sx:.3f}, {sy:.3f}, 0]), radius=0.05, color=BLACK)"
+            if image_overlay_mode:
+                point_ctor += f".set_opacity({image_anchor_opacity:.2f}).set_z_index(2)"
             if point_id in hidden_derived_point_ids:
                 point_ctor += ".set_opacity(0)"
             code.append(f"        points['{safe_id}'] = {point_ctor}")
             show_label = self._display_bool(point_display, point_id, "show_label", True)
             if show_label:
-                label_ctor = (
-                    f"Text('{label_text}', font_size=24, color=WHITE).move_to(np.array([{sx + label_dx:.3f}, {sy + label_dy:.3f}, 0]))"
-                )
+                label_ctor = f"Text('{label_text}', font_size=24, color=BLACK).move_to(np.array([{sx + label_dx:.3f}, {sy + label_dy:.3f}, 0]))"
+                if image_overlay_mode:
+                    label_ctor += (
+                        f".set_opacity({image_anchor_label_opacity:.2f}).set_z_index(2)"
+                    )
                 if point_id in hidden_derived_point_ids:
                     label_ctor += ".set_opacity(0)"
+                code.append(f"        point_labels['{safe_id}'] = {label_ctor}")
                 code.append(
-                    f"        point_labels['{safe_id}'] = {label_ctor}"
+                    f"        self.add(points['{safe_id}'], point_labels['{safe_id}'])"
                 )
-                code.append(f"        self.add(points['{safe_id}'], point_labels['{safe_id}'])")
             else:
                 code.append(f"        self.add(points['{safe_id}'])")
 
         if point_ids:
             code.append("")
 
-        for primitive in primitives:
+        visible_segment_ids_by_pair: Dict[frozenset, str] = {}
+        render_primitives = sorted(
+            primitives,
+            key=lambda item: (
+                0
+                if str((item or {}).get("type", "")).strip().lower() == "segment"
+                else 1
+            ),
+        )
+
+        for primitive in render_primitives:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+            primitive_id = self._safe_text(str(primitive.get("id", "")))
+            refs = [self._safe_text(str(p)) for p in (primitive.get("points") or [])]
+            if len(refs) != 2:
+                continue
+            if not self._segment_visible_for_render(primitive_id, primitive_display):
+                continue
+            visible_segment_ids_by_pair[frozenset((refs[0], refs[1]))] = primitive_id
+
+        for primitive in render_primitives:
             primitive_id = self._safe_text(str(primitive.get("id", "")))
             primitive_type = str(primitive.get("type", "")).strip().lower()
             refs = [self._safe_text(str(p)) for p in (primitive.get("points") or [])]
-            color = self._manim_color_expr(self._display_value(primitive_display, primitive_id, "color"))
-            fill_opacity = float(self._display_value(primitive_display, primitive_id, "fill_opacity", 0.05) or 0.05)
-            line_style = str(self._display_value(primitive_display, primitive_id, "style", "solid") or "solid").strip().lower()
-            stroke_width = float(self._display_value(primitive_display, primitive_id, "stroke_width", 3) or 3)
+            default_primitive_color = "BLACK"
+            color = self._manim_color_expr(
+                self._display_value(primitive_display, primitive_id, "color"),
+                default=default_primitive_color,
+            )
+            default_fill_opacity = (
+                0.0 if primitive_type in {"polygon", "circle"} else 0.05
+            )
+            fill_opacity = float(
+                self._display_value(
+                    primitive_display,
+                    primitive_id,
+                    "fill_opacity",
+                    default_fill_opacity,
+                )
+                or default_fill_opacity
+            )
+            line_style = (
+                str(
+                    self._display_value(
+                        primitive_display, primitive_id, "style", "solid"
+                    )
+                    or "solid"
+                )
+                .strip()
+                .lower()
+            )
+            stroke_width = float(
+                self._display_value(primitive_display, primitive_id, "stroke_width", 3)
+                or 3
+            )
             show_primitive = self._display_bool(
                 primitive_display,
                 primitive_id,
@@ -144,24 +279,34 @@ class TemplateCodeGenerator:
                 continue
 
             if primitive_type == "segment" and len(refs) == 2:
-                if not self._segment_visible_for_render(primitive_id, primitive_display):
+                if not self._segment_visible_for_render(
+                    primitive_id, primitive_display
+                ):
                     continue
                 p1, p2 = refs
                 code.append(f"        if '{p1}' in points and '{p2}' in points:")
                 line_cls = "DashedLine" if line_style == "dashed" else "Line"
                 code.append(
                     f"            lines['{primitive_id}'] = always_redraw(lambda p1='{p1}', p2='{p2}': "
-                    f"{line_cls}(points[p1].get_center(), points[p2].get_center(), color={color}, stroke_width={stroke_width:.2f}))"
+                    f"{line_cls}(points[p1].get_center(), points[p2].get_center(), color={color}, stroke_width={stroke_width:.2f})"
+                    f".set_opacity({image_anchor_stroke_opacity:.2f}).set_z_index(2))"
                 )
                 code.append(f"            self.add(lines['{primitive_id}'])")
                 continue
 
             if primitive_type == "polygon" and len(refs) >= 3:
-                refs_repr = repr(refs)
-                code.append(f"        if all(k in points for k in {refs}):")
+                edge_ids: List[str] = []
+                for index, start in enumerate(refs):
+                    end = refs[(index + 1) % len(refs)]
+                    edge_id = visible_segment_ids_by_pair.get(frozenset((start, end)))
+                    if edge_id:
+                        edge_ids.append(edge_id)
+                if not edge_ids:
+                    continue
+                edge_ids_str = "[" + ", ".join(f"'{eid}'" for eid in edge_ids) + "]"
+                code.append(f"        if all(k in lines for k in {edge_ids_str}):")
                 code.append(
-                    f"            objects['{primitive_id}'] = always_redraw(lambda refs={refs_repr}: "
-                    f"Polygon(*[points[r].get_center() for r in refs], color={color}, stroke_width=3, fill_opacity={fill_opacity:.2f}))"
+                    f"            objects['{primitive_id}'] = VGroup(*[lines[k] for k in {edge_ids_str}]).set_z_index(2)"
                 )
                 code.append(f"            self.add(objects['{primitive_id}'])")
                 continue
@@ -169,10 +314,13 @@ class TemplateCodeGenerator:
             if primitive_type == "circle":
                 center = self._safe_text(str(primitive.get("center", "")))
                 radius_point = self._safe_text(str(primitive.get("radius_point", "")))
-                code.append(f"        if '{center}' in points and '{radius_point}' in points:")
+                code.append(
+                    f"        if '{center}' in points and '{radius_point}' in points:"
+                )
                 code.append(
                     f"            objects['{primitive_id}'] = always_redraw(lambda c='{center}', r='{radius_point}': "
-                    f"Circle(radius=np.linalg.norm(points[r].get_center() - points[c].get_center()), color={color}, stroke_width=3, fill_opacity={fill_opacity:.2f}).move_to(points[c].get_center()))"
+                    f"Circle(radius=np.linalg.norm(points[r].get_center() - points[c].get_center()), color={color}, stroke_width=3, fill_opacity=0.00)"
+                    f".move_to(points[c].get_center()).set_stroke(opacity={image_anchor_stroke_opacity:.2f}).set_fill(opacity=0.00).set_z_index(2))"
                 )
                 code.append(f"            self.add(objects['{primitive_id}'])")
                 continue
@@ -188,21 +336,23 @@ class TemplateCodeGenerator:
                     f"Arc(radius=np.linalg.norm(points[s].get_center() - points[c].get_center()), "
                     f"start_angle=np.arctan2((points[s].get_center()-points[c].get_center())[1], (points[s].get_center()-points[c].get_center())[0]), "
                     f"angle=((np.arctan2((points[e].get_center()-points[c].get_center())[1], (points[e].get_center()-points[c].get_center())[0]) - np.arctan2((points[s].get_center()-points[c].get_center())[1], (points[s].get_center()-points[c].get_center())[0]) + 2*np.pi) % (2*np.pi)), "
-                    f"color={color}).move_arc_center_to(points[c].get_center()))"
+                    f"color={color}).move_arc_center_to(points[c].get_center()).set_opacity({image_anchor_stroke_opacity:.2f}).set_z_index(2))"
                 )
                 code.append(f"            self.add(objects['{primitive_id}'])")
                 continue
 
-            if primitive_type in {'angle', 'right_angle'} and len(refs) == 3:
+            if primitive_type in {"angle", "right_angle"} and len(refs) == 3:
                 p1, vertex, p2 = refs
-                code.append(f"        if '{p1}' in points and '{vertex}' in points and '{p2}' in points:")
+                code.append(
+                    f"        if '{p1}' in points and '{vertex}' in points and '{p2}' in points:"
+                )
                 if primitive_type == "right_angle":
                     code.append(
                         f"            objects['{primitive_id}'] = always_redraw(lambda p1='{p1}', v='{vertex}', p2='{p2}': "
                         f"RightAngle(Line(points[v].get_center(), points[p1].get_center()), "
                         f"Line(points[v].get_center(), points[p2].get_center()), "
                         f"length=max(0.14, min(0.30, min(np.linalg.norm(points[p1].get_center()-points[v].get_center()), np.linalg.norm(points[p2].get_center()-points[v].get_center())) * 0.18)), "
-                        f"color={color}))"
+                        f"color={color}).set_opacity({image_anchor_stroke_opacity:.2f}).set_z_index(2))"
                     )
                 else:
                     angle_value = primitive.get("value")
@@ -217,7 +367,7 @@ class TemplateCodeGenerator:
                         f"Angle(Line(points[v].get_center(), points[p1].get_center()), "
                         f"Line(points[v].get_center(), points[p2].get_center()), "
                         f"radius=max(0.18, min(0.40, min(np.linalg.norm(points[p1].get_center()-points[v].get_center()), np.linalg.norm(points[p2].get_center()-points[v].get_center())) * 0.22)), "
-                        f"other_angle={str(use_other_angle)}, color={color}))"
+                        f"other_angle={str(use_other_angle)}, color={color}).set_opacity({image_anchor_stroke_opacity:.2f}).set_z_index(2))"
                     )
                 code.append(f"            self.add(objects['{primitive_id}'])")
 
@@ -244,11 +394,18 @@ class TemplateCodeGenerator:
         has_formula_group = False
         formula_slot_history: List[Tuple[float, float, float, float]] = []
         visible_formula_texts: Set[str] = set()
+        known_point_ids = {str(point_id).strip().upper() for point_id in point_ids}
 
         for ctx in step_contexts:
             plan = ctx.get("animation_plan", {})
-            animation_spec = ctx.get("animation_spec", {}) if isinstance(ctx, dict) else {}
-            timing_budget = animation_spec.get("timing_budget", {}) if isinstance(animation_spec, dict) else {}
+            animation_spec = (
+                ctx.get("animation_spec", {}) if isinstance(ctx, dict) else {}
+            )
+            timing_budget = (
+                animation_spec.get("timing_budget", {})
+                if isinstance(animation_spec, dict)
+                else {}
+            )
             step_id = int(plan.get("step_id", 0))
             title = self._safe_text(str(plan.get("title", f"步骤{step_id}")))
             title = self._safe_text(self._clean_display_text(title))
@@ -256,7 +413,10 @@ class TemplateCodeGenerator:
                 timing_budget.get("duration", plan.get("duration", 1.0)),
                 1.0,
             )
-            focus_entities = animation_spec.get("focus_entities", plan.get("focus_entities", [])) or []
+            focus_entities = (
+                animation_spec.get("focus_entities", plan.get("focus_entities", []))
+                or []
+            )
             action_types = {
                 str(a.get("type", ""))
                 for a in plan.get("actions", [])
@@ -269,23 +429,30 @@ class TemplateCodeGenerator:
                 if isinstance(action, dict)
             ] or (layout.get("reserved_formula_elements", []) or [])
             emphasis_actions = [
-                item for item in (animation_spec.get("emphasis_actions", []) or [])
+                item
+                for item in (animation_spec.get("emphasis_actions", []) or [])
                 if isinstance(item, dict)
             ]
             movement_actions = [
-                item for item in (animation_spec.get("movement_actions", []) or [])
+                item
+                for item in (animation_spec.get("movement_actions", []) or [])
                 if isinstance(item, dict)
             ]
+            if image_overlay_mode:
+                movement_actions = []
             label_actions = [
-                item for item in (animation_spec.get("label_actions", []) or [])
+                item
+                for item in (animation_spec.get("label_actions", []) or [])
                 if isinstance(item, dict)
             ]
             restore_actions = [
-                item for item in (animation_spec.get("restore_actions", []) or [])
+                item
+                for item in (animation_spec.get("restore_actions", []) or [])
                 if isinstance(item, dict)
             ]
             helper_line_actions = [
-                item for item in (animation_spec.get("helper_line_actions", []) or [])
+                item
+                for item in (animation_spec.get("helper_line_actions", []) or [])
                 if isinstance(item, dict)
             ]
 
@@ -304,7 +471,9 @@ class TemplateCodeGenerator:
             used = 0.0
 
             if formula_elements:
-                reset_formula_area = bool(animation_spec.get("reset_formula_area", False))
+                reset_formula_area = bool(
+                    animation_spec.get("reset_formula_area", False)
+                )
                 current_formula_slots = [
                     (
                         float(el.get("x", 0.7)),
@@ -319,7 +488,8 @@ class TemplateCodeGenerator:
                     has_formula_group
                     and not reset_formula_area
                     and self.formula_max_visible_slots > 0
-                    and len(formula_slot_history) + len(current_formula_slots) > self.formula_max_visible_slots
+                    and len(formula_slot_history) + len(current_formula_slots)
+                    > self.formula_max_visible_slots
                 ):
                     reset_formula_area = True
                 # 上游即便漏传 reset 标记，也在 codegen 侧兜底避免文字/公式重叠。
@@ -337,7 +507,9 @@ class TemplateCodeGenerator:
                 )
                 if reset_formula_area and has_formula_group:
                     code.append("        if len(current_formula_group) > 0:")
-                    code.append(f"            self.play(FadeOut(current_formula_group), run_time={formula_reset_time:.2f})")
+                    code.append(
+                        f"            self.play(FadeOut(current_formula_group), run_time={formula_reset_time:.2f})"
+                    )
                     used += formula_reset_time
                     code.append("        current_formula_group = VGroup()")
                     visible_formula_texts.clear()
@@ -345,6 +517,7 @@ class TemplateCodeGenerator:
                 code.append("        step_formula_group = VGroup()")
                 code.append("        formula_specs = []")
                 appended_formula_count = 0
+                current_formula_keys: Set[str] = set()
                 for el in formula_elements:
                     raw_content = str(el.get("content", ""))
                     raw_content = self._clean_display_text(raw_content)
@@ -354,60 +527,134 @@ class TemplateCodeGenerator:
                     y = float(el.get("y", 0.2))
                     w = float(el.get("width", 0.25))
                     h = float(el.get("height", 0.12))
+                    block_kind = str(el.get("kind", "") or "").strip().lower()
                     center_nx = x + w * 0.5
                     center_ny = y + h * 0.5
                     if line_label:
                         _, length_text = line_label
                         display_content = length_text
-                    normalized_display_content = re.sub(r"\s+", " ", display_content).strip()
+                    normalized_display_content = re.sub(
+                        r"\s+", " ", display_content
+                    ).strip()
                     if not normalized_display_content:
                         continue
-                    if has_formula_group and not reset_formula_area and normalized_display_content in visible_formula_texts:
+                    formula_key = self._formula_panel_key(normalized_display_content)
+                    if formula_key in current_formula_keys:
+                        continue
+                    if self._formula_references_unknown_points(
+                        normalized_display_content,
+                        known_point_ids,
+                    ):
+                        continue
+                    if (
+                        has_formula_group
+                        and not reset_formula_area
+                        and formula_key in visible_formula_texts
+                    ):
                         continue
                     wrap_width_est = max(w * frame_width - 0.30, 1.2)
-                    formula_tex = self._to_mathtex(display_content) if self.prefer_mathtex else ""
+                    formula_tex = (
+                        self._to_mathtex(display_content)
+                        if self.prefer_mathtex
+                        and block_kind != "text"
+                        and len(display_content) <= 48
+                        else ""
+                    )
                     if formula_tex:
                         content = self._safe_text(formula_tex)
-                        code.append(f"        formula_specs.append(('math', '{content}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}))")
+                        code.append(
+                            f"        formula_specs.append(('math', '{content}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}, '{block_kind}'))"
+                        )
                     else:
-                        wrapped = self._safe_text(self._wrap_plain_text(display_content, wrap_width_est))
-                        code.append(f"        formula_specs.append(('text', '{wrapped}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}))")
-                    visible_formula_texts.add(normalized_display_content)
+                        wrapped = self._safe_text(
+                            self._wrap_plain_text(display_content, wrap_width_est)
+                        )
+                        code.append(
+                            f"        formula_specs.append(('text', '{wrapped}', {center_nx:.6f}, {center_ny:.6f}, {w:.6f}, {h:.6f}, '{block_kind}'))"
+                        )
+                    visible_formula_texts.add(formula_key)
+                    current_formula_keys.add(formula_key)
                     appended_formula_count += 1
                 if appended_formula_count == 0:
                     code.append("        step_formula_group = VGroup()")
                 else:
-                    code.append("        uniform_formula_scale = 1.0")
-                    code.append("        pending_formula_objs = []")
-                    code.append("        for kind, content, block_nx, block_ny, block_nw, block_nh in formula_specs:")
-                    code.append("            block_x = -config.frame_width / 2 + block_nx * config.frame_width")
-                    code.append("            block_y = config.frame_height / 2 - block_ny * config.frame_height")
-                    code.append("            max_width = max(block_nw * config.frame_width - 0.30, 1.2)")
-                    code.append("            max_height = max(block_nh * config.frame_height - 0.10, 0.45)")
+                    code.append(
+                        "        for kind, content, block_nx, block_ny, block_nw, block_nh, display_kind in formula_specs:"
+                    )
+                    code.append(
+                        "            block_x = -config.frame_width / 2 + block_nx * config.frame_width"
+                    )
+                    code.append(
+                        "            block_y = config.frame_height / 2 - block_ny * config.frame_height"
+                    )
+                    code.append(
+                        "            max_width = max(block_nw * config.frame_width - 0.30, 1.2)"
+                    )
+                    code.append(
+                        "            max_height = max(block_nh * config.frame_height - 0.10, 0.45)"
+                    )
                     code.append("            if kind == 'math':")
-                    code.append(f"                formula_obj = MathTex(content, font_size={self.formula_math_font_size}, color=YELLOW)")
+                    code.append(
+                        f"                formula_obj = MathTex(content, font_size={self.formula_math_font_size}, color=BLACK)"
+                    )
                     code.append("            else:")
-                    code.append(f"                formula_obj = Text(content, font_size={self.formula_text_font_size}, color=YELLOW, line_spacing=0.85)")
-                    code.append("            width_ratio = max_width / max(formula_obj.width, 1e-6)")
-                    code.append("            height_ratio = max_height / max(formula_obj.height, 1e-6)")
-                    code.append("            fit_ratio = min(1.0, width_ratio, height_ratio)")
-                    code.append("            uniform_formula_scale = min(uniform_formula_scale, fit_ratio)")
-                    code.append("            pending_formula_objs.append((formula_obj, block_x, block_y))")
-                    code.append("        for formula_obj, block_x, block_y in pending_formula_objs:")
-                    code.append("            if uniform_formula_scale < 1.0:")
-                    code.append("                formula_obj.scale(uniform_formula_scale)")
-                    code.append("            formula_obj.move_to(np.array([block_x, block_y, 0]))")
-                    code.append("            step_formula_group.add(formula_obj)")
+                    code.append(
+                        f"                text_font_size = {self.formula_text_font_size} - (2 if display_kind == 'text' else 0)"
+                    )
+                    code.append(
+                        "                formula_obj = Text(content, font_size=text_font_size, color=BLACK, line_spacing=0.85)"
+                    )
+                    code.append(
+                        "            if formula_obj.width > max_width or formula_obj.height > max_height:"
+                    )
+                    code.append(
+                        "                fit_scale = min(max_width / max(formula_obj.width, 1e-6), max_height / max(formula_obj.height, 1e-6))"
+                    )
+                    code.append(
+                        "                min_scale = 0.58 if display_kind == 'text' else 0.70"
+                    )
+                    code.append(
+                        "                if fit_scale >= min_scale:"
+                    )
+                    code.append(
+                        "                    formula_obj.scale(fit_scale)"
+                    )
+                    code.append(
+                        "            if formula_obj.width <= max_width and formula_obj.height <= max_height:"
+                    )
+                    code.append(
+                        "                formula_obj.move_to(np.array([block_x, block_y, 0]))"
+                    )
+                    code.append("                formula_obj.set_z_index(3)")
+                    code.append("                step_formula_group.add(formula_obj)")
                 show_time = self._safe_duration(
                     timing_budget.get("formula_show", min(1.0, duration * 0.25)),
                     0.15,
                 )
                 code.append("        if len(step_formula_group) > 0:")
-                code.append(f"            self.play(FadeIn(step_formula_group), run_time={show_time:.2f})")
+                code.append(
+                    "            formula_intro_anims = []"
+                )
+                code.append(
+                    "            for formula_obj in step_formula_group:"
+                )
+                code.append(
+                    "                formula_intro_anims.append(Write(formula_obj) if isinstance(formula_obj, (Text, MathTex)) else FadeIn(formula_obj))"
+                )
+                code.append(
+                    "            if formula_intro_anims:"
+                )
+                code.append(
+                    f"                self.play(LaggedStart(*formula_intro_anims, lag_ratio=0.18), run_time={show_time:.2f})"
+                )
                 if has_formula_group and not reset_formula_area:
-                    code.append("            current_formula_group.add(*step_formula_group)")
+                    code.append(
+                        "            current_formula_group.add(*step_formula_group)"
+                    )
                 else:
-                    code.append("            current_formula_group = step_formula_group")
+                    code.append(
+                        "            current_formula_group = step_formula_group"
+                    )
                 if reset_formula_area:
                     formula_slot_history = list(current_formula_slots)
                 else:
@@ -422,6 +669,50 @@ class TemplateCodeGenerator:
                 for item in movement_actions
                 if str(item.get("point_id", "")).strip()
             ] or list(moved_points.keys())
+            semantic_actions = [
+                item
+                for item in (animation_spec.get("semantic_actions", []) or [])
+                if isinstance(item, dict)
+            ]
+            fold_axis_ids = [
+                str(item.get("axis", "")).strip()
+                for item in semantic_actions
+                if str(item.get("action", "")).strip() == "highlight_fold_axis"
+                and str(item.get("axis", "")).strip()
+            ]
+            create_image_pairs = [
+                (
+                    str(item.get("from", "")).strip(),
+                    str(item.get("to", "")).strip(),
+                )
+                for item in semantic_actions
+                if str(item.get("action", "")).strip() == "create_image_point"
+                and str(item.get("from", "")).strip()
+                and str(item.get("to", "")).strip()
+            ]
+            if fold_axis_ids:
+                axis_time = self._safe_duration(min(0.65, duration * 0.16), 0.2)
+                code.append("        fold_axis_anims = []")
+                for axis_id in list(dict.fromkeys(fold_axis_ids)):
+                    safe_axis = self._safe_text(axis_id)
+                    code.append(f"        if '{safe_axis}' in lines:")
+                    code.append(
+                        f"            fold_axis_anims.append(lines['{safe_axis}'].animate.set_color(ORANGE).set_stroke(width=5))"
+                    )
+                code.append("        if fold_axis_anims:")
+                code.append(
+                    f"            self.play(*fold_axis_anims, run_time={axis_time:.2f})"
+                )
+                used += axis_time
+            paired_move_targets = {
+                to_id for _from_id, to_id in create_image_pairs if to_id
+            }
+            if create_image_pairs:
+                moved_point_ids = [
+                    point_id
+                    for point_id in moved_point_ids
+                    if point_id not in paired_move_targets
+                ]
             if moved_point_ids:
                 current_lookup = self._scene_points(current_scene)
                 current_bbox = self._coordinate_bbox(current_lookup)
@@ -432,6 +723,7 @@ class TemplateCodeGenerator:
                     frame_height,
                     left_panel_x_max,
                     safe_margin,
+                    scene_box=image_scene_box,
                 )
                 move_time = self._safe_duration(
                     timing_budget.get("movement", min(0.8, duration * 0.3)),
@@ -466,23 +758,102 @@ class TemplateCodeGenerator:
                             f"            move_anims.append(point_labels['{safe_id}'].animate.move_to(np.array([{sx + label_dx:.3f}, {sy + label_dy:.3f}, 0])))"
                         )
                 code.append("        if move_anims:")
-                code.append(f"            self.play(*move_anims, run_time={move_time:.2f})")
+                code.append(
+                    f"            self.play(*move_anims, run_time={move_time:.2f})"
+                )
                 used += move_time
+            if create_image_pairs:
+                current_lookup = self._scene_points(current_scene)
+                current_bbox = self._coordinate_bbox(current_lookup)
+                current_screen_points = self._screen_point_map(
+                    current_lookup,
+                    current_bbox,
+                    frame_width,
+                    frame_height,
+                    left_panel_x_max,
+                    safe_margin,
+                    scene_box=image_scene_box,
+                )
+                fold_move_time = self._safe_duration(
+                    timing_budget.get("movement", min(0.8, duration * 0.3)),
+                    0.2,
+                )
+                fold_fade_time = self._safe_duration(min(0.22, duration * 0.08), 0.12)
+                code.append("        fold_guides = VGroup()")
+                code.append("        fold_move_anims = []")
+                for from_id, to_id in create_image_pairs:
+                    if to_id not in current_screen_points:
+                        continue
+                    from_safe = self._safe_text(from_id)
+                    to_safe = self._safe_text(to_id)
+                    tx, ty = current_screen_points[to_id]
+                    label_dx, label_dy = self._label_offset(
+                        to_id,
+                        current_screen_points,
+                        point_display,
+                        point_payload_lookup.get(to_id),
+                    )
+                    label_text = self._safe_text(
+                        self._point_label_text(
+                            to_id, point_display, point_payload_lookup.get(to_id)
+                        )
+                    )
+                    code.append(
+                        f"        if '{from_safe}' in points and '{to_safe}' in points:"
+                    )
+                    code.append(
+                        f"            ghost_{to_safe} = Dot(point=points['{from_safe}'].get_center(), radius=0.06, color=GREEN).set_z_index(4)"
+                    )
+                    code.append(
+                        f"            ghost_label_{to_safe} = Text('{label_text}', font_size=24, color=BLUE_E).move_to(points['{from_safe}'].get_center() + np.array([0.0, 0.28, 0])).set_z_index(4)"
+                    )
+                    code.append(
+                        f"            fold_guides.add(ghost_{to_safe}, ghost_label_{to_safe})"
+                    )
+                    code.append(
+                        f"            self.add(ghost_{to_safe}, ghost_label_{to_safe})"
+                    )
+                    code.append(
+                        f"            fold_move_anims.append(ghost_{to_safe}.animate.move_to(np.array([{tx:.3f}, {ty:.3f}, 0])))"
+                    )
+                    code.append(
+                        f"            fold_move_anims.append(ghost_label_{to_safe}.animate.move_to(np.array([{tx + label_dx:.3f}, {ty + label_dy:.3f}, 0])))"
+                    )
+                    code.append(
+                        f"            fold_move_anims.append(points['{to_safe}'].animate.move_to(np.array([{tx:.3f}, {ty:.3f}, 0])).set_opacity(1))"
+                    )
+                    code.append(f"        if '{to_safe}' in point_labels:")
+                    code.append(
+                        f"            fold_move_anims.append(point_labels['{to_safe}'].animate.move_to(np.array([{tx + label_dx:.3f}, {ty + label_dy:.3f}, 0])).set_opacity(1))"
+                    )
+                code.append("        if fold_move_anims:")
+                code.append(
+                    f"            self.play(*fold_move_anims, run_time={fold_move_time:.2f})"
+                )
+                code.append("        if len(fold_guides) > 0:")
+                code.append(
+                    f"            self.play(FadeOut(fold_guides), run_time={fold_fade_time:.2f})"
+                )
+                used += fold_move_time + fold_fade_time
 
-            target_infos = self._build_focus_target_infos(focus_entities, point_lookup, primitives, primitive_display)
+            target_infos = self._build_focus_target_infos(
+                focus_entities, point_lookup, primitives, primitive_display
+            )
             targets = [t["expr"] for t in target_infos]
             emphasis_modes = {
                 str(item.get("mode", "")).strip().lower()
                 for item in emphasis_actions
                 if str(item.get("mode", "")).strip()
             }
-            highlight_enabled = (
-                any(mode in {"highlight", "maintain"} for mode in emphasis_modes)
-                or ("highlight" in action_types or "maintain" in action_types or "reuse_entities" in action_types)
+            highlight_enabled = any(
+                mode in {"highlight", "maintain"} for mode in emphasis_modes
+            ) or (
+                "highlight" in action_types
+                or "maintain" in action_types
+                or "reuse_entities" in action_types
             )
             transform_enabled = (
-                "transform" in emphasis_modes
-                or "transform" in action_types
+                "transform" in emphasis_modes or "transform" in action_types
             )
 
             if targets and highlight_enabled:
@@ -491,9 +862,33 @@ class TemplateCodeGenerator:
                     0.2,
                 )
                 code.append("        highlight_anims = []")
-                for target_expr in targets:
-                    code.append(f"        highlight_anims.append({target_expr}.animate.set_color(YELLOW))")
-                code.append(f"        self.play(*highlight_anims, run_time={hi_time:.2f})")
+                for info in target_infos:
+                    target_expr = info["expr"]
+                    if image_overlay_mode:
+                        if info.get("kind") == "point":
+                            code.append(
+                                f"        highlight_anims.append({target_expr}.animate.set_color(ORANGE).set_opacity(1.0))"
+                            )
+                        elif info.get("kind") == "object":
+                            code.append(
+                                f"        highlight_anims.append({target_expr}.animate.set_stroke(color=ORANGE, opacity=1.0, width=5).set_fill(opacity=0.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        highlight_anims.append({target_expr}.animate.set_color(ORANGE).set_opacity(1.0).set_stroke(width=5))"
+                            )
+                    else:
+                        if info.get("kind") == "object":
+                            code.append(
+                                f"        highlight_anims.append({target_expr}.animate.set_stroke(color=ORANGE, width=5).set_fill(opacity=0.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        highlight_anims.append({target_expr}.animate.set_color(ORANGE))"
+                            )
+                code.append(
+                    f"        self.play(*highlight_anims, run_time={hi_time:.2f})"
+                )
                 used += hi_time
 
             if targets and transform_enabled:
@@ -504,14 +899,35 @@ class TemplateCodeGenerator:
                 code.append("        transform_anims = []")
                 for info in target_infos:
                     if info.get("kind") == "line":
-                        code.append(
-                            f"        transform_anims.append({info['expr']}.animate.set_color(ORANGE))"
-                        )
+                        if image_overlay_mode:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.set_color(ORANGE).set_opacity(1.0).set_stroke(width=5))"
+                            )
+                        else:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.set_color(ORANGE))"
+                            )
+                    elif info.get("kind") == "object":
+                        if image_overlay_mode:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.set_stroke(color=ORANGE, opacity=1.0, width=5).set_fill(opacity=0.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.scale(1.05).set_stroke(color=ORANGE, width=5).set_fill(opacity=0.0))"
+                            )
                     else:
-                        code.append(
-                            f"        transform_anims.append({info['expr']}.animate.scale(1.05).set_color(ORANGE))"
-                        )
-                code.append(f"        self.play(*transform_anims, run_time={tf_time:.2f})")
+                        if image_overlay_mode:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.set_color(ORANGE).set_opacity(1.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        transform_anims.append({info['expr']}.animate.scale(1.05).set_color(ORANGE))"
+                            )
+                code.append(
+                    f"        self.play(*transform_anims, run_time={tf_time:.2f})"
+                )
                 used += tf_time
 
             label_target_ids = {
@@ -522,7 +938,8 @@ class TemplateCodeGenerator:
             label_target_infos = [
                 info
                 for info in target_infos
-                if info.get("kind") == "point" and (not label_target_ids or info.get("id") in label_target_ids)
+                if info.get("kind") == "point"
+                and (not label_target_ids or info.get("id") in label_target_ids)
             ]
 
             if label_target_infos and (label_actions or "label" in action_types):
@@ -536,16 +953,31 @@ class TemplateCodeGenerator:
                 )
                 code.append("        temp_labels = VGroup()")
                 for info in label_target_infos:
-                    entity = self._safe_text(info["id"])
+                    entity = self._safe_text(
+                        self._point_label_text(
+                            info["id"],
+                            point_display,
+                            point_payload_lookup.get(info["id"]),
+                        )
+                    )
                     code.append(
-                        f"        temp_labels.add(Text('{entity}', font_size=24, color=GREEN).next_to({info['expr']}, UP * 0.25))"
+                        f"        temp_labels.add(Text('{entity}', font_size=24, color=BLUE_E).next_to({info['expr']}, UP * 0.25))"
                     )
                 code.append("        if len(temp_labels) > 0:")
-                code.append(f"            self.play(FadeIn(temp_labels), run_time={show_label_time:.2f})")
-                code.append(f"            self.play(FadeOut(temp_labels), run_time={hide_label_time:.2f})")
+                code.append(
+                    f"            self.play(FadeIn(temp_labels), run_time={show_label_time:.2f})"
+                )
+                code.append(
+                    f"            self.play(FadeOut(temp_labels), run_time={hide_label_time:.2f})"
+                )
                 used += show_label_time + hide_label_time
 
-            restore_enabled = bool(restore_actions) or highlight_enabled or transform_enabled or "maintain" in action_types
+            restore_enabled = (
+                bool(restore_actions)
+                or highlight_enabled
+                or transform_enabled
+                or "maintain" in action_types
+            )
             if targets and restore_enabled:
                 restore_time = self._safe_duration(
                     timing_budget.get("restore", min(0.4, duration * 0.15)),
@@ -554,14 +986,35 @@ class TemplateCodeGenerator:
                 code.append("        restore_anims = []")
                 for info in target_infos:
                     if info.get("kind") == "line":
-                        code.append(
-                            f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}).set_stroke(width=3))"
-                        )
+                        if image_overlay_mode:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}).set_opacity(0.0).set_stroke(width=3))"
+                            )
+                        else:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}).set_stroke(width=3))"
+                            )
+                    elif info.get("kind") == "object":
+                        if image_overlay_mode:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_stroke(color={info['default_color']}, opacity=0.0, width=3).set_fill(opacity=0.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_stroke(color={info['default_color']}, width=3).set_fill(opacity=0.0))"
+                            )
                     else:
-                        code.append(
-                            f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}))"
-                        )
-                code.append(f"        self.play(*restore_anims, run_time={restore_time:.2f})")
+                        if image_overlay_mode:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}).set_opacity(0.0))"
+                            )
+                        else:
+                            code.append(
+                                f"        restore_anims.append({info['expr']}.animate.set_color({info['default_color']}))"
+                            )
+                code.append(
+                    f"        self.play(*restore_anims, run_time={restore_time:.2f})"
+                )
                 used += restore_time
 
             if helper_line_actions:
@@ -579,20 +1032,26 @@ class TemplateCodeGenerator:
                 )
                 code.append("        helper_lines = VGroup()")
                 for hl_action in helper_line_actions:
-                    hl_id = self._safe_text(str(hl_action.get("id") or f"aux_{len(helper_line_actions)}"))
+                    hl_id = self._safe_text(
+                        str(hl_action.get("id") or f"aux_{len(helper_line_actions)}")
+                    )
                     hl_from = self._safe_text(str(hl_action.get("from") or ""))
                     hl_to = self._safe_text(str(hl_action.get("to") or ""))
                     hl_to_line = self._safe_text(str(hl_action.get("to_line") or ""))
                     hl_foot = self._safe_text(str(hl_action.get("foot") or ""))
                     hl_style = hl_action.get("style") or {}
-                    hl_persist = str(hl_action.get("persist") or "until_step_end").strip()
+                    hl_persist = str(
+                        hl_action.get("persist") or "until_step_end"
+                    ).strip()
 
                     color = str(hl_style.get("color", "BLUE")).strip()
                     dashed = bool(hl_style.get("dashed", True))
                     stroke_width = float(hl_style.get("stroke_width", 3) or 3)
 
                     if hl_from and hl_to:
-                        code.append(f"        if '{hl_from}' in points and '{hl_to}' in points:")
+                        code.append(
+                            f"        if '{hl_from}' in points and '{hl_to}' in points:"
+                        )
                         if dashed:
                             code.append(
                                 f"            hl_{hl_id} = DashedLine(points['{hl_from}'].get_center(), points['{hl_to}'].get_center(), color={color}, stroke_width={stroke_width:.2f})"
@@ -604,7 +1063,9 @@ class TemplateCodeGenerator:
                         code.append(f"            helper_lines.add(hl_{hl_id})")
                         code.append(f"            lines['{hl_id}'] = hl_{hl_id}")
                     elif hl_from and hl_foot:
-                        code.append(f"        if '{hl_from}' in points and '{hl_foot}' in points:")
+                        code.append(
+                            f"        if '{hl_from}' in points and '{hl_foot}' in points:"
+                        )
                         if dashed:
                             code.append(
                                 f"            hl_{hl_id} = DashedLine(points['{hl_from}'].get_center(), points['{hl_foot}'].get_center(), color={color}, stroke_width={stroke_width:.2f})"
@@ -617,7 +1078,9 @@ class TemplateCodeGenerator:
                         code.append(f"            lines['{hl_id}'] = hl_{hl_id}")
 
                 code.append("        if len(helper_lines) > 0:")
-                code.append(f"            self.play(Create(helper_lines), run_time={helper_draw_time:.2f})")
+                code.append(
+                    f"            self.play(Create(helper_lines), run_time={helper_draw_time:.2f})"
+                )
                 used += helper_draw_time
 
                 if helper_hold_time > 0:
@@ -625,11 +1088,15 @@ class TemplateCodeGenerator:
                     used += helper_hold_time
 
                 temp_helpers = [
-                    hl for hl in helper_line_actions
-                    if str(hl.get("persist", "until_step_end")).strip() == "until_step_end"
+                    hl
+                    for hl in helper_line_actions
+                    if str(hl.get("persist", "until_step_end")).strip()
+                    == "until_step_end"
                 ]
                 if temp_helpers:
-                    code.append(f"            self.play(FadeOut(helper_lines), run_time={helper_fade_time:.2f})")
+                    code.append(
+                        f"            self.play(FadeOut(helper_lines), run_time={helper_fade_time:.2f})"
+                    )
                     used += helper_fade_time
 
             remain = round(max(duration - used, 0.0), 2)
@@ -637,7 +1104,11 @@ class TemplateCodeGenerator:
                 code.append(f"        self.wait({remain:.2f})")
 
             code.append("")
-            prev_scene = current_scene if isinstance(current_scene, dict) and current_scene else prev_scene
+            prev_scene = (
+                current_scene
+                if isinstance(current_scene, dict) and current_scene
+                else prev_scene
+            )
 
         return "\n".join(code)
 
@@ -671,46 +1142,80 @@ class TemplateCodeGenerator:
                 continue
             primitive_id = str(primitive.get("id", "")).strip() or "<anonymous>"
             primitive_type = str(primitive.get("type", "")).strip().lower()
-            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
 
             if primitive_type == "segment":
                 if len(refs) != 2:
-                    raise ValueError(f"segment {primitive_id} must reference exactly 2 points")
+                    raise ValueError(
+                        f"segment {primitive_id} must reference exactly 2 points"
+                    )
                 missing = [ref for ref in refs if ref not in point_ids]
                 if missing:
-                    raise ValueError(f"segment {primitive_id} references missing points: {missing}")
+                    raise ValueError(
+                        f"segment {primitive_id} references missing points: {missing}"
+                    )
             elif primitive_type == "polygon":
                 if len(refs) < 3:
-                    raise ValueError(f"polygon {primitive_id} must reference at least 3 points")
+                    raise ValueError(
+                        f"polygon {primitive_id} must reference at least 3 points"
+                    )
                 missing = [ref for ref in refs if ref not in point_ids]
                 if missing:
-                    raise ValueError(f"polygon {primitive_id} references missing points: {missing}")
+                    raise ValueError(
+                        f"polygon {primitive_id} references missing points: {missing}"
+                    )
             elif primitive_type == "circle":
                 center = str(primitive.get("center", "")).strip()
                 radius_point = str(primitive.get("radius_point", "")).strip()
                 if not center or not radius_point:
-                    raise ValueError(f"circle {primitive_id} must reference center and radius_point")
-                missing = [ref for ref in [center, radius_point] if ref not in point_ids]
+                    raise ValueError(
+                        f"circle {primitive_id} must reference center and radius_point"
+                    )
+                missing = [
+                    ref for ref in [center, radius_point] if ref not in point_ids
+                ]
                 if missing:
-                    raise ValueError(f"circle {primitive_id} references missing points: {missing}")
+                    raise ValueError(
+                        f"circle {primitive_id} references missing points: {missing}"
+                    )
             elif primitive_type == "arc":
                 center = str(primitive.get("center", "")).strip()
                 if len(refs) != 2:
-                    raise ValueError(f"arc {primitive_id} must reference exactly 2 points")
-                missing = [ref for ref in ([center] + refs) if ref and ref not in point_ids]
+                    raise ValueError(
+                        f"arc {primitive_id} must reference exactly 2 points"
+                    )
+                missing = [
+                    ref for ref in ([center] + refs) if ref and ref not in point_ids
+                ]
                 if not center:
                     raise ValueError(f"arc {primitive_id} must reference center")
                 if missing:
-                    raise ValueError(f"arc {primitive_id} references missing points: {missing}")
+                    raise ValueError(
+                        f"arc {primitive_id} references missing points: {missing}"
+                    )
             elif primitive_type in {"angle", "right_angle"}:
                 if len(refs) != 3:
-                    raise ValueError(f"{primitive_type} {primitive_id} must reference exactly 3 points")
+                    raise ValueError(
+                        f"{primitive_type} {primitive_id} must reference exactly 3 points"
+                    )
                 missing = [ref for ref in refs if ref not in point_ids]
                 if missing:
-                    raise ValueError(f"{primitive_type} {primitive_id} references missing points: {missing}")
+                    raise ValueError(
+                        f"{primitive_type} {primitive_id} references missing points: {missing}"
+                    )
 
-        display = scene.get("display", {}) if isinstance(scene.get("display"), dict) else {}
-        primitive_display = display.get("primitives", {}) if isinstance(display.get("primitives"), dict) else {}
+        display = (
+            scene.get("display", {}) if isinstance(scene.get("display"), dict) else {}
+        )
+        primitive_display = (
+            display.get("primitives", {})
+            if isinstance(display.get("primitives"), dict)
+            else {}
+        )
         for primitive_id, payload in primitive_display.items():
             if not isinstance(payload, dict):
                 continue
@@ -722,33 +1227,59 @@ class TemplateCodeGenerator:
             if str(primitive.get("type", "")).strip().lower() != "segment":
                 continue
             if role == "construction" and style != "dashed":
-                raise ValueError(f"construction segment {primitive_id} must use dashed style")
+                raise ValueError(
+                    f"construction segment {primitive_id} must use dashed style"
+                )
         for relation in scene.get("constraints", []) or []:
             if not isinstance(relation, dict):
                 continue
             relation_type = str(relation.get("type", "")).strip().lower()
-            entities = [str(item).strip() for item in (relation.get("entities") or []) if str(item).strip()]
-            if relation_type not in {"point_in_polygon", "point_outside_polygon"} or len(entities) != 2:
+            entities = [
+                str(item).strip()
+                for item in (relation.get("entities") or [])
+                if str(item).strip()
+            ]
+            if (
+                relation_type not in {"point_in_polygon", "point_outside_polygon"}
+                or len(entities) != 2
+            ):
                 continue
             point_id, polygon_id = entities
             polygon = primitive_map.get(polygon_id)
             if point_id not in point_lookup:
-                raise ValueError(f"drawable scene constraint {relation_type} references missing point {point_id}")
+                raise ValueError(
+                    f"drawable scene constraint {relation_type} references missing point {point_id}"
+                )
             if not isinstance(polygon, dict):
-                raise ValueError(f"drawable scene constraint {relation_type} references missing polygon {polygon_id}")
-            refs = [str(item).strip() for item in (polygon.get("points") or []) if str(item).strip()]
+                raise ValueError(
+                    f"drawable scene constraint {relation_type} references missing polygon {polygon_id}"
+                )
+            refs = [
+                str(item).strip()
+                for item in (polygon.get("points") or [])
+                if str(item).strip()
+            ]
             if len(refs) < 3:
-                raise ValueError(f"drawable scene polygon {polygon_id} has invalid point refs")
+                raise ValueError(
+                    f"drawable scene polygon {polygon_id} has invalid point refs"
+                )
             missing_polygon_points = [ref for ref in refs if ref not in point_lookup]
             if missing_polygon_points:
                 raise ValueError(
                     f"drawable scene polygon {polygon_id} references missing points: {missing_polygon_points}"
                 )
-            inside = self._point_in_polygon(point_lookup[point_id], [point_lookup[ref] for ref in refs])
+            polygon_coords = [point_lookup[ref] for ref in refs]
+            if self._polygon_is_degenerate(polygon_coords):
+                continue
+            inside = self._point_in_polygon(point_lookup[point_id], polygon_coords)
             if relation_type == "point_in_polygon" and not inside:
-                raise ValueError(f"drawable scene violates point_in_polygon for {point_id} in {polygon_id}")
+                raise ValueError(
+                    f"drawable scene violates point_in_polygon for {point_id} in {polygon_id}"
+                )
             if relation_type == "point_outside_polygon" and inside:
-                raise ValueError(f"drawable scene violates point_outside_polygon for {point_id} outside {polygon_id}")
+                raise ValueError(
+                    f"drawable scene violates point_outside_polygon for {point_id} outside {polygon_id}"
+                )
 
     def _point_in_polygon(
         self,
@@ -763,8 +1294,11 @@ class TemplateCodeGenerator:
             return False
         for index in range(total):
             x1, y1 = float(polygon[index][0]), float(polygon[index][1])
-            x2, y2 = float(polygon[(index + 1) % total][0]), float(polygon[(index + 1) % total][1])
-            intersects = ((y1 > y) != (y2 > y))
+            x2, y2 = (
+                float(polygon[(index + 1) % total][0]),
+                float(polygon[(index + 1) % total][1]),
+            )
+            intersects = (y1 > y) != (y2 > y)
             if not intersects:
                 continue
             cross_x = (x2 - x1) * (y - y1) / ((y2 - y1) or 1e-9) + x1
@@ -772,11 +1306,97 @@ class TemplateCodeGenerator:
                 inside = not inside
         return inside
 
+    def _polygon_is_degenerate(self, polygon: List[List[float]]) -> bool:
+        total = len(polygon)
+        if total < 3:
+            return True
+        area_twice = 0.0
+        for index in range(total):
+            x1, y1 = float(polygon[index][0]), float(polygon[index][1])
+            x2, y2 = (
+                float(polygon[(index + 1) % total][0]),
+                float(polygon[(index + 1) % total][1]),
+            )
+            area_twice += x1 * y2 - x2 * y1
+        return abs(area_twice) <= 1e-3
+
     def _build_class_name(self, project: Any) -> str:
         source = str(getattr(project, "problem_text", "") or "math_animation")
         digest = hashlib.sha1(source.encode("utf-8", errors="ignore")).hexdigest()[:8]
         # 固定短类名，显著降低 Windows 下 partial_movie_files 路径长度。
         return f"SceneMain_{digest}"
+
+    def _visual_geometry_source(
+        self, project: Any, scene: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        payload = (
+            scene.get("_visual_geometry_source") if isinstance(scene, dict) else None
+        )
+        if isinstance(payload, dict):
+            result = dict(payload)
+        else:
+            result = {}
+
+        image_path = str(
+            result.get("image_path") or getattr(project, "problem_image", "") or ""
+        ).strip()
+        mode = str(result.get("mode") or "").strip()
+        if not mode:
+            mode = "image_overlay" if image_path else "vector_reconstruction"
+        if mode == "image_overlay" and not image_path:
+            mode = "vector_reconstruction"
+
+        result["mode"] = mode
+        result["image_path"] = image_path.replace("\\", "/")
+        return result
+
+    def _geometry_area_scene_box(
+        self,
+        frame_width: float,
+        frame_height: float,
+        left_panel_x_max: float,
+        safe_margin: float,
+    ) -> Tuple[float, float, float, float]:
+        half_w = frame_width / 2.0
+        half_h = frame_height / 2.0
+        x_min = -half_w + safe_margin
+        x_max = left_panel_x_max - safe_margin * 0.2
+        y_min = -half_h + safe_margin
+        y_max = half_h - safe_margin
+        return (x_min, y_min, x_max, y_max)
+
+    def _image_aligned_scene_box(
+        self,
+        visual_geometry: Dict[str, Any],
+        frame_width: float,
+        frame_height: float,
+        left_panel_x_max: float,
+        safe_margin: float,
+    ) -> Tuple[float, float, float, float]:
+        area = self._geometry_area_scene_box(
+            frame_width, frame_height, left_panel_x_max, safe_margin
+        )
+        crop_size = visual_geometry.get("crop_size")
+        if not isinstance(crop_size, list) or len(crop_size) != 2:
+            return area
+        try:
+            crop_w = max(float(crop_size[0]), 1.0)
+            crop_h = max(float(crop_size[1]), 1.0)
+        except (TypeError, ValueError):
+            return area
+        area_w = max(area[2] - area[0], 1e-6)
+        area_h = max(area[3] - area[1], 1e-6)
+        scale = min(area_w / crop_w, area_h / crop_h)
+        render_w = crop_w * scale
+        render_h = crop_h * scale
+        center_x = (area[0] + area[2]) / 2.0
+        center_y = (area[1] + area[3]) / 2.0
+        return (
+            center_x - render_w / 2.0,
+            center_y - render_h / 2.0,
+            center_x + render_w / 2.0,
+            center_y + render_h / 2.0,
+        )
 
     def _safe_text(self, text: str) -> str:
         return text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
@@ -845,6 +1465,29 @@ class TemplateCodeGenerator:
             lines.append(current)
         return "\n".join(lines[:4])
 
+    def _formula_panel_key(self, text: str) -> str:
+        normalized = self._clean_display_text(text).upper()
+        normalized = normalized.replace("＝", "=").replace("，", ",")
+        normalized = normalized.replace("∥", "//")
+        return re.sub(r"\s+", "", normalized)
+
+    def _formula_references_unknown_points(
+        self,
+        text: str,
+        known_point_ids: Set[str],
+    ) -> bool:
+        if not known_point_ids:
+            return False
+        candidate = self._clean_display_text(text).upper().replace("′", "'")
+        if not re.search(r"[∠△⊥∥=]|[A-Z][A-Z]", candidate):
+            return False
+        candidate = re.sub(r"(?:SIN|COS|TAN|COT|SEC|CSC|LOG|LN|SQRT)", "", candidate)
+        refs = set(re.findall(r"[A-Z](?:\d+|')?", candidate))
+        if not refs:
+            return False
+        unknown_refs = refs - known_point_ids
+        return bool(unknown_refs and refs.intersection(known_point_ids))
+
     def _parse_line_length_label(self, text: str) -> Optional[Tuple[str, str]]:
         candidate = text.strip()
         match = re.fullmatch(
@@ -864,9 +1507,14 @@ class TemplateCodeGenerator:
             return False
         if re.search(r"[\u4e00-\u9fff]", candidate):
             return False
-        return any(token in candidate for token in ["=", "+", "-", "√", "²", "×", "/", "cm", "^"])
+        return any(
+            token in candidate
+            for token in ["=", "+", "-", "√", "²", "×", "/", "cm", "^"]
+        )
 
-    def _coordinate_bbox(self, point_lookup: Dict[str, List[float]]) -> Tuple[float, float, float, float]:
+    def _coordinate_bbox(
+        self, point_lookup: Dict[str, List[float]]
+    ) -> Tuple[float, float, float, float]:
         if not point_lookup:
             return (0.0, 1.0, 0.0, 1.0)
         xs = [coord[0] for coord in point_lookup.values()]
@@ -889,9 +1537,41 @@ class TemplateCodeGenerator:
         frame_height: float,
         left_panel_x_max: float,
         safe_margin: float,
+        scene_box: Optional[Tuple[float, float, float, float]] = None,
+        point_payload_lookup: Optional[Dict[str, Dict[str, Any]]] = None,
+        visual_geometry: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Tuple[float, float]]:
         result: Dict[str, Tuple[float, float]] = {}
+        calibration = (
+            visual_geometry.get("calibration")
+            if isinstance(visual_geometry, dict)
+            else None
+        )
+        use_calibration = (
+            scene_box is not None
+            and isinstance(calibration, dict)
+            and calibration.get("is_valid") is True
+        )
         for point_id, coord in point_lookup.items():
+            if use_calibration and visual_geometry:
+                calibrated_scene_xy = self._point_coord_to_calibrated_scene_xy(
+                    coord,
+                    visual_geometry,
+                    scene_box,
+                )
+                if calibrated_scene_xy is not None:
+                    result[point_id] = calibrated_scene_xy
+                    continue
+            pixel_scene_xy = None
+            if scene_box is not None and point_payload_lookup and visual_geometry:
+                pixel_scene_xy = self._point_pixel_to_scene_xy(
+                    point_payload_lookup.get(point_id),
+                    visual_geometry,
+                    scene_box,
+                )
+            if pixel_scene_xy is not None:
+                result[point_id] = pixel_scene_xy
+                continue
             result[point_id] = self._coord_to_geometry_scene_xy(
                 coord[0],
                 coord[1],
@@ -900,6 +1580,7 @@ class TemplateCodeGenerator:
                 frame_height,
                 left_panel_x_max,
                 safe_margin,
+                scene_box=scene_box,
             )
         return result
 
@@ -912,14 +1593,20 @@ class TemplateCodeGenerator:
         frame_height: float,
         left_panel_x_max: float,
         safe_margin: float,
+        scene_box: Optional[Tuple[float, float, float, float]] = None,
     ) -> Tuple[float, float]:
         min_x, max_x, min_y, max_y = bbox
-        half_w = frame_width / 2.0
-        half_h = frame_height / 2.0
-        x_min_scene = -half_w + safe_margin
-        x_max_scene = left_panel_x_max - safe_margin * 0.2
-        y_min_scene = -half_h + safe_margin
-        y_max_scene = half_h - safe_margin
+        if scene_box is None:
+            x_min_scene, y_min_scene, x_max_scene, y_max_scene = (
+                self._geometry_area_scene_box(
+                    frame_width,
+                    frame_height,
+                    left_panel_x_max,
+                    safe_margin,
+                )
+            )
+        else:
+            x_min_scene, y_min_scene, x_max_scene, y_max_scene = scene_box
 
         data_width = max(max_x - min_x, 1e-6)
         data_height = max(max_y - min_y, 1e-6)
@@ -935,6 +1622,157 @@ class TemplateCodeGenerator:
         sx = scene_center_x + (float(x) - data_center_x) * scale
         sy = scene_center_y + (float(y) - data_center_y) * scale
         return sx, sy
+
+    def _point_coord_to_calibrated_scene_xy(
+        self,
+        coord: List[float],
+        visual_geometry: Dict[str, Any],
+        scene_box: Tuple[float, float, float, float],
+    ) -> Optional[Tuple[float, float]]:
+        calibration = visual_geometry.get("calibration")
+        if not isinstance(calibration, dict) or calibration.get("is_valid") is not True:
+            return None
+        transform = calibration.get("transform")
+        if not isinstance(transform, dict):
+            return None
+        try:
+            a = float(transform.get("a"))
+            b = float(transform.get("b"))
+            tx = float(transform.get("tx"))
+            ty = float(transform.get("ty"))
+            x = float(coord[0])
+            y = float(coord[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+
+        source_y = -y if bool(transform.get("invert_geometry_y", True)) else y
+        crop_x = a * x - b * source_y + tx
+        crop_y = b * x + a * source_y + ty
+
+        crop_size = calibration.get("crop_size") or visual_geometry.get("crop_size")
+        if not isinstance(crop_size, list) or len(crop_size) != 2:
+            return None
+        try:
+            crop_w = max(float(crop_size[0]), 1.0)
+            crop_h = max(float(crop_size[1]), 1.0)
+        except (TypeError, ValueError):
+            return None
+
+        x_min_scene, y_min_scene, x_max_scene, y_max_scene = scene_box
+        sx = x_min_scene + (crop_x / crop_w) * (x_max_scene - x_min_scene)
+        sy = y_max_scene - (crop_y / crop_h) * (y_max_scene - y_min_scene)
+        return sx, sy
+
+    def _point_pixel_to_scene_xy(
+        self,
+        payload: Optional[Dict[str, Any]],
+        visual_geometry: Dict[str, Any],
+        scene_box: Tuple[float, float, float, float],
+    ) -> Optional[Tuple[float, float]]:
+        pixel = self._extract_point_pixel_coord(payload)
+        if pixel is None:
+            return None
+
+        crop_size = visual_geometry.get("crop_size")
+        source_size = visual_geometry.get("source_size")
+        crop_bbox = visual_geometry.get("crop_bbox")
+        crop_w = crop_h = None
+        if isinstance(crop_size, list) and len(crop_size) == 2:
+            try:
+                crop_w = max(float(crop_size[0]), 1.0)
+                crop_h = max(float(crop_size[1]), 1.0)
+            except (TypeError, ValueError):
+                crop_w = crop_h = None
+        if crop_w is None and isinstance(source_size, list) and len(source_size) == 2:
+            try:
+                crop_w = max(float(source_size[0]), 1.0)
+                crop_h = max(float(source_size[1]), 1.0)
+            except (TypeError, ValueError):
+                crop_w = crop_h = None
+        if crop_w is None or crop_h is None:
+            return None
+
+        x, y = pixel
+        space = self._point_pixel_space(payload)
+        if isinstance(crop_bbox, list) and len(crop_bbox) == 4 and space != "crop":
+            try:
+                x1, y1, x2, y2 = [float(v) for v in crop_bbox]
+            except (TypeError, ValueError):
+                x1 = y1 = 0.0
+                x2 = y2 = 0.0
+            if space == "source" or (x1 <= x <= x2 and y1 <= y <= y2):
+                x -= x1
+                y -= y1
+
+        if x < -1e-6 or y < -1e-6 or x > crop_w + 1e-6 or y > crop_h + 1e-6:
+            return None
+
+        x_min_scene, y_min_scene, x_max_scene, y_max_scene = scene_box
+        sx = x_min_scene + (x / crop_w) * (x_max_scene - x_min_scene)
+        sy = y_max_scene - (y / crop_h) * (y_max_scene - y_min_scene)
+        return sx, sy
+
+    def _extract_point_pixel_coord(
+        self, payload: Optional[Dict[str, Any]]
+    ) -> Optional[Tuple[float, float]]:
+        if not isinstance(payload, dict):
+            return None
+
+        for key in (
+            "pixel_coord",
+            "pixel_position",
+            "image_coord",
+            "image_position",
+            "bbox_position",
+            "source_pixel",
+        ):
+            value = payload.get(key)
+            coord = self._coerce_xy_pair(value)
+            if coord is not None:
+                return coord
+
+        visual = payload.get("visual")
+        if isinstance(visual, dict):
+            for key in ("pixel_coord", "pixel_position", "bbox_position"):
+                coord = self._coerce_xy_pair(visual.get(key))
+                if coord is not None:
+                    return coord
+        return None
+
+    def _point_pixel_space(self, payload: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for source in (
+            payload,
+            payload.get("visual") if isinstance(payload.get("visual"), dict) else {},
+        ):
+            for key in (
+                "pixel_coord_space",
+                "pixel_space",
+                "coordinate_space",
+                "image_space",
+            ):
+                value = str(source.get(key, "")).strip().lower()
+                if value in {"crop", "cropped", "crop_image"}:
+                    return "crop"
+                if value in {"source", "original", "original_image", "full_image"}:
+                    return "source"
+        return ""
+
+    def _coerce_xy_pair(self, value: Any) -> Optional[Tuple[float, float]]:
+        if isinstance(value, dict):
+            if "x" not in value or "y" not in value:
+                return None
+            try:
+                return float(value["x"]), float(value["y"])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                return float(value[0]), float(value[1])
+            except (TypeError, ValueError):
+                return None
+        return None
 
     def _display_bool(
         self,
@@ -968,8 +1806,21 @@ class TemplateCodeGenerator:
             return default
         upper_name = name.upper()
         known_colors = {
-            "WHITE", "BLUE", "BLUE_E", "GREEN", "YELLOW", "RED", "ORANGE",
-            "GRAY", "GREY", "PURPLE", "TEAL", "PINK", "GOLD", "MAROON", "BLACK",
+            "WHITE",
+            "BLUE",
+            "BLUE_E",
+            "GREEN",
+            "YELLOW",
+            "RED",
+            "ORANGE",
+            "GRAY",
+            "GREY",
+            "PURPLE",
+            "TEAL",
+            "PINK",
+            "GOLD",
+            "MAROON",
+            "BLACK",
         }
         if upper_name in known_colors:
             return upper_name
@@ -991,14 +1842,20 @@ class TemplateCodeGenerator:
                 continue
             primitive_id = str(primitive.get("id", "")).strip()
             primitive_type = str(primitive.get("type", "")).strip().lower()
-            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
             if not primitive_id:
                 continue
 
             # 仅允许引用当前场景已可绘制的 primitive，避免后续访问未注册对象。
             drawable = True
             if primitive_type == "segment":
-                if not self._segment_visible_for_render(primitive_id, primitive_display):
+                if not self._segment_visible_for_render(
+                    primitive_id, primitive_display
+                ):
                     continue
                 drawable = len(refs) == 2 and all(ref in point_ids for ref in refs)
             elif primitive_type == "polygon":
@@ -1006,10 +1863,20 @@ class TemplateCodeGenerator:
             elif primitive_type == "circle":
                 center = str(primitive.get("center", "")).strip()
                 radius_point = str(primitive.get("radius_point", "")).strip()
-                drawable = bool(center and radius_point and center in point_ids and radius_point in point_ids)
+                drawable = bool(
+                    center
+                    and radius_point
+                    and center in point_ids
+                    and radius_point in point_ids
+                )
             elif primitive_type == "arc":
                 center = str(primitive.get("center", "")).strip()
-                drawable = bool(center and center in point_ids and len(refs) == 2 and all(ref in point_ids for ref in refs))
+                drawable = bool(
+                    center
+                    and center in point_ids
+                    and len(refs) == 2
+                    and all(ref in point_ids for ref in refs)
+                )
             elif primitive_type in {"angle", "right_angle"}:
                 drawable = len(refs) == 3 and all(ref in point_ids for ref in refs)
             if not drawable:
@@ -1023,8 +1890,10 @@ class TemplateCodeGenerator:
             )
             if not show_primitive and primitive_type in {"angle", "right_angle"}:
                 continue
-            primitive_kind[primitive_id] = "line" if primitive_type == "segment" else "object"
-            default = "BLUE_E" if primitive_type == "segment" else "BLUE"
+            primitive_kind[primitive_id] = (
+                "line" if primitive_type == "segment" else "object"
+            )
+            default = "BLACK"
             primitive_color[primitive_id] = self._manim_color_expr(
                 self._display_value(primitive_display, primitive_id, "color"),
                 default=default,
@@ -1035,26 +1904,32 @@ class TemplateCodeGenerator:
             entity_id = str(raw)
             safe = self._safe_text(entity_id)
             if entity_id in point_ids:
-                targets.append({
-                    "id": entity_id,
-                    "expr": f"points['{safe}']",
-                    "kind": "point",
-                    "default_color": "WHITE",
-                })
+                targets.append(
+                    {
+                        "id": entity_id,
+                        "expr": f"points['{safe}']",
+                        "kind": "point",
+                        "default_color": "BLACK",
+                    }
+                )
             elif primitive_kind.get(entity_id) == "line":
-                targets.append({
-                    "id": entity_id,
-                    "expr": f"lines['{safe}']",
-                    "kind": "line",
-                    "default_color": primitive_color.get(entity_id, "BLUE_E"),
-                })
+                targets.append(
+                    {
+                        "id": entity_id,
+                        "expr": f"lines['{safe}']",
+                        "kind": "line",
+                        "default_color": primitive_color.get(entity_id, "BLACK"),
+                    }
+                )
             elif primitive_kind.get(entity_id) == "object":
-                targets.append({
-                    "id": entity_id,
-                    "expr": f"objects['{safe}']",
-                    "kind": "object",
-                    "default_color": primitive_color.get(entity_id, "BLUE"),
-                })
+                targets.append(
+                    {
+                        "id": entity_id,
+                        "expr": f"objects['{safe}']",
+                        "kind": "object",
+                        "default_color": primitive_color.get(entity_id, "BLUE_E"),
+                    }
+                )
 
         deduped: List[Dict[str, str]] = []
         seen = set()
@@ -1066,7 +1941,9 @@ class TemplateCodeGenerator:
             deduped.append(target)
         return deduped
 
-    def _segment_source(self, primitive_id: str, primitive_display: Dict[str, Any]) -> str:
+    def _segment_source(
+        self, primitive_id: str, primitive_display: Dict[str, Any]
+    ) -> str:
         payload = primitive_display.get(primitive_id)
         if not isinstance(payload, dict):
             return ""
@@ -1079,13 +1956,21 @@ class TemplateCodeGenerator:
             return "approved_auxiliary"
         return "given"
 
-    def _segment_visible_for_render(self, primitive_id: str, primitive_display: Dict[str, Any]) -> bool:
+    def _segment_visible_for_render(
+        self, primitive_id: str, primitive_display: Dict[str, Any]
+    ) -> bool:
         payload = primitive_display.get(primitive_id)
         if isinstance(payload, dict):
             if payload.get("show") is False:
                 return False
             source = self._segment_source(primitive_id, primitive_display)
-            if source and source not in {"given", "approved_auxiliary"}:
+            if source and source not in {
+                "given",
+                "approved_auxiliary",
+                "fold_template",
+                "fold_transform",
+                "visual_observed",
+            }:
                 return False
             role = str(payload.get("role", "")).strip().lower()
             if role == "construction" and source != "approved_auxiliary":
@@ -1094,37 +1979,9 @@ class TemplateCodeGenerator:
 
     def _scene_points(self, scene: Dict[str, Any]) -> Dict[str, List[float]]:
         """从 coordinate_scene 或旧 scene_graph 中提取点坐标。"""
-        result: Dict[str, List[float]] = {}
         if not isinstance(scene, dict):
-            return result
-        points = scene.get("points", {})
-        if isinstance(points, dict):
-            for pid, payload in points.items():
-                if not isinstance(payload, dict):
-                    continue
-                coord = payload.get("coord")
-                pos = coord if isinstance(coord, list) and len(coord) == 2 else payload.get("pos")
-                if not isinstance(pos, list) or len(pos) != 2:
-                    continue
-                try:
-                    result[str(pid)] = [float(pos[0]), float(pos[1])]
-                except (TypeError, ValueError):
-                    continue
-            return result
-
-        if isinstance(points, list):
-            for item in points:
-                if not isinstance(item, dict):
-                    continue
-                point_id = str(item.get("id", "")).strip()
-                coord = item.get("coord")
-                if not point_id or not isinstance(coord, list) or len(coord) != 2:
-                    continue
-                try:
-                    result[point_id] = [float(coord[0]), float(coord[1])]
-                except (TypeError, ValueError):
-                    continue
-        return result
+            return {}
+        return scene_point_coordinates(scene)
 
     def _point_payload_lookup(self, scene: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         lookup: Dict[str, Dict[str, Any]] = {}
@@ -1157,7 +2014,10 @@ class TemplateCodeGenerator:
             return explicit.strip()
 
         derived = payload.get("derived") if isinstance(payload, dict) else None
-        if isinstance(derived, dict) and str(derived.get("type", "")).strip().lower() == "reflect_point":
+        if (
+            isinstance(derived, dict)
+            and str(derived.get("type", "")).strip().lower() == "reflect_point"
+        ):
             source_id = str(derived.get("source", "")).strip()
             if source_id:
                 return f"{source_id}'"
@@ -1174,7 +2034,14 @@ class TemplateCodeGenerator:
         point_display: Dict[str, Any],
         payload: Optional[Dict[str, Any]],
     ) -> Tuple[float, float]:
-        explicit = str(self._display_value(point_display, point_id, "label_direction", "") or "").strip().lower()
+        explicit = (
+            str(
+                self._display_value(point_display, point_id, "label_direction", "")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if explicit:
             mapping = {
                 "up": (0.0, 0.28),
@@ -1213,7 +2080,10 @@ class TemplateCodeGenerator:
             prev_pos = prev_points.get(pid)
             if prev_pos is None:
                 continue
-            if abs(curr_pos[0] - prev_pos[0]) > eps or abs(curr_pos[1] - prev_pos[1]) > eps:
+            if (
+                abs(curr_pos[0] - prev_pos[0]) > eps
+                or abs(curr_pos[1] - prev_pos[1]) > eps
+            ):
                 moved[pid] = curr_pos
         return moved
 
@@ -1232,7 +2102,9 @@ class TemplateCodeGenerator:
         candidate = step_scene.get("scene", {})
         if not isinstance(candidate, dict):
             return base_scene
-        if set(self._scene_points(candidate).keys()) != set(self._scene_points(base_scene).keys()):
+        if set(self._scene_points(candidate).keys()) != set(
+            self._scene_points(base_scene).keys()
+        ):
             return base_scene
         return candidate
 
@@ -1242,7 +2114,9 @@ class TemplateCodeGenerator:
         coordinate_scene_data: Dict[str, Any],
         step_contexts: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        base_scene = coordinate_scene_data if isinstance(coordinate_scene_data, dict) else {}
+        base_scene = (
+            coordinate_scene_data if isinstance(coordinate_scene_data, dict) else {}
+        )
         if self._scene_points(base_scene):
             return base_scene
         for ctx in step_contexts:
@@ -1363,10 +2237,19 @@ class TemplateCodeGenerator:
             "\u2265": r"\ge ",
             "\u2260": r"\neq ",
             "\u2220": r"\angle ",
+            "\u00b2": "^2",
             "\u00b0": r"^{\circ}",
         }
         for source, target in replacements.items():
             latex = latex.replace(source, target)
+        latex = re.sub(r"√\(([^()]+)\)", r"\\sqrt{\1}", latex)
+        latex = re.sub(r"√([A-Za-z0-9]+)", r"\\sqrt{\1}", latex)
+        latex = re.sub(
+            r"\b(sin|cos|tan)\s*([A-Za-z])",
+            lambda match: f"\\{match.group(1)} {match.group(2)}",
+            latex,
+            flags=re.IGNORECASE,
+        )
         latex = latex.replace("cm^2", r"\\,\\mathrm{cm}^2")
         latex = re.sub(r"(?<![A-Za-z])cm\b", r"\\,\\mathrm{cm}", latex)
         latex = re.sub(r"\s+", " ", latex).strip()
@@ -1380,7 +2263,18 @@ class TemplateCodeGenerator:
             return False
         if re.search(r"[\u4e00-\u9fff]", candidate):
             return False
-        formula_tokens = ["=", "+", "-", "/", "cm", "^", "//", "\u2220", "\u25b3", "\u00b0"]
+        formula_tokens = [
+            "=",
+            "+",
+            "-",
+            "/",
+            "cm",
+            "^",
+            "//",
+            "\u2220",
+            "\u25b3",
+            "\u00b0",
+        ]
         return any(token in candidate for token in formula_tokens)
 
     def _contains_mojibake(self, text: str) -> bool:

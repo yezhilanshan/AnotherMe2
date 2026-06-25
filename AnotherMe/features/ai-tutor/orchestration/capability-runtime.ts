@@ -132,6 +132,17 @@ export class CapabilityRuntime {
     const contextStart = Date.now();
     let learningContext: LearningContext | undefined = request.learningContext;
     try {
+      emitTrace({
+        type: 'stage_start',
+        timestamp: Date.now(),
+        requestId: request.requestId,
+        stage: 'context_build',
+        payload: {
+          stage: 'context_build',
+          capabilityId: request.capabilityId,
+          userId: request.userId,
+        },
+      });
       if (!learningContext) {
         learningContext = await this.options.buildContext({
           userId: request.userId,
@@ -168,6 +179,17 @@ export class CapabilityRuntime {
     const guardStart = Date.now();
     let guardResult: CapabilityGuardResult;
     try {
+      emitTrace({
+        type: 'stage_start',
+        timestamp: Date.now(),
+        requestId: request.requestId,
+        stage: 'guard_check',
+        payload: {
+          stage: 'guard_check',
+          capabilityId: request.capabilityId,
+          userId: request.userId,
+        },
+      });
       guardResult = await this.options.checkGuard(request.capabilityId);
       stages.push({
         stage: 'guard_check',
@@ -227,9 +249,72 @@ export class CapabilityRuntime {
 
     try {
       const validatedPayload = handler.validatePayload(request.payload);
-      const handlerRequest: CapabilityRequest = { ...request, payload: validatedPayload };
+      const handlerRequest: CapabilityRequest = {
+        ...request,
+        payload: validatedPayload,
+        learningContext,
+      };
 
       for await (const stageResult of handler.execute(handlerRequest)) {
+        if (stageResult.stage === 'agent_stream') {
+          const agentEvent = stageResult.output?.agentEvent as
+            | { type?: string; data?: Record<string, unknown> }
+            | undefined;
+          if (agentEvent?.type === 'tool_start') {
+            emitTrace({
+              type: 'tool_invoked',
+              timestamp: Date.now(),
+              requestId: request.requestId,
+              stage: 'agent_invoke',
+              payload: {
+                toolId: String(agentEvent.data?.toolId || agentEvent.data?.toolName || 'tool'),
+                capabilityId: request.capabilityId,
+                params: {
+                  toolName: agentEvent.data?.toolName,
+                },
+              },
+            });
+          } else if (agentEvent?.type === 'tool_end') {
+            emitTrace({
+              type: 'tool_result',
+              timestamp: Date.now(),
+              requestId: request.requestId,
+              stage: 'agent_invoke',
+              payload: {
+                toolId: String(agentEvent.data?.toolId || agentEvent.data?.toolName || 'tool'),
+                success: agentEvent.data?.success !== false,
+                resultSummary:
+                  typeof agentEvent.data?.output === 'string'
+                    ? agentEvent.data.output.slice(0, 200)
+                    : undefined,
+                errorMessage:
+                  typeof agentEvent.data?.error === 'string'
+                    ? agentEvent.data.error.slice(0, 200)
+                    : undefined,
+              },
+              durationMs: stageResult.durationMs,
+            });
+          }
+        } else {
+          emitTrace({
+            type: stageResult.success ? 'stage_start' : 'error',
+            timestamp: Date.now(),
+            requestId: request.requestId,
+            stage: stageResult.stage,
+            payload: stageResult.success
+              ? {
+                  stage: stageResult.stage,
+                  capabilityId: request.capabilityId,
+                  userId: request.userId,
+                }
+              : {
+                  code: stageResult.error?.code || 'STAGE_FAILED',
+                  message: stageResult.error?.message || `${stageResult.stage} failed`,
+                  stage: stageResult.stage,
+                },
+            durationMs: stageResult.durationMs,
+          });
+        }
         stages.push(stageResult);
         yield stageResult;
       }
@@ -241,6 +326,18 @@ export class CapabilityRuntime {
 
       // Persist
       await this.options.persistResult(result, request);
+      emitTrace({
+        type: 'complete',
+        timestamp: Date.now(),
+        requestId: request.requestId,
+        stage: 'complete',
+        payload: {
+          capabilityId: request.capabilityId,
+          success: result.success,
+          totalDurationMs: result.totalDurationMs,
+        },
+        durationMs: result.totalDurationMs,
+      });
       return result;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -253,6 +350,17 @@ export class CapabilityRuntime {
       });
       const result = this._buildResult(false, stages, traceEvents, startTime, err);
       await this.options.persistResult(result, request);
+      emitTrace({
+        type: 'error',
+        timestamp: Date.now(),
+        requestId: request.requestId,
+        stage: 'error',
+        payload: {
+          code: 'HANDLER_ERROR',
+          message: err.message,
+          stage: 'error',
+        },
+      });
       return result;
     }
   }

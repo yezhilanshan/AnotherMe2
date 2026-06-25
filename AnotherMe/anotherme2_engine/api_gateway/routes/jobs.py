@@ -10,6 +10,7 @@ from ..config import Settings
 from ..db import get_db
 from ..job_service import (
     create_or_get_job,
+    get_problem_job_result_payload,
     mark_job_enqueue_failed,
     reconcile_single_running_problem_video_job_with_artifacts,
     serialize_job,
@@ -102,7 +103,12 @@ def create_jobs_router(settings: Settings, queue_client, check_capability: Calla
                 detail={"error_code": "JOB_NOT_READY", "message": f"Job status={job.status}"},
             )
 
-        return JobResultResponse(job_id=job.id, status=JobStatus(job.status), result=job.result_payload or {})
+        result = (
+            get_problem_job_result_payload(job)
+            if job.job_type == "problem_video_generate"
+            else (job.result_payload or {})
+        )
+        return JobResultResponse(job_id=job.id, status=JobStatus(job.status), result=result)
 
     @router.get("/v1/jobs/{job_id}/trace-events")
     def get_job_trace_events(

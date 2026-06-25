@@ -43,6 +43,20 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+function safeSegment(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'default') return 'default';
+  return trimmed.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'default';
+}
+
+function snapshotFilePath(userId?: string | null): string {
+  const safeUserId = safeSegment(userId || 'default');
+  if (safeUserId === 'default') {
+    return NOTEBOOK_FILE;
+  }
+  return path.join(NOTEBOOK_DIR, safeUserId, 'snapshot.json');
+}
+
 async function writeJsonFileAtomic(filePath: string, data: unknown) {
   const dir = path.dirname(filePath);
   await ensureDir(dir);
@@ -71,7 +85,32 @@ export function normalizeNotebookSnapshot(value: unknown): PersistedNotebookSnap
   };
 }
 
-export async function loadNotebookSnapshot(): Promise<PersistedNotebookSnapshot> {
+export async function loadNotebookSnapshot(userId?: string | null): Promise<PersistedNotebookSnapshot> {
+  try {
+    const filePath = snapshotFilePath(userId);
+    const content = await fs.readFile(filePath, 'utf-8');
+    return normalizeNotebookSnapshot(JSON.parse(content));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  if (userId && safeSegment(userId) !== 'default') {
+    try {
+      const content = await fs.readFile(NOTEBOOK_FILE, 'utf-8');
+      return normalizeNotebookSnapshot(JSON.parse(content));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  return createEmptyNotebookSnapshot();
+}
+
+export async function loadDefaultNotebookSnapshot(): Promise<PersistedNotebookSnapshot> {
   try {
     const content = await fs.readFile(NOTEBOOK_FILE, 'utf-8');
     return normalizeNotebookSnapshot(JSON.parse(content));
@@ -85,11 +124,12 @@ export async function loadNotebookSnapshot(): Promise<PersistedNotebookSnapshot>
 
 export async function saveNotebookSnapshot(
   snapshot: PersistedNotebookSnapshot,
+  userId?: string | null,
 ): Promise<PersistedNotebookSnapshot> {
   const next = normalizeNotebookSnapshot({
     ...snapshot,
     updatedAt: snapshot.updatedAt || Date.now(),
   });
-  await writeJsonFileAtomic(NOTEBOOK_FILE, next);
+  await writeJsonFileAtomic(snapshotFilePath(userId), next);
   return next;
 }

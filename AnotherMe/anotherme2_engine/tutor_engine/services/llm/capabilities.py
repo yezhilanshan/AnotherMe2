@@ -2,8 +2,9 @@
 Provider Capabilities
 =====================
 
-Centralized configuration for LLM provider capabilities.
-This replaces scattered hardcoded checks throughout the codebase.
+Centralized provider capability fallbacks for LLM calls.
+Model-specific runtime choices belong in ``model_catalog.json``; helpers below
+consult that catalog before using these provider defaults.
 
 Usage:
     from tutor_engine.services.llm.capabilities import get_capability, supports_response_format
@@ -145,19 +146,17 @@ DEFAULT_CAPABILITIES: dict[str, object] = {
     "forced_temperature": None,  # None means no forced value, use requested temperature
 }
 
-# Model-specific overrides
-# Format: {model_pattern: {capability: value}}
-# Patterns are matched with case-insensitive startswith
+# Model-family behavior that is intrinsic to API handling rather than a
+# selectable model option. Runtime model choices and vision support should be
+# configured in model_catalog.json.
 MODEL_OVERRIDES: dict[str, dict[str, object]] = {
     "deepseek": {
         "supports_response_format": False,
         "has_thinking_tags": True,
-        "supports_vision": False,
     },
     "deepseek-reasoner": {
         "supports_response_format": False,
         "has_thinking_tags": True,
-        "supports_vision": False,
     },
     "qwen": {
         "has_thinking_tags": True,
@@ -185,20 +184,65 @@ MODEL_OVERRIDES: dict[str, dict[str, object]] = {
     "o3": {
         "forced_temperature": 1.0,
     },
-    # Vision-capable model families
-    "gpt-4o": {"supports_vision": True},
-    "gpt-4-turbo": {"supports_vision": True},
-    "gpt-4-vision": {"supports_vision": True},
-    "claude-3": {"supports_vision": True},
-    "claude-4": {"supports_vision": True},
-    "gemini": {"supports_vision": True},
-    "gemma": {"supports_vision": False, "supports_response_format": False},
-    "llava": {"supports_vision": True},
-    "bakllava": {"supports_vision": True},
-    "moondream": {"supports_vision": True},
-    "minicpm-v": {"supports_vision": True},
-    "gpt-3.5": {"supports_vision": False},
+    "gemma": {"supports_response_format": False},
 }
+
+
+def _as_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _model_catalog_capability(model: str | None, capability: str) -> bool | None:
+    if not model:
+        return None
+
+    try:
+        from tutor_engine.services.config.model_catalog import get_model_catalog_service
+
+        service = get_model_catalog_service()
+        catalog = service.load()
+    except Exception:
+        return None
+
+    models: list[dict] = []
+    active = service.get_active_model(catalog, "llm")
+    if isinstance(active, dict):
+        models.append(active)
+
+    for profile in catalog.get("services", {}).get("llm", {}).get("profiles", []):
+        for item in profile.get("models", []):
+            if isinstance(item, dict):
+                models.append(item)
+
+    model_key = model.strip().lower()
+    for item in models:
+        configured = str(item.get("model") or item.get("id") or "").strip().lower()
+        if configured != model_key:
+            continue
+
+        direct_value = _as_bool(item.get(capability))
+        if direct_value is not None:
+            return direct_value
+
+        capabilities = item.get("capabilities")
+        if isinstance(capabilities, dict):
+            nested_value = _as_bool(capabilities.get(capability))
+            if nested_value is not None:
+                return nested_value
+            if capability == "supports_vision":
+                vision_value = _as_bool(capabilities.get("vision"))
+                if vision_value is not None:
+                    return vision_value
+
+    return None
 
 
 def get_capability(
@@ -227,7 +271,11 @@ def get_capability(
     """
     binding_lower = (binding or "openai").lower()
 
-    # 1. Check model-specific overrides first
+    catalog_value = _model_catalog_capability(model, capability)
+    if catalog_value is not None:
+        return catalog_value
+
+    # 1. Check model-family overrides first
     if model:
         model_lower = model.lower()
         # Sort by pattern length descending to match most specific first

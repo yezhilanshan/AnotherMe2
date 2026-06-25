@@ -15,6 +15,7 @@ import {
 import type { CapabilityDef, CapabilityId, ToolDef, TutorToolName } from './types';
 
 export const CAPABILITIES: CapabilityDef[] = [
+  { id: 'auto', label: '智能导师', description: '苏格拉底式启发教学', icon: Sparkles },
   { id: '', label: '聊天', description: '灵活对话，可使用多种工具', icon: MessageSquare },
   { id: 'deep_solve', label: '深度解题', description: '多步骤推理与问题解决', icon: Zap },
   { id: 'quiz_practice', label: '练习生成', description: '自动验证的题目生成', icon: BookOpen },
@@ -88,6 +89,10 @@ export const TOOL_CONFIG_BY_CAPABILITY: Record<
   '': {
     allowedTools: ['brainstorm', 'rag', 'web_search', 'code_execution', 'reason', 'paper_search'],
     defaultTools: [],
+  },
+  auto: {
+    allowedTools: ['brainstorm', 'rag', 'web_search', 'code_execution', 'reason', 'paper_search'],
+    defaultTools: ['rag', 'web_search', 'code_execution', 'reason'],
   },
   deep_solve: {
     allowedTools: ['rag', 'web_search', 'code_execution', 'reason'],

@@ -7,7 +7,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 
 class VisionTool:
@@ -66,25 +66,31 @@ class VisionTool:
         *,
         model_role: Literal["ocr", "geometry"] = "geometry",
     ) -> str:
-        if not Path(image_path).exists():
-            return f"错误：图片不存在 {image_path}"
+        return self.analyze_images(
+            [image_path],
+            prompt,
+            model_role=model_role,
+        )
 
-        with open(image_path, "rb") as file:
-            image_data = base64.b64encode(file.read()).decode()
+    def analyze_images(
+        self,
+        image_paths: Iterable[str],
+        prompt: str,
+        *,
+        model_role: Literal["ocr", "geometry"] = "geometry",
+    ) -> str:
+        paths = [str(item).strip() for item in image_paths if str(item).strip()]
+        if not paths:
+            return "错误：未提供图片路径"
+        missing = [path for path in paths if not Path(path).exists()]
+        if missing:
+            return f"错误：图片不存在 {missing[0]}"
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
-                    },
-                ],
-            }
-        ]
+        content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image_path in paths:
+            content.append(self._build_image_part(image_path))
 
+        messages = [{"role": "user", "content": content}]
         return self._invoke_llm(messages, model_role=model_role).strip()
 
     def extract_problem_text(self, image_path: str) -> str:
@@ -197,3 +203,20 @@ class VisionTool:
             "service unavailable",
         ]
         return any(marker in error_text for marker in retry_markers)
+
+    def _build_image_part(self, image_path: str) -> Dict[str, Any]:
+        with open(image_path, "rb") as file:
+            image_data = base64.b64encode(file.read()).decode()
+        suffix = Path(image_path).suffix.lower()
+        mime = {
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+        }.get(suffix, "image/jpeg")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{image_data}"},
+        }

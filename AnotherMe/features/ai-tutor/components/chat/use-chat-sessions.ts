@@ -20,6 +20,7 @@ import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
 import { buildDiagnosticSnapshot } from '@/lib/store/diagnostic';
 import type { DiagnosticSessionSnapshot } from '@/lib/types/learning-context';
+import type { TeachingTraceEvent } from '@/lib/types/teaching-trace';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
@@ -29,6 +30,7 @@ import { StreamBuffer } from '@/lib/buffer/stream-buffer';
 import type { AgentStartItem, ActionItem, ToolStartItem, ToolEndItem } from '@/lib/buffer/stream-buffer';
 import type { ToolExecutionTrace } from './tool-trace-panel';
 import type { TutorToolName } from '@/lib/types/tutor-tools';
+import { recordLearningEvent } from '@/lib/learning-events/client';
 import { ActionEngine } from '@/lib/action/engine';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
@@ -105,6 +107,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(new Set());
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolTraces, setToolTraces] = useState<ToolExecutionTrace[]>([]);
+  const [teachingTraces, setTeachingTraces] = useState<TeachingTraceEvent[]>([]);
   const [userReactions, setUserReactions] = useState<UserReaction[]>([]);
   const userReactionsRef = useRef<UserReaction[]>([]);
   useEffect(() => {
@@ -233,6 +236,29 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const addReaction = useCallback(
     (type: UserReaction['type'], targetAgentId?: string) => {
       setUserReactions((prev) => [...prev, { type, timestamp: Date.now(), targetAgentId }]);
+
+      // --- Learning Event: feedback_dislike / feedback_like ---
+      if (type === 'confused' || type === 'boring' || type === 'too_fast') {
+        void recordLearningEvent({
+          eventType: 'feedback_dislike',
+          knowledgePoints: [],
+          payload: {
+            message_id: targetAgentId || '',
+            reason: type,
+          },
+          weight: 1.2,
+        });
+      } else if (type === 'agree' || type === 'want_example') {
+        void recordLearningEvent({
+          eventType: 'feedback_like',
+          knowledgePoints: [],
+          payload: {
+            message_id: targetAgentId || '',
+            reason: type,
+          },
+          weight: 0.7,
+        });
+      }
     },
     [],
   );
@@ -574,6 +600,23 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               ),
             );
 
+            // --- Learning Event: hint_used (when hint tools are invoked) ---
+            if (
+              data.success &&
+              (data.toolName === 'hint' || data.toolName === 'give_hint' || data.toolName === 'rag')
+            ) {
+              void recordLearningEvent({
+                eventType: 'hint_used',
+                knowledgePoints: [],
+                payload: {
+                  hint_id: `tool-${data.toolId}`,
+                  hint_content: (data.output || '').slice(0, 500),
+                  question_id: null,
+                },
+                weight: 1.0,
+              });
+            }
+
             // 将工具结果事件存储到消息的 metadata.events 中
             const messageId = currentMessageIdRef.current;
             if (messageId) {
@@ -740,7 +783,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
 
         const buffer = createBufferForSession(sessionId, sessionType);
-        await processSSEStream(response, sessionId, buffer, controller.signal);
+        await processSSEStream(response, sessionId, buffer, controller.signal, {
+          onTeachingTrace: (event) => {
+            setTeachingTraces((prev) => [...prev.slice(-119), event]);
+          },
+        });
 
         try {
           await buffer.waitUntilDrained();
@@ -844,7 +891,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
         }
 
         const buffer = createBufferForSession(sessionId, sessionType);
-        await processSSEStream(response, sessionId, buffer, controller.signal);
+        await processSSEStream(response, sessionId, buffer, controller.signal, {
+          onTeachingTrace: (event) => {
+            setTeachingTraces((prev) => [...prev.slice(-119), event]);
+          },
+        });
 
         // Wait for buffer to finish playing all items (character animations, delays)
         try {
@@ -1241,6 +1292,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       // 清空之前的工具 traces
       setToolTraces([]);
+      setTeachingTraces([]);
 
       const currentState = useStageStore.getState();
 
@@ -1403,6 +1455,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       // 清空之前的工具 traces
       setToolTraces([]);
+      setTeachingTraces([]);
 
       const now = Date.now();
       const userMessageId = `user-${now}`;
@@ -1423,6 +1476,34 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           createdAt: now,
         },
       };
+
+      // --- Learning Event: asked_question ---
+      const currentSession = sessionsRef.current.find((s) => s.id === sessionId);
+      void recordLearningEvent({
+        eventType: 'asked_question',
+        knowledgePoints: [],
+        payload: {
+          question_text: content.slice(0, 500),
+          question_category: capability || 'chat',
+          is_follow_up: (currentSession?.messages.length ?? 0) > 2,
+        },
+        weight: 0.8,
+      });
+
+      // --- Learning Event: confusion_detected (keyword-based) ---
+      const confusionPatterns = /不懂|不理解|听不懂|还是不会|没明白|什么意思|太难了|看不懂|不明白|搞不清|晕了/;
+      if (confusionPatterns.test(content)) {
+        void recordLearningEvent({
+          eventType: 'confusion_detected',
+          knowledgePoints: [],
+          payload: {
+            detection_method: 'explicit',
+            context: content.slice(0, 200),
+            confidence_score: 0.9,
+          },
+          weight: 1.5,
+        });
+      }
 
       // Read current session data from ref (avoids stale closure AND keeps updater pure)
       const existingSession = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1909,6 +1990,26 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     if (buf) buf.resume();
   }, []);
 
+  /** Pause all lecture buffers, including stale-but-not-disposed buffers. */
+  const pauseAllLectureBuffers = useCallback(() => {
+    for (const [sessionId, buf] of buffersRef.current) {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (session?.type === 'lecture' && !buf.disposed) {
+        buf.pause();
+      }
+    }
+  }, []);
+
+  /** Resume all lecture buffers that are still active in memory. */
+  const resumeAllLectureBuffers = useCallback(() => {
+    for (const [sessionId, buf] of buffersRef.current) {
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (session?.type === 'lecture' && !buf.disposed) {
+        buf.resume();
+      }
+    }
+  }, []);
+
   /** Pause the active live (QA/Discussion) buffer and set sticky intent. Returns true if paused. */
   const pauseActiveLiveBuffer = useCallback((): boolean => {
     const active = sessionsRef.current.find(
@@ -1942,6 +2043,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     expandedSessionIds,
     isStreaming,
     toolTraces,
+    teachingTraces,
     userReactions,
     addReaction,
     clearReactions,
@@ -1959,6 +2061,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     getLectureMessageId,
     pauseBuffer,
     resumeBuffer,
+    pauseAllLectureBuffers,
+    resumeAllLectureBuffers,
     pauseActiveLiveBuffer,
     resumeActiveLiveBuffer,
     deleteMessage,

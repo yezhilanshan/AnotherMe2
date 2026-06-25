@@ -1,0 +1,17 @@
+{
+  "defaultModel": "qwen3.7-plus",
+  "availableModels": [
+    {
+      "id": "qwen3.7-plus",
+      "label": "Qwen 3.7 Plus",
+      "provider": "通义千问",
+      "description": "DashScope vision-capable model for text and image chat"
+    },
+    {
+      "id": "qwen3.6-max-preview",
+      "label": "Qwen 3.6 Max",
+      "provider": "通义千问",
+      "description": "DashScope text model"
+    }
+  ]
+}

@@ -385,7 +385,7 @@ def create_app(
     app.include_router(create_messages_router(settings, event_bus, conversation_hub))
 
     app.include_router(create_ai_learning_router(settings))
-    app.include_router(create_ai_chat_router(settings))
+    app.include_router(create_ai_chat_router(settings, storage))
     app.include_router(create_knowledge_router(settings))
 
     # 静态文件服务：让 /api/outputs/ 可以访问 math_animator 等生成的视频/图片

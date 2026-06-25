@@ -932,6 +932,58 @@
   font-weight: 700;
 }
 
+.ai-tutor-response,
+.ai-tutor-response-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ai-tutor-response-markdown :where(pre, table, img, video, iframe, .katex-display) {
+  max-width: 100%;
+}
+
+.ai-tutor-response-markdown :where(pre, .katex-display) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-tutor-response-markdown :where(table) {
+  width: max-content;
+  min-width: 100%;
+}
+
+.ai-tutor-response-markdown :where(code, kbd, samp) {
+  overflow-wrap: anywhere;
+}
+
+.ai-tutor-response-markdown :where(pre code) {
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+@media (max-width: 640px) {
+  .ai-tutor-markdown {
+    line-height: 1.62;
+  }
+
+  .ai-tutor-response-markdown :where(h1, h2) {
+    font-size: 1.05rem;
+    line-height: 1.35;
+  }
+
+  .ai-tutor-response-markdown :where(h3, h4) {
+    font-size: 0.98rem;
+    line-height: 1.4;
+  }
+
+  .ai-tutor-response-markdown :where(pre) {
+    border-radius: 0.5rem;
+    font-size: 0.78rem;
+  }
+}
+
 /* Safe area insets for notched/punch-hole devices */
 :root {
   --sat: env(safe-area-inset-top);

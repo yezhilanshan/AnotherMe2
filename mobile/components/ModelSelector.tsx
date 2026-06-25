@@ -8,7 +8,9 @@ import {
   StyleSheet,
   SafeAreaView,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { AVAILABLE_MODELS, type ModelDef } from '../lib/config';
+import { colors } from '../lib/theme';
 
 interface ModelSelectorProps {
   visible: boolean;
@@ -68,7 +70,9 @@ export function ModelSelector({ visible, selectedModel, onSelect, onClose }: Mod
                     <Text style={[styles.modelName, isSelected && styles.modelNameSelected]}>
                       {item.label}
                     </Text>
-                    {isSelected && <Text style={styles.checkmark}>✓</Text>}
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                    )}
                   </View>
                   <Text style={styles.modelProvider}>{item.provider}</Text>
                   <Text style={styles.modelDesc}>{item.description}</Text>
@@ -86,7 +90,7 @@ export function ModelSelector({ visible, selectedModel, onSelect, onClose }: Mod
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: colors.bgPage,
   },
   header: {
     flexDirection: 'row',
@@ -94,23 +98,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 14,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bgCard,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: colors.border,
   },
   title: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: colors.textPrimary,
   },
   closeBtn: {
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 6,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
   },
   closeText: {
-    color: '#fff',
+    color: colors.textInverse,
     fontSize: 15,
     fontWeight: '600',
   },
@@ -120,15 +124,15 @@ const styles = StyleSheet.create({
   modelItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.bgCard,
     borderRadius: 12,
     padding: 16,
     borderWidth: 2,
     borderColor: 'transparent',
   },
   modelItemSelected: {
-    borderColor: '#007AFF',
-    backgroundColor: '#f0f7ff',
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
   },
   providerDot: {
     width: 12,
@@ -147,24 +151,19 @@ const styles = StyleSheet.create({
   modelName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1a1a1a',
+    color: colors.textPrimary,
   },
   modelNameSelected: {
-    color: '#007AFF',
-  },
-  checkmark: {
-    fontSize: 16,
-    color: '#007AFF',
-    fontWeight: '700',
+    color: colors.primary,
   },
   modelProvider: {
     fontSize: 13,
-    color: '#666',
+    color: colors.textSecondary,
     marginTop: 2,
   },
   modelDesc: {
     fontSize: 13,
-    color: '#999',
+    color: colors.textMuted,
     marginTop: 2,
   },
   separator: {

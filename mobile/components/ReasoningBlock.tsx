@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,205 +6,501 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
+  Easing,
 } from 'react-native';
+import Reanimated, { Layout } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../lib/theme';
 
 interface ReasoningBlockProps {
   reasoning: string;
   isStreaming?: boolean;
 }
 
+// ── 动画配置 ──
+const DOT_WAVE_DURATION = 500;
+const DOT_STAGGER = 160;
+const ICON_PULSE_DURATION = 1800;
+const CURSOR_BLINK_DURATION = 1000;
+const ACCENT_PULSE_DURATION = 2200;
+
 /**
- * 思考框（在消息气泡内部）
- * - 流式中：实时显示思考内容，自动滚动
- * - 结束后：折叠为一行卡片，点击展开
+ * 思考过程展示组件（重新设计）
+ *
+ * 设计要点：
+ * - 左侧竖条呼吸光效 + 圆角容器，视觉层级更清晰
+ * - 三点波浪动画（opacity + translateY），比纯 opacity 更有节奏感
+ * - 图标呼吸脉冲，暗示"正在进行中"
+ * - 光标正弦闪烁，比硬切更柔和
+ * - 流式中显示实时耗时计时器
+ * - 展开/折叠使用 reanimated Layout 弹性过渡
+ * - 完成后默认折叠为一行胶囊，点击展开
  */
 export const ReasoningBlock = React.memo(function ReasoningBlock({
   reasoning,
   isStreaming = false,
 }: ReasoningBlockProps) {
   const [expanded, setExpanded] = useState(false);
-  const [duration, setDuration] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const scrollRef = useRef<ScrollView>(null);
-  const dot1 = useRef(new Animated.Value(0.3)).current;
-  const dot2 = useRef(new Animated.Value(0.3)).current;
-  const dot3 = useRef(new Animated.Value(0.3)).current;
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 跟踪耗时
+  // 核心 Animated 值
+  const dot1Opacity = useRef(new Animated.Value(0.25)).current;
+  const dot1Y = useRef(new Animated.Value(0)).current;
+  const dot2Opacity = useRef(new Animated.Value(0.25)).current;
+  const dot2Y = useRef(new Animated.Value(0)).current;
+  const dot3Opacity = useRef(new Animated.Value(0.25)).current;
+  const dot3Y = useRef(new Animated.Value(0)).current;
+  const iconScale = useRef(new Animated.Value(1)).current;
+  const cursorOpacity = useRef(new Animated.Value(1)).current;
+  const accentGlow = useRef(new Animated.Value(0.45)).current;
+
+  // ── 计时 & 状态切换 ──
   useEffect(() => {
     if (isStreaming) {
       if (startTimeRef.current === null) {
         startTimeRef.current = Date.now();
         setExpanded(true);
+        setElapsed(0);
+        timerRef.current = setInterval(() => {
+          if (startTimeRef.current !== null) {
+            setElapsed(
+              Math.floor((Date.now() - startTimeRef.current) / 1000),
+            );
+          }
+        }, 1000);
       }
-    } else if (startTimeRef.current !== null) {
-      setDuration(Math.ceil((Date.now() - startTimeRef.current) / 1000));
-      startTimeRef.current = null;
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (startTimeRef.current !== null) {
+        setElapsed(
+          Math.ceil((Date.now() - startTimeRef.current) / 1000),
+        );
+        startTimeRef.current = null;
+      }
       setExpanded(false);
     }
-  }, [isStreaming]);
-
-  // 流式时自动滚动
-  useEffect(() => {
-    if (isStreaming && expanded) {
-      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
-    }
-  }, [reasoning, isStreaming, expanded]);
-
-  // 动画点
-  useEffect(() => {
-    if (!isStreaming) return;
-    const p = (v: Animated.Value, d: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(v, { toValue: 1, duration: 400, delay: d, useNativeDriver: true }),
-          Animated.timing(v, { toValue: 0.3, duration: 400, useNativeDriver: true }),
-        ]),
-      );
-    const a1 = p(dot1, 0);
-    const a2 = p(dot2, 200);
-    const a3 = p(dot3, 400);
-    a1.start();
-    a2.start();
-    a3.start();
     return () => {
-      a1.stop();
-      a2.stop();
-      a3.stop();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [isStreaming]);
 
+  // ── 流式自动滚动 ──
+  useEffect(() => {
+    if (isStreaming) {
+      requestAnimationFrame(() =>
+        scrollRef.current?.scrollToEnd({ animated: true }),
+      );
+    }
+  }, [reasoning, isStreaming]);
+
+  // ── 三点波浪动画（opacity + translateY，交错启动） ──
+  useEffect(() => {
+    if (!isStreaming) return;
+
+    const wave = (
+      opacityVal: Animated.Value,
+      yVal: Animated.Value,
+      delay: number,
+    ) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.parallel([
+            Animated.timing(opacityVal, {
+              toValue: 1,
+              duration: DOT_WAVE_DURATION,
+              easing: Easing.inOut(Easing.ease),
+              useNativeDriver: true,
+            }),
+            Animated.timing(yVal, {
+              toValue: -5,
+              duration: DOT_WAVE_DURATION / 2,
+              easing: Easing.out(Easing.ease),
+              useNativeDriver: true,
+            }),
+          ]),
+          Animated.parallel([
+            Animated.timing(opacityVal, {
+              toValue: 0.25,
+              duration: DOT_WAVE_DURATION,
+              easing: Easing.inOut(Easing.ease),
+              useNativeDriver: true,
+            }),
+            Animated.timing(yVal, {
+              toValue: 0,
+              duration: DOT_WAVE_DURATION / 2,
+              easing: Easing.in(Easing.ease),
+              useNativeDriver: true,
+            }),
+          ]),
+        ]),
+      );
+
+    const animations = [
+      wave(dot1Opacity, dot1Y, 0),
+      wave(dot2Opacity, dot2Y, DOT_STAGGER),
+      wave(dot3Opacity, dot3Y, DOT_STAGGER * 2),
+    ];
+    animations.forEach((a) => a.start());
+    return () => animations.forEach((a) => a.stop());
+  }, [isStreaming]);
+
+  // ── 图标呼吸脉冲 ──
+  useEffect(() => {
+    if (!isStreaming) return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(iconScale, {
+          toValue: 1.25,
+          duration: ICON_PULSE_DURATION / 2,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(iconScale, {
+          toValue: 1,
+          duration: ICON_PULSE_DURATION / 2,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [isStreaming]);
+
+  // ── 光标正弦闪烁 ──
+  useEffect(() => {
+    if (!isStreaming) return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cursorOpacity, {
+          toValue: 0.08,
+          duration: CURSOR_BLINK_DURATION / 2,
+          easing: Easing.sin,
+          useNativeDriver: true,
+        }),
+        Animated.timing(cursorOpacity, {
+          toValue: 1,
+          duration: CURSOR_BLINK_DURATION / 2,
+          easing: Easing.sin,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [isStreaming]);
+
+  // ── 左侧竖条呼吸光效 ──
+  useEffect(() => {
+    if (!isStreaming) return;
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(accentGlow, {
+          toValue: 1,
+          duration: ACCENT_PULSE_DURATION / 2,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(accentGlow, {
+          toValue: 0.45,
+          duration: ACCENT_PULSE_DURATION / 2,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [isStreaming]);
+
+  // ── 格式化耗时 ──
+  const durationText = useMemo(() => {
+    if (elapsed < 60) return `${elapsed}秒`;
+    const m = Math.floor(elapsed / 60);
+    const sec = elapsed % 60;
+    return sec > 0 ? `${m}分${sec}秒` : `${m}分钟`;
+  }, [elapsed]);
+
   if (!reasoning && !isStreaming) return null;
 
-  // ── 流式中：展开的思考框 ──
+  const hasContent = reasoning.length > 0;
+
+  // ══════════════════════════════════════════════
+  //  流式中：展开的思考面板
+  // ══════════════════════════════════════════════
   if (isStreaming) {
     return (
-      <View style={s.box}>
-        <View style={s.boxHeader}>
-          <Ionicons name="sparkles" size={13} color="#F59E0B" />
-          <Text style={s.boxHeaderText}>思考中</Text>
-          <View style={s.dots}>
-            <Animated.View style={[s.dot, { opacity: dot1 }]} />
-            <Animated.View style={[s.dot, { opacity: dot2 }]} />
-            <Animated.View style={[s.dot, { opacity: dot3 }]} />
+      <View style={styles.container}>
+        {/* 左侧呼吸光条 */}
+        <Animated.View
+          style={[
+            styles.accentBar,
+            { opacity: accentGlow },
+          ]}
+        />
+
+        <View style={styles.main}>
+          {/* ── 头部 ── */}
+          <View style={styles.header}>
+            <Animated.View style={{ transform: [{ scale: iconScale }] }}>
+              <View style={styles.iconCircle}>
+                <Ionicons name="sparkles" size={12} color={colors.warning} />
+              </View>
+            </Animated.View>
+
+            <Text style={styles.headerTitle}>思考中</Text>
+
+            {/* 三点波浪 */}
+            <View style={styles.dotsRow}>
+              <Animated.View
+                style={[
+                  styles.dot,
+                  { opacity: dot1Opacity, transform: [{ translateY: dot1Y }] },
+                ]}
+              />
+              <Animated.View
+                style={[
+                  styles.dot,
+                  { opacity: dot2Opacity, transform: [{ translateY: dot2Y }] },
+                ]}
+              />
+              <Animated.View
+                style={[
+                  styles.dot,
+                  { opacity: dot3Opacity, transform: [{ translateY: dot3Y }] },
+                ]}
+              />
+            </View>
+
+            {/* 实时计时器 */}
+            <View style={styles.timerBadge}>
+              <Ionicons name="time-outline" size={10} color={colors.warning} />
+              <Text style={styles.timerText}>{durationText}</Text>
+            </View>
           </View>
+
+          {/* ── 思考内容 ── */}
+          {hasContent && (
+            <ScrollView
+              ref={scrollRef}
+              style={styles.streamBody}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.streamText} selectable>
+                {reasoning}
+              </Text>
+              <Animated.Text
+                style={[styles.streamCursor, { opacity: cursorOpacity }]}
+              >
+                ▎
+              </Animated.Text>
+            </ScrollView>
+          )}
         </View>
-        <ScrollView ref={scrollRef} style={s.boxBody} nestedScrollEnabled>
-          <Text style={s.boxText} selectable>{reasoning}</Text>
-          <Text style={s.cursor}>▊</Text>
-        </ScrollView>
       </View>
     );
   }
 
-  // ── 流式结束：折叠卡片 或 展开框 ──
-  if (expanded) {
-    return (
-      <View style={s.box}>
-        <TouchableOpacity
-          style={s.boxHeader}
-          onPress={() => setExpanded(false)}
-          activeOpacity={0.7}
-        >
-          <View style={s.boxHeaderLeft}>
-            <Ionicons name="bulb-outline" size={13} color="#92400e" />
-            <Text style={s.boxHeaderText}>思考了 {duration ?? 0} 秒</Text>
-          </View>
-          <Ionicons name="chevron-up" size={14} color="#92400e" />
-        </TouchableOpacity>
-        <ScrollView style={s.boxBody} nestedScrollEnabled>
-          <Text style={s.boxText} selectable>{reasoning}</Text>
-        </ScrollView>
-      </View>
-    );
-  }
-
-  // 折叠态：一行卡片
+  // ══════════════════════════════════════════════
+  //  流式结束：可展开 / 折叠
+  // ══════════════════════════════════════════════
   return (
-    <TouchableOpacity style={s.card} onPress={() => setExpanded(true)} activeOpacity={0.7}>
-      <Ionicons name="bulb-outline" size={13} color="#92400e" />
-      <Text style={s.cardText}>思考了 {duration ?? 0} 秒</Text>
-      <Ionicons name="chevron-down" size={12} color="#92400e" />
-    </TouchableOpacity>
+    <Reanimated.View
+      style={styles.container}
+      layout={Layout.springify().damping(18).stiffness(160).mass(0.8)}
+    >
+      {/* 左侧静态光条 */}
+      <View style={[styles.accentBar, { opacity: 0.3 }]} />
+
+      <View style={styles.main}>
+        {/* ── 头部（点击切换） ── */}
+        <TouchableOpacity
+          style={styles.header}
+          onPress={() => setExpanded((prev) => !prev)}
+          activeOpacity={0.65}
+        >
+          <View style={styles.iconCircleMuted}>
+            <Ionicons name="bulb" size={11} color={colors.warning} />
+          </View>
+
+          <Text style={styles.doneTitle}>
+            思考了 {durationText}
+          </Text>
+
+          <View style={styles.flexSpacer} />
+
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={15}
+            color={colors.reasoningText}
+          />
+        </TouchableOpacity>
+
+        {/* ── 展开时的内容 ── */}
+        {expanded && hasContent && (
+          <ScrollView
+            style={styles.doneBody}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+          >
+            <Text style={styles.doneText} selectable>
+              {reasoning}
+            </Text>
+          </ScrollView>
+        )}
+      </View>
+    </Reanimated.View>
   );
 });
 
-const s = StyleSheet.create({
-  // ── 思考框 ──
-  box: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    marginBottom: 6,
+// ══════════════════════════════════════════════════════
+//  Styles
+// ══════════════════════════════════════════════════════
+const styles = StyleSheet.create({
+  // ── 外层容器 ──
+  container: {
+    flexDirection: 'row',
+    backgroundColor: colors.reasoning,
+    borderRadius: 12,
+    marginBottom: 8,
     overflow: 'hidden',
-  },
-  boxHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#FDE68A',
-    gap: 5,
-  },
-  boxHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    flex: 1,
-  },
-  boxHeaderText: {
-    fontSize: 12,
-    color: '#92400E',
-    fontWeight: '600',
-  },
-  dots: {
-    flexDirection: 'row',
-    gap: 3,
-    marginLeft: 2,
-  },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#F59E0B',
-  },
-  boxBody: {
-    maxHeight: 120,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  boxText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#78350F',
-    fontFamily: 'monospace',
-  },
-  cursor: {
-    color: '#F59E0B',
-    fontSize: 12,
-    marginTop: 2,
+    // 轻微阴影增加层次
+    shadowColor: colors.warning,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
   },
 
-  // ── 折叠卡片 ──
-  card: {
+  // ── 左侧竖条 ──
+  accentBar: {
+    width: 3,
+    backgroundColor: colors.warning,
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+  },
+
+  // ── 主内容区 ──
+  main: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  // ── 头部行 ──
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#FFFBEB',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
     paddingHorizontal: 10,
-    paddingVertical: 5,
-    marginBottom: 6,
-    alignSelf: 'flex-start',
+    paddingVertical: 9,
+    gap: 7,
   },
-  cardText: {
-    fontSize: 12,
-    color: '#92400E',
+  headerTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.reasoningText,
+    letterSpacing: 0.2,
+  },
+  doneTitle: {
+    fontSize: 13,
     fontWeight: '500',
+    color: colors.reasoningText,
+  },
+  flexSpacer: {
+    flex: 1,
+  },
+
+  // ── 图标容器 ──
+  iconCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconCircleMuted: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // ── 三点波浪 ──
+  dotsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 1,
+  },
+  dot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.warning,
+  },
+
+  // ── 计时胶囊 ──
+  timerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginLeft: 'auto',
+    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  timerText: {
+    fontSize: 11,
+    color: colors.warning,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'],
+  },
+
+  // ── 流式内容区 ──
+  streamBody: {
+    maxHeight: 140,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  streamText: {
+    fontSize: 12.5,
+    lineHeight: 19,
+    color: colors.reasoningText,
+    fontFamily: 'monospace',
+    letterSpacing: 0.1,
+  },
+  streamCursor: {
+    color: colors.warning,
+    fontSize: 14,
+    fontWeight: '300',
+    marginTop: 1,
+  },
+
+  // ── 完成后展开内容 ──
+  doneBody: {
+    maxHeight: 160,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  doneText: {
+    fontSize: 12.5,
+    lineHeight: 19,
+    color: colors.reasoningText,
+    fontFamily: 'monospace',
+    letterSpacing: 0.1,
   },
 });

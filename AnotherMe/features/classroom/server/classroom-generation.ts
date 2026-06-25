@@ -43,7 +43,7 @@ import {
   replaceMediaPlaceholders,
   generateTTSForClassroom,
 } from '@/lib/server/classroom-media-generation';
-import type { UserRequirements } from '@/lib/types/generation';
+import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
 import type { Scene, Stage } from '@/lib/types/stage';
 import type { LearningContext } from '@/lib/types/learning-context';
 
@@ -203,12 +203,117 @@ async function generateLegacyOutlines(params: {
   return outlinesResult.data;
 }
 
+// ── Background scene generation (progressive mode continuation) ──
+async function generateRemainingScenesInBackground(params: {
+  outlines: SceneOutline[];
+  startIndex: number;
+  aiCall: AICallFn;
+  requirementAnalysis: ReturnType<typeof analyzeMiddleSchoolMathRequirement>;
+  store: { getState: () => { scenes: Scene[] } };
+  api: ReturnType<typeof createStageAPI>;
+  stageId: string;
+  stage: Stage;
+  generationMeta: CourseGenerationMeta;
+  baseUrl: string;
+  signal: AbortSignal;
+  onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
+  totalOutlines: number;
+}): Promise<void> {
+  const {
+    outlines,
+    startIndex,
+    aiCall,
+    requirementAnalysis,
+    store,
+    api,
+    stageId,
+    stage,
+    generationMeta,
+    baseUrl,
+    signal,
+    onProgress,
+    totalOutlines,
+  } = params;
+  const throwIfAborted = () => signal?.throwIfAborted();
+  let completed = 1; // first scene already done
+
+  for (let i = 0; i < outlines.length; i++) {
+    throwIfAborted();
+    const outline = applyOutlineFallbacks(outlines[i], true);
+    const sceneIndex = startIndex + i + 1; // 1-based
+
+    await onProgress?.({
+      step: 'generating_scenes',
+      progress: 35 + Math.floor((completed / Math.max(totalOutlines, 1)) * 60),
+      message: `Generating scene ${sceneIndex}/${totalOutlines}: ${outline.title}`,
+      scenesGenerated: completed,
+      totalScenes: totalOutlines,
+    });
+
+    const content = await generateSceneContent(
+      outline,
+      aiCall,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined as never, // agents not needed for bg
+    );
+    throwIfAborted();
+    if (!content) {
+      log.warn(`Progressive bg: skipping "${outline.title}" — content failed`);
+      completed++;
+      continue;
+    }
+
+    const sceneMathGuidance = buildSceneMathGuidance({
+      analysis: requirementAnalysis,
+      sceneOrder: sceneIndex,
+      totalScenes: totalOutlines,
+    });
+    const actions = await generateSceneActions(
+      outline,
+      content,
+      aiCall,
+      undefined,
+      undefined as never,
+      sceneMathGuidance,
+    );
+    throwIfAborted();
+
+    createSceneWithActions(outline, content, actions, api);
+    completed++;
+    log.info(`Progressive bg: scene "${outline.title}" done (${completed}/${totalOutlines})`);
+
+    // Re-persist classroom with new scenes so they appear live
+    const currentScenes = store.getState().scenes;
+    await persistClassroom(
+      { id: stageId, stage, scenes: currentScenes, generationMeta },
+      baseUrl,
+    ).catch((err: unknown) => {
+      log.warn('Progressive bg: failed to re-persist classroom:', err);
+    });
+  }
+
+  await onProgress?.({
+    step: 'completed',
+    progress: 100,
+    message: 'All scenes generated',
+    scenesGenerated: completed,
+    totalScenes: totalOutlines,
+  });
+  log.info('Progressive bg: all remaining scenes generated');
+}
+
 export async function generateClassroom(
   input: GenerateClassroomInput,
   options: {
     baseUrl: string;
     onProgress?: (progress: ClassroomGenerationProgress) => Promise<void> | void;
     signal?: AbortSignal;
+    /** When true, returns after first scene; remaining scenes generated in background. */
+    progressive?: boolean;
   },
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
@@ -461,6 +566,111 @@ export async function generateClassroom(
 
   const store = createInMemoryStore(stage);
   const api = createStageAPI(store);
+  // Progressive mode: generate first scene, return immediately, background the rest
+  if (options.progressive && outlines.length > 0) {
+    const firstOutline = applyOutlineFallbacks(outlines[0], true);
+    log.info('Progressive: generating first scene only');
+
+    await options.onProgress?.({
+      step: 'generating_scenes',
+      progress: 35,
+      message: `Generating scene 1/${outlines.length}: ${firstOutline.title}`,
+      scenesGenerated: 0,
+      totalScenes: outlines.length,
+    });
+
+    // Generate first scene content + actions
+    const firstContent = await generateSceneContent(
+      firstOutline,
+      aiCall,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      agents,
+    );
+    if (firstContent) {
+      const sceneMathGuidance = buildSceneMathGuidance({
+        analysis: requirementAnalysis,
+        sceneOrder: 1,
+        totalScenes: outlines.length,
+      });
+      const firstActions = await generateSceneActions(
+        firstOutline,
+        firstContent,
+        aiCall,
+        undefined,
+        agents,
+        sceneMathGuidance,
+      );
+      createSceneWithActions(firstOutline, firstContent, firstActions, api);
+      log.info(
+        `Progressive: first scene "${firstOutline.title}" created (${firstActions.length} actions)`,
+      );
+    }
+
+    const firstScenes = store.getState().scenes;
+    await options.onProgress?.({
+      step: 'persisting',
+      progress: 70,
+      message: 'Persisting classroom data',
+      scenesGenerated: firstScenes.length,
+      totalScenes: outlines.length,
+    });
+
+    const persisted = await persistClassroom(
+      { id: stageId, stage, scenes: firstScenes, generationMeta },
+      options.baseUrl,
+    );
+    log.info(`Progressive: classroom persisted: ${persisted.id}`);
+
+    // Fire-and-forget: generate remaining scenes in background
+    const remainingOutlines = outlines.slice(1);
+    if (remainingOutlines.length > 0) {
+      const bgController = new AbortController();
+      if (options.signal) {
+        if (options.signal.aborted) bgController.abort();
+        else options.signal.addEventListener('abort', () => bgController.abort(), { once: true });
+      }
+      generateRemainingScenesInBackground({
+        outlines: remainingOutlines,
+        startIndex: 1,
+        aiCall,
+        requirementAnalysis,
+        store,
+        api,
+        stageId,
+        stage,
+        generationMeta,
+        baseUrl: options.baseUrl,
+        signal: bgController.signal,
+        onProgress: options.onProgress,
+        totalOutlines: outlines.length,
+      }).catch((err: unknown) => {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        log.error('Progressive background generation failed:', err);
+      });
+    } else {
+      await options.onProgress?.({
+        step: 'completed',
+        progress: 100,
+        message: 'Complete',
+        scenesGenerated: firstScenes.length,
+        totalScenes: outlines.length,
+      });
+    }
+
+    return {
+      id: persisted.id,
+      url: persisted.url,
+      stage,
+      scenes: firstScenes,
+      scenesCount: firstScenes.length,
+      createdAt: persisted.createdAt,
+      meta: { quality_score: qualityReport.score, engine_version: generationMeta.engineVersion },
+    };
+  }
 
   log.info('Stage 2: Generating scene content and actions...');
   let completedScenePlans = 0;

@@ -193,6 +193,75 @@ def process_quiz_answer(
     return results
 
 
+def process_non_quiz_event(
+    session: Session,
+    user_id: str,
+    event_type: str,
+    knowledge_points: list[str],
+    source_event_id: str | None = None,
+    payload: dict | None = None,
+    confidence: float = 1.0,
+) -> list[dict[str, Any]]:
+    """Process non-quiz learning events (hint_used, confusion_detected, problem_solved)
+    and update BKT states.
+
+    Uses update_with_context to adjust p_guess/p_slip based on event semantics.
+    """
+    if not knowledge_points:
+        return []
+
+    results: list[dict[str, Any]] = []
+
+    for kp_id in knowledge_points:
+        state = get_or_create_knowledge_state(session, user_id, kp_id)
+        prior = state.p_mastery
+        trace = _to_trace(state)
+
+        hint_used = event_type == "hint_used"
+        confusion = event_type == "confusion_detected"
+        is_correct: bool | None = True if event_type == "problem_solved" else None if confusion else False
+
+        posterior = trace.update_with_context(
+            is_correct=is_correct,
+            hint_used=hint_used,
+            confusion_detected=confusion,
+            confidence=confidence,
+        )
+
+        _apply_trace_to_state(state, trace)
+
+        # Persist trace event
+        trace_event = KnowledgeTraceEvent(
+            id=str(uuid4()),
+            user_id=user_id,
+            knowledge_point_id=kp_id,
+            source_event_id=source_event_id,
+            event_type=event_type,
+            prior_mastery=prior,
+            posterior_mastery=posterior,
+            is_correct=is_correct if is_correct is not None else False,
+            question_id=None,
+            payload={
+                **(payload or {}),
+                "confidence": confidence,
+                "event_semantics": event_type,
+            },
+        )
+        session.add(trace_event)
+
+        results.append({
+            "knowledge_point_id": kp_id,
+            "prior_mastery": prior,
+            "posterior_mastery": posterior,
+            "attempts": state.attempts,
+            "correct_attempts": state.correct_attempts,
+            "event_type": event_type,
+        })
+
+    session.flush()
+    return results
+
+
 def normalize_learning_event_for_kt(
     *,
     event_type: str,
@@ -222,6 +291,9 @@ def normalize_learning_event_for_kt(
         normalized_payload = normalized_attempt.payload
         normalized_points = normalized_attempt.knowledge_point_ids or (knowledge_points or [])
         return normalized_payload, normalized_points
+
+    if event_type in ("hint_used", "confusion_detected", "problem_solved"):
+        return normalized_payload, (knowledge_points or [])
 
     return normalized_payload, (knowledge_points or [])
 

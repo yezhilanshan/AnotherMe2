@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { ArrowLeft, MessageSquare, ThumbsUp, Bookmark, Share2, FileText } from 'lucide-react';
+import { ArrowLeft, MessageSquare, ThumbsUp, ThumbsDown, Bookmark, Share2, FileText } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -91,6 +91,20 @@ export default function QuestionExplanationPage() {
     toast.success('已记录反馈');
   };
 
+  const handleNotHelpful = () => {
+    void recordLearningEvent({
+      eventType: 'feedback_dislike',
+      knowledgePoints,
+      payload: {
+        subject: '数学',
+        title,
+        source: 'question-explanation',
+      },
+      weight: 1.2,
+    });
+    toast.success('已记录反馈，我们会改进');
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center gap-4 mb-8">
@@ -152,6 +166,13 @@ export default function QuestionExplanationPage() {
                 className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors"
               >
                 <ThumbsUp className="h-4 w-4" /> 有用
+              </button>
+              <button
+                type="button"
+                onClick={handleNotHelpful}
+                className="flex items-center gap-1.5 px-4 py-2 hover:bg-[#F4F3F0] text-gray-600 text-xs font-bold uppercase tracking-wide transition-colors"
+              >
+                <ThumbsDown className="h-4 w-4" /> 没帮助
               </button>
               <button
                 onClick={handleSaveToNotebook}

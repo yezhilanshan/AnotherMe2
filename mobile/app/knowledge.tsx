@@ -3,7 +3,7 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
@@ -14,6 +14,7 @@ import { api } from '../lib/api';
 import { USER_ID } from '../lib/config';
 import { KnowledgeStateCard } from '../components/KnowledgeStateCard';
 import type { KnowledgeState } from '../lib/types';
+import { colors } from '../lib/theme';
 
 export default function KnowledgeScreen() {
   const insets = useSafeAreaInsets();
@@ -68,9 +69,19 @@ export default function KnowledgeScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>加载知识追踪数据...</Text>
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        {/* Header — 即使在加载中也可返回 */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={colors.textInverse} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>知识追踪概览</Text>
+          <View style={styles.headerRight} />
+        </View>
+        <View style={[styles.center, { flex: 1 }]}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>加载知识追踪数据...</Text>
+        </View>
       </View>
     );
   }
@@ -80,11 +91,11 @@ export default function KnowledgeScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+          <Ionicons name="arrow-back" size={24} color={colors.textInverse} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>知识追踪概览</Text>
         <TouchableOpacity onPress={loadData} style={styles.headerRight}>
-          <Ionicons name="refresh" size={22} color="#FFFFFF" />
+          <Ionicons name="refresh" size={22} color={colors.textInverse} />
         </TouchableOpacity>
       </View>
 
@@ -97,70 +108,63 @@ export default function KnowledgeScreen() {
         </View>
       )}
 
-      <FlatList
-        data={[]}
-        renderItem={null}
-        ListHeaderComponent={
-          <>
-            {/* Summary cards */}
-            <View style={styles.summaryRow}>
-              <View style={[styles.summaryCard, { backgroundColor: '#FFEBEE' }]}>
-                <Text style={[styles.summaryValue, { color: '#C62828' }]}>{weakPoints.length}</Text>
-                <Text style={styles.summaryLabel}>薄弱知识点</Text>
-              </View>
-              <View style={[styles.summaryCard, { backgroundColor: '#E8F5E9' }]}>
-                <Text style={[styles.summaryValue, { color: '#2E7D32' }]}>{strongPoints.length}</Text>
-                <Text style={styles.summaryLabel}>优秀知识点</Text>
-              </View>
-              <View style={[styles.summaryCard, { backgroundColor: '#E3F2FD' }]}>
-                <Text style={[styles.summaryValue, { color: '#1565C0' }]}>{weakPoints.length + strongPoints.length}</Text>
-                <Text style={styles.summaryLabel}>已追踪总数</Text>
-              </View>
-            </View>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}>
+        {/* Summary cards */}
+        <View style={styles.summaryRow}>
+          <View style={[styles.summaryCard, { backgroundColor: colors.errorLight }]}>
+            <Text style={[styles.summaryValue, { color: colors.error }]}>{weakPoints.length}</Text>
+            <Text style={styles.summaryLabel}>薄弱知识点</Text>
+          </View>
+          <View style={[styles.summaryCard, { backgroundColor: colors.successLight }]}>
+            <Text style={[styles.summaryValue, { color: colors.success }]}>{strongPoints.length}</Text>
+            <Text style={styles.summaryLabel}>优秀知识点</Text>
+          </View>
+          <View style={[styles.summaryCard, { backgroundColor: colors.infoLight }]}>
+            <Text style={[styles.summaryValue, { color: colors.info }]}>{weakPoints.length + strongPoints.length}</Text>
+            <Text style={styles.summaryLabel}>已追踪总数</Text>
+          </View>
+        </View>
 
-            {/* Weakest point detail */}
-            {weakest && (
-              <View style={styles.weakestSection}>
-                <Text style={styles.sectionTitle}>最薄弱知识点</Text>
-                <KnowledgeStateCard
-                  state={weakest}
-                  teachingSuggestion={teachingSuggestion || undefined}
-                />
-              </View>
-            )}
+        {/* Weakest point detail */}
+        {weakest && (
+          <View style={styles.weakestSection}>
+            <Text style={styles.sectionTitle}>最薄弱知识点</Text>
+            <KnowledgeStateCard
+              state={weakest}
+              teachingSuggestion={teachingSuggestion || undefined}
+            />
+          </View>
+        )}
 
-            {/* Weak points list */}
-            {weakPoints.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>薄弱知识点 ({weakPoints.length})</Text>
-                {weakPoints.map(wp => (
-                  <KnowledgeStateCard key={wp.knowledge_point_id} state={wp} />
-                ))}
-              </View>
-            )}
+        {/* Weak points list */}
+        {weakPoints.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>薄弱知识点 ({weakPoints.length})</Text>
+            {weakPoints.map(wp => (
+              <KnowledgeStateCard key={wp.knowledge_point_id} state={wp} />
+            ))}
+          </View>
+        )}
 
-            {/* Strong points list */}
-            {strongPoints.length > 0 && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>优秀知识点 ({strongPoints.length})</Text>
-                {strongPoints.map(sp => (
-                  <KnowledgeStateCard key={sp.knowledge_point_id} state={sp} />
-                ))}
-              </View>
-            )}
+        {/* Strong points list */}
+        {strongPoints.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>优秀知识点 ({strongPoints.length})</Text>
+            {strongPoints.map(sp => (
+              <KnowledgeStateCard key={sp.knowledge_point_id} state={sp} />
+            ))}
+          </View>
+        )}
 
-            {/* Empty state */}
-            {weakPoints.length === 0 && strongPoints.length === 0 && (
-              <View style={styles.empty}>
-                <Ionicons name="analytics-outline" size={48} color="#CCC" />
-                <Text style={styles.emptyText}>暂无知识追踪数据</Text>
-                <Text style={styles.emptyHint}>完成诊断测评后会自动记录</Text>
-              </View>
-            )}
-          </>
-        }
-        contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
-      />
+        {/* Empty state */}
+        {weakPoints.length === 0 && strongPoints.length === 0 && (
+          <View style={styles.empty}>
+            <Ionicons name="analytics-outline" size={48} color={colors.textMuted} />
+            <Text style={styles.emptyText}>暂无知识追踪数据</Text>
+            <Text style={styles.emptyHint}>完成诊断测评后会自动记录</Text>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -168,7 +172,7 @@ export default function KnowledgeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
   },
   center: {
     justifyContent: 'center',
@@ -177,12 +181,12 @@ const styles = StyleSheet.create({
   loadingText: {
     marginTop: 12,
     fontSize: 15,
-    color: '#999',
+    color: colors.textMuted,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
@@ -193,7 +197,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 18,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: colors.textInverse,
     textAlign: 'center',
   },
   headerRight: {
@@ -203,17 +207,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#FFE5E5',
+    backgroundColor: colors.errorLight,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   errorText: {
-    color: '#FF3B30',
+    color: colors.error,
     fontSize: 14,
     flex: 1,
   },
   errorDismiss: {
-    color: '#FF3B30',
+    color: colors.error,
     fontSize: 18,
     fontWeight: 'bold',
     paddingLeft: 12,
@@ -236,7 +240,7 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontSize: 12,
-    color: '#666',
+    color: colors.textSecondary,
     marginTop: 4,
   },
   weakestSection: {
@@ -248,7 +252,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
     paddingHorizontal: 16,
     marginBottom: 8,
   },
@@ -258,12 +262,12 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: '#999',
+    color: colors.textMuted,
     marginTop: 12,
   },
   emptyHint: {
     fontSize: 13,
-    color: '#BBB',
+    color: colors.textMuted,
     marginTop: 4,
   },
 });

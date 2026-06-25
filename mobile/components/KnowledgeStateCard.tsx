@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import type { KnowledgeState } from '../lib/types';
+import { colors } from '../lib/theme';
 
 interface KnowledgeStateCardProps {
   state: KnowledgeState;
@@ -8,9 +9,9 @@ interface KnowledgeStateCardProps {
 }
 
 function getMasteryColor(mastery: number): string {
-  if (mastery < 0.35) return '#FF3B30';
-  if (mastery < 0.65) return '#FF9500';
-  return '#4CAF50';
+  if (mastery < 0.35) return colors.error;
+  if (mastery < 0.65) return colors.warning;
+  return colors.success;
 }
 
 function getMasteryLabel(mastery: number): string {
@@ -20,7 +21,7 @@ function getMasteryLabel(mastery: number): string {
   return '优秀';
 }
 
-export function KnowledgeStateCard({ state, teachingSuggestion }: KnowledgeStateCardProps) {
+export const KnowledgeStateCard = React.memo(function KnowledgeStateCard({ state, teachingSuggestion }: KnowledgeStateCardProps) {
   const color = getMasteryColor(state.mastery);
   const label = getMasteryLabel(state.mastery);
 
@@ -61,16 +62,16 @@ export function KnowledgeStateCard({ state, teachingSuggestion }: KnowledgeState
       )}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     borderRadius: 12,
     padding: 14,
     marginVertical: 6,
     marginHorizontal: 16,
-    shadowColor: '#000',
+    shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
     shadowRadius: 2,
@@ -85,7 +86,7 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
     flex: 1,
     marginRight: 8,
   },
@@ -100,7 +101,7 @@ const styles = StyleSheet.create({
   },
   subject: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textMuted,
     marginBottom: 8,
   },
   progressRow: {
@@ -112,7 +113,7 @@ const styles = StyleSheet.create({
   progressBar: {
     flex: 1,
     height: 6,
-    backgroundColor: '#E5E5E5',
+    backgroundColor: colors.border,
     borderRadius: 3,
     overflow: 'hidden',
   },
@@ -132,25 +133,25 @@ const styles = StyleSheet.create({
   },
   meta: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textMuted,
   },
   suggestionBox: {
     marginTop: 8,
     padding: 10,
-    backgroundColor: '#FFF8E1',
+    backgroundColor: colors.warningLight,
     borderRadius: 8,
     borderLeftWidth: 3,
-    borderLeftColor: '#FF9500',
+    borderLeftColor: colors.warning,
   },
   suggestionLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#E65100',
+    color: colors.warning,
     marginBottom: 4,
   },
   suggestionText: {
     fontSize: 13,
-    color: '#555',
+    color: colors.textSecondary,
     lineHeight: 18,
   },
 });

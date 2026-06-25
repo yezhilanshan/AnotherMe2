@@ -47,7 +47,7 @@ class LocalObjectStorage:
     def _url(self, object_key: str) -> str:
         if self.public_base_url:
             return f"{self.public_base_url.rstrip('/')}/{object_key.lstrip('/')}"
-        return str(self._path(object_key))
+        return f"/v1/objects/{object_key.lstrip('/')}"
 
     def upload_file(self, local_path: str, object_key: str, content_type: str | None = None) -> str:
         target = self._path(object_key)

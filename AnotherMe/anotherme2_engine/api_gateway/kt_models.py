@@ -88,6 +88,43 @@ class StudentKnowledgeTrace:
             self.correct_attempts += 1
         return self.p_mastery
 
+    def update_with_context(
+        self,
+        is_correct: bool | None = None,
+        hint_used: bool = False,
+        confusion_detected: bool = False,
+        confidence: float = 1.0,
+    ) -> float:
+        """Extended BKT update supporting non-binary signals.
+
+        - hint_used: temporarily raises p_guess (correct with hint = weaker evidence)
+        - confusion_detected with is_correct=None: treated as a weak negative signal
+        - confusion_detected with is_correct=True/False: adjusts p_slip to amplify/dampen
+        """
+        original_guess = self.p_guess
+        original_slip = self.p_slip
+
+        if hint_used:
+            self.p_guess = min(0.9, self.p_guess + 0.15)
+
+        if confusion_detected and is_correct is None:
+            # Pure confusion signal: treat as incorrect with amplified slip
+            self.p_slip = min(0.9, self.p_slip + 0.1 * confidence)
+            is_correct = False
+
+        if is_correct is None:
+            # No usable signal — restore and return current mastery
+            self.p_guess = original_guess
+            self.p_slip = original_slip
+            return self.p_mastery
+
+        result = self.update(is_correct)
+
+        # Restore original parameters
+        self.p_guess = original_guess
+        self.p_slip = original_slip
+        return result
+
 
 @dataclass
 class QuestionKnowledgeMapping:

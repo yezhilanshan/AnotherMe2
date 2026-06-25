@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@/features/auth/components/auth-provider';
+import { KnowledgeStateDashboard } from '@/features/diagnostic/components/knowledge-state-dashboard';
 
 const AbilityRadarChart = dynamic(
   () => import('./ability-radar-chart').then((module) => module.AbilityRadarChart),
@@ -532,6 +533,15 @@ export default function StatisticsPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* 知识点掌握详情 */}
+      <div className="bg-card p-6 shadow-sm rounded-xl border border-border">
+        <h2 className="text-lg font-bold text-foreground mb-4 flex items-center gap-2">
+          <Brain className="h-5 w-5 text-[#4A6FA5]" />
+          知识点掌握详情
+        </h2>
+        <KnowledgeStateDashboard userId={currentUserId} />
       </div>
     </div>
   );

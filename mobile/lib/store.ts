@@ -26,6 +26,7 @@ export const useChatStore = create<StoreState>()(
         learningContext: {
           l1: state.learningContext.l1,
           l2: state.learningContext.l2,
+          reviewPlan: state.learningContext.reviewPlan,
           l3: { records: [], stats: null },
         },
       }),

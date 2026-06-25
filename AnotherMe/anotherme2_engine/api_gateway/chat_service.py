@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .knowledge_tracing_service import (
     get_teaching_decisions,
     normalize_learning_event_for_kt,
+    process_non_quiz_event,
     process_quiz_answer,
 )
 from .db import nested_session_scope
@@ -45,6 +46,49 @@ def _supports_for_update(session: Session) -> bool:
     if bind is None:
         return False
     return bind.dialect.name not in {"sqlite"}
+
+
+def sanitize_attachment_refs(
+    attachments: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Keep only stable attachment references safe to persist."""
+    if not attachments:
+        return []
+
+    sanitized: list[dict[str, Any]] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+
+        object_key = str(item.get("object_key") or item.get("objectKey") or "").strip()
+        file_name = str(
+            item.get("file_name")
+            or item.get("filename")
+            or item.get("name")
+            or ""
+        ).strip()
+        mime_type = str(item.get("mime_type") or item.get("mimeType") or "").strip()
+        file_url = str(item.get("file_url") or item.get("url") or "").strip()
+
+        persisted: dict[str, Any] = {"type": item.get("type") or "file"}
+        if object_key:
+            persisted["object_key"] = object_key
+        if file_name:
+            persisted["file_name"] = file_name
+        if mime_type:
+            persisted["mime_type"] = mime_type
+        if file_url:
+            persisted["file_url"] = file_url
+        if item.get("file_size") is not None:
+            persisted["file_size"] = item.get("file_size")
+        elif item.get("size") is not None:
+            persisted["file_size"] = item.get("size")
+        if isinstance(item.get("metadata"), dict):
+            persisted["metadata"] = item["metadata"]
+
+        sanitized.append(persisted)
+
+    return sanitized
 
 
 def _ensure_user(session: Session, user_id: str, name: str | None = None) -> AppUser:
@@ -716,6 +760,8 @@ def create_ai_message(
         if existing:
             return existing
 
+    persisted_attachments = sanitize_attachment_refs(attachments)
+
     try:
         with nested_session_scope(session):
             resolved_runtime_seq = runtime_seq or _next_ai_message_seq(session, session_id)
@@ -728,7 +774,7 @@ def create_ai_message(
                 content_type=content_type,
                 capability=capability or "",
                 events_json=events or [],
-                attachments_json=attachments or [],
+                attachments_json=persisted_attachments,
                 model_name=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -1534,6 +1580,17 @@ def create_learning_event(
                 source_event_id=event.id,
                 payload=normalized_payload,
             )
+    elif event_type in ("hint_used", "confusion_detected", "problem_solved") and normalized_knowledge_points:
+        confidence = float(normalized_payload.get("confidence_score", 1.0)) if normalized_payload else 1.0
+        process_non_quiz_event(
+            session=session,
+            user_id=user_id,
+            event_type=event_type,
+            knowledge_points=normalized_knowledge_points,
+            source_event_id=event.id,
+            payload=normalized_payload,
+            confidence=confidence,
+        )
 
     return event
 

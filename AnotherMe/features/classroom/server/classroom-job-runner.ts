@@ -99,18 +99,45 @@ export function runClassroomGenerationJob(
       const controller = new AbortController();
       runningJobControllers.set(jobId, controller);
 
+      // Progressive mode: generateClassroom returns after first scene,
+      // then continues generating remaining scenes in background.
+      // We wait for the onProgress "completed" signal before marking success.
+      let backgroundDone: () => void;
+      const backgroundComplete = new Promise<void>((resolve) => { backgroundDone = resolve; });
+      let partialResult: Awaited<ReturnType<typeof generateClassroom>> | null = null;
+
       const result = await generateClassroom(input, {
         baseUrl,
         signal: controller.signal,
+        progressive: true,
         onProgress: async (progress) => {
           await updateClassroomGenerationJobProgress(jobId, progress);
+          if (progress.step === "completed" && progress.progress >= 100) {
+            backgroundDone();
+          }
         },
       });
 
       controller.signal.throwIfAborted();
+      partialResult = result;
 
-      await markClassroomGenerationJobSucceeded(jobId, result);
-      await persistSuccessfulClassroomBook(jobId, input, result);
+      // Write classroom result to job immediately so pollers get classroomId
+      try {
+        const { writeClassroomGenerationJobResult } = await import("@/lib/server/classroom-job-store");
+        await writeClassroomGenerationJobResult(jobId, {
+          classroomId: result.id,
+          url: result.url,
+          scenesCount: result.scenesCount,
+        });
+      } catch (err) {
+        log.warn("Failed to write partial job result:", err);
+      }
+
+      // Wait for background generation to finish
+      await backgroundComplete;
+
+      await markClassroomGenerationJobSucceeded(jobId, partialResult!);
+      await persistSuccessfulClassroomBook(jobId, input, partialResult!);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isAbortError(error)) {

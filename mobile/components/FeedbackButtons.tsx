@@ -1,5 +1,7 @@
 import React from 'react';
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../lib/theme';
 
 interface FeedbackButtonsProps {
   messageId: string;
@@ -7,24 +9,32 @@ interface FeedbackButtonsProps {
   onFeedback: (messageId: string, rating: 'like' | 'dislike') => void;
 }
 
-export function FeedbackButtons({ messageId, currentFeedback, onFeedback }: FeedbackButtonsProps) {
+export const FeedbackButtons = React.memo(function FeedbackButtons({ messageId, currentFeedback, onFeedback }: FeedbackButtonsProps) {
   return (
     <View style={styles.container}>
       <TouchableOpacity
         onPress={() => onFeedback(messageId, 'like')}
         style={[styles.button, currentFeedback === 'like' && styles.activeLike]}
       >
-        <Text style={styles.icon}>👍</Text>
+        <Ionicons
+          name={currentFeedback === 'like' ? 'thumbs-up' : 'thumbs-up-outline'}
+          size={16}
+          color={currentFeedback === 'like' ? colors.success : colors.textSecondary}
+        />
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => onFeedback(messageId, 'dislike')}
         style={[styles.button, currentFeedback === 'dislike' && styles.activeDislike]}
       >
-        <Text style={styles.icon}>👎</Text>
+        <Ionicons
+          name={currentFeedback === 'dislike' ? 'thumbs-down' : 'thumbs-down-outline'}
+          size={16}
+          color={currentFeedback === 'dislike' ? colors.error : colors.textSecondary}
+        />
       </TouchableOpacity>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -37,15 +47,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
     marginRight: 8,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: colors.bgInput,
   },
   activeLike: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: colors.successLight,
   },
   activeDislike: {
-    backgroundColor: '#FFE5E5',
-  },
-  icon: {
-    fontSize: 14,
+    backgroundColor: colors.errorLight,
   },
 });

@@ -29,7 +29,8 @@ export type CapabilityId =
   | 'deep_research'
   | 'math_animator'
   | 'visualize'
-  | 'co_writer';
+  | 'co_writer'
+  | 'auto';
 
 export type ToolId =
   | 'brainstorm'

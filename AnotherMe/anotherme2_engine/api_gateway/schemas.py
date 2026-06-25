@@ -60,6 +60,7 @@ class ProblemVideoGenerateInput(BaseModel):
     learner_session_id: Optional[str] = None
     learner_lookback_days: int = Field(default=120, ge=14, le=365)
     learning_context: Optional[Dict[str, Any]] = None
+    render_mode: str = "video"  # "video", "matplotlib", or "interactive"
 
 
 class StudyPackageSource(BaseModel):

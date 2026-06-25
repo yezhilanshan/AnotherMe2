@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import tempfile
 import base64
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from .storage import ObjectStorage
 try:
@@ -33,6 +34,8 @@ class MissingInputObjectError(FileNotFoundError):
 
 
 _VIDEO_FILE_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
+_IMAGE_FILE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+_HTML_FILE_SUFFIXES = {".html", ".htm"}
 
 
 def _strip_provider_prefix(model: str | None) -> str | None:
@@ -172,6 +175,28 @@ def _is_video_artifact(path: str) -> bool:
     return target.suffix.lower() in _VIDEO_FILE_SUFFIXES and target.exists() and target.stat().st_size > 0
 
 
+def _is_image_artifact(path: str) -> bool:
+    target = Path(path)
+    return target.suffix.lower() in _IMAGE_FILE_SUFFIXES and target.exists() and target.stat().st_size > 0
+
+
+def _is_html_artifact(path: str) -> bool:
+    target = Path(path)
+    return target.suffix.lower() in _HTML_FILE_SUFFIXES and target.exists() and target.stat().st_size > 0
+
+
+def _count_interactive_steps(output_dir: Path) -> int:
+    package_path = output_dir / "interactive" / "scene_package.json"
+    if not package_path.exists():
+        return 0
+    try:
+        payload = json.loads(package_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    steps = payload.get("steps")
+    return len(steps) if isinstance(steps, list) else 0
+
+
 def _generation_subprocess_entry(
     image_path: str,
     problem_text: str | None,
@@ -181,6 +206,7 @@ def _generation_subprocess_entry(
     llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     result_queue: "mp.queues.Queue",
+    render_mode: str = "video",
 ) -> None:
     try:
         from agents.foundation.config import (
@@ -189,6 +215,9 @@ def _generation_subprocess_entry(
             build_vision_model_config,
         )
         from main import MathVideoGenerator
+
+        import sys as _sys
+        print(f"[executor] render_mode={render_mode}", file=_sys.stderr, flush=True)
 
         cleaned_config = _clean_llm_config(llm_config_override)
 
@@ -254,6 +283,7 @@ def _generation_subprocess_entry(
             geometry_file=geometry_file,
             export_ggb=export_ggb,
             learner_memory=learner_memory if isinstance(learner_memory, dict) else None,
+            render_mode=render_mode,
         )
         if not str(final_video_path or "").strip():
             raise RuntimeError("AnotherMe2 generator returned empty output path")
@@ -282,6 +312,7 @@ def _run_generation_with_timeout(
     llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     timeout_seconds: int,
+    render_mode: str = "video",
 ) -> str:
     timeout_seconds = max(60, int(timeout_seconds))
     ctx = mp.get_context("spawn")
@@ -297,6 +328,7 @@ def _run_generation_with_timeout(
             llm_config_override,
             export_ggb,
             result_queue,
+            render_mode,
         ),
     )
     process.start()
@@ -424,6 +456,8 @@ def run_problem_video_job(
     temp_root: str,
     output_root: str | None = None,
     keep_run_output: bool = False,
+    on_output_dir_ready: "Callable[[str], None] | None" = None,
+    render_mode: str = "video",
 ) -> ProblemVideoExecutionResult:
     workdir = Path(tempfile.mkdtemp(prefix="problem-video-", dir=temp_root))
     input_image_path = workdir / "problem_input.png"
@@ -451,6 +485,11 @@ def run_problem_video_job(
     run_outputs_root = Path(output_root).expanduser().resolve() if output_root else GATEWAY_OUTPUTS_ROOT
     output_dir = run_outputs_root / workdir.name / "run_output"
     output_dir.mkdir(parents=True, exist_ok=True)
+    if on_output_dir_ready:
+        try:
+            on_output_dir_ready(str(output_dir))
+        except Exception:
+            pass
     try:
         timeout_seconds = int(os.getenv("ANOTHERME2_GENERATION_TIMEOUT_SEC", "1800"))
         final_video_path = _run_generation_with_timeout(
@@ -462,18 +501,37 @@ def run_problem_video_job(
             llm_config_override=payload.get("llm_config") if isinstance(payload.get("llm_config"), dict) else None,
             export_ggb=True,
             timeout_seconds=timeout_seconds,
+            render_mode=render_mode,
         )
 
         if not final_video_path or not Path(final_video_path).exists():
-            raise RuntimeError("AnotherMe2 did not produce a final video/audio artifact")
-        if not _is_video_artifact(final_video_path):
-            raise RuntimeError(
-                "AnotherMe2 did not produce a valid final video artifact; "
-                f"got '{final_video_path}'."
-            )
+            raise RuntimeError("AnotherMe2 did not produce a final video/audio/image/html artifact")
 
-        script_steps_count = len(list((output_dir / "audio").glob("narration_*.mp3")))
-        duration = _probe_duration(final_video_path)
+        if render_mode == "matplotlib":
+            if not _is_image_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid image artifact; "
+                    f"got '{final_video_path}'."
+                )
+        elif render_mode == "interactive":
+            if not _is_html_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid interactive HTML artifact; "
+                    f"got '{final_video_path}'."
+                )
+        else:
+            if not _is_video_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid final video artifact; "
+                    f"got '{final_video_path}'."
+                )
+
+        if render_mode == "interactive":
+            script_steps_count = _count_interactive_steps(output_dir)
+            duration = 0.0
+        else:
+            script_steps_count = len(list((output_dir / "audio").glob("narration_*.mp3")))
+            duration = _probe_duration(final_video_path)
         debug_bundle = _zip_debug_bundle(output_dir)
 
         requirement_hint = None

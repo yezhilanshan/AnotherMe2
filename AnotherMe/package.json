@@ -46,6 +46,7 @@
     "@radix-ui/react-use-controllable-state": "^1.2.2",
     "@types/js-yaml": "^4.0.9",
     "@xyflow/react": "^12.10.0",
+    "@anotherme/teaching-core": "workspace:*",
     "ai": "^6.0.42",
     "animate.css": "^4.1.1",
     "chart.js": "^4.5.1",

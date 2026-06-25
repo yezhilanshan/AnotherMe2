@@ -88,4 +88,54 @@ describe('notebook backup route', () => {
     expect(snapshot.settings.activeNotebookId).toBe('default');
     expect(snapshot.updatedAt).toBeGreaterThan(0);
   });
+
+  it('supports user-scoped notebooks and server-side records', async () => {
+    const { POST: createNotebook, GET: listNotebooks } = await import('@/app/api/notebooks/route');
+    const { GET: getNotebook } = await import('@/app/api/notebooks/[notebookId]/route');
+    const { POST: addRecord, GET: listRecords } = await import('@/app/api/notebooks/[notebookId]/records/route');
+
+    const createResponse = await createNotebook(
+      new NextRequest('http://localhost/api/notebooks?userId=user-a', {
+        method: 'POST',
+        body: JSON.stringify({ id: 'math', name: 'Math Notes' }),
+      }),
+    );
+    const recordResponse = await addRecord(
+      new NextRequest('http://localhost/api/notebooks/math/records?userId=user-a', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: 'Functions',
+          content: 'A function maps every input to exactly one output.',
+          tags: ['algebra'],
+          subject: 'Math',
+        }),
+      }),
+      { params: Promise.resolve({ notebookId: 'math' }) },
+    );
+    const listResponse = await listNotebooks(
+      new NextRequest('http://localhost/api/notebooks?userId=user-a'),
+    );
+    const detailResponse = await getNotebook(
+      new NextRequest('http://localhost/api/notebooks/math?userId=user-a'),
+      { params: Promise.resolve({ notebookId: 'math' }) },
+    );
+    const recordsResponse = await listRecords(
+      new NextRequest('http://localhost/api/notebooks/math/records?userId=user-a'),
+      { params: Promise.resolve({ notebookId: 'math' }) },
+    );
+
+    const createJson = await createResponse.json();
+    const recordJson = await recordResponse.json();
+    const listJson = await listResponse.json();
+    const detailJson = await detailResponse.json();
+    const recordsJson = await recordsResponse.json();
+
+    expect(createResponse.status).toBe(201);
+    expect(createJson.notebook.name).toBe('Math Notes');
+    expect(recordResponse.status).toBe(201);
+    expect(recordJson.record.notebookId).toBe('math');
+    expect(listJson.notebooks.find((book: { id: string }) => book.id === 'math').recordCount).toBe(1);
+    expect(detailJson.records).toHaveLength(1);
+    expect(recordsJson.records[0].title).toBe('Functions');
+  });
 });

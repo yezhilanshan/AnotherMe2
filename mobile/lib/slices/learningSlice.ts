@@ -1,9 +1,10 @@
 import type { StateCreator } from 'zustand';
 import { api } from '../api';
 import { USER_ID } from '../config';
-import { scheduleLocalNotification } from '../notifications';
+import { scheduleReviewNotification } from '../notifications';
+import { calculateReviewPlan } from '../review-scheduler';
 import { getSafeStorage } from '../safeStorage';
-import type { KnowledgeState, LearningRecord, LearningEventStats, WorkingMemory } from '../types';
+import type { KnowledgeState, LearningRecord, LearningEventStats, ReviewPlanItem, WorkingMemory } from '../types';
 import type { StoreState } from '../store';
 
 const L1_KEY = '@anotherme/l1_working_memory';
@@ -12,6 +13,7 @@ export interface LearningSlice {
   learningContext: {
     l1: WorkingMemory | null;
     l2: KnowledgeState[];
+    reviewPlan: ReviewPlanItem[];
     l3: {
       records: LearningRecord[];
       stats: LearningEventStats | null;
@@ -26,6 +28,7 @@ export const createLearningSlice: StateCreator<StoreState, [], [], LearningSlice
   learningContext: {
     l1: null,
     l2: [],
+    reviewPlan: [],
     l3: { records: [], stats: null },
   },
 
@@ -50,9 +53,11 @@ export const createLearningSlice: StateCreator<StoreState, [], [], LearningSlice
         knowledge_point_id: ks.knowledge_point_id as string,
         name: (ks.name as string) || (ks.knowledge_point_id as string),
         subject: ks.subject as string | undefined,
-        mastery: (ks.mastery as number) || 0,
+        mastery: ((ks.mastery ?? ks.p_mastery) as number) || 0,
         attempts: (ks.attempts as number) || 0,
-        last_practiced_at: ks.last_practiced_at as string | undefined,
+        last_practiced_at: (ks.last_practiced_at || ks.last_updated_at) as
+          | string
+          | undefined,
       }));
     } catch {}
 
@@ -82,18 +87,11 @@ export const createLearningSlice: StateCreator<StoreState, [], [], LearningSlice
       };
     } catch {}
 
-    set({ learningContext: { l1, l2, l3: { records, stats } } });
+    const reviewPlan = calculateReviewPlan(l2);
+    set({ learningContext: { l1, l2, reviewPlan, l3: { records, stats } } });
 
-    // Notify about weak knowledge points
-    const weakPoints = l2.filter(ks => ks.mastery < 0.3);
-    if (weakPoints.length > 0) {
-      const weakest = weakPoints[0];
-      scheduleLocalNotification(
-        '学习提醒',
-        `你在「${weakest.name}」上需要加强，来练习一下吧`,
-        { screen: 'chat', knowledgePointId: weakest.knowledge_point_id },
-      ).catch(() => {});
-    }
+    const dueReview = reviewPlan.find(item => item.dueToday);
+    if (dueReview) scheduleReviewNotification(dueReview).catch(() => {});
   },
 
   updateL1Summary: (summary: string) => {

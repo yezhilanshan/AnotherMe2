@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,10 +13,16 @@ from tempfile import mkdtemp
 from typing import Any, Dict, Iterable, Protocol
 from uuid import uuid4
 
+from agents.foundation.trace_event import TraceEvent, TraceEventEmitter
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from tutor_engine.utils.document_extractor import (
+    DocumentExtractionError,
+    extract_text_from_bytes,
+)
 
+from .anotherme_client import AnotherMeClient, AnotherMeError
 from .anotherme_executor import (
     MissingInputObjectError,
     ProblemVideoExecutionResult,
@@ -25,39 +32,33 @@ from .anotherme_executor import (
     synthesize_problem_image_from_text,
 )
 from .chat_service import extract_learning_records, get_student_profile_snapshot
+from .classroom_store import save_classroom_payload
 from .config import Settings
 from .course_generation_provider import create_course_generation_provider
+from .knowledge_tracing_service import get_student_knowledge_states
 from .models import AILearningRecord, Job, JobArtifact, JobEvent
-from .anotherme_client import AnotherMeClient, AnotherMeError
-from agents.foundation.trace_event import TraceEvent, TraceEventEmitter
 from .queueing import QueueMessage
 from .schemas import CreateJobRequest, JobStatus, JobType, validate_job_payload
 from .storage import ObjectStorage
-from tutor_engine.utils.document_extractor import (
-    DocumentExtractionError,
-    extract_text_from_bytes,
-)
-
 
 RUNNING_STATUSES = {JobStatus.QUEUED.value, JobStatus.RUNNING.value}
 RETRY_NOT_BEFORE_KEY = "retry_not_before"
 
 
 class QueueClientLike(Protocol):
-    def enqueue(self, queue_name: str, message: QueueMessage) -> None:
-        ...
+    def enqueue(self, queue_name: str, message: QueueMessage) -> None: ...
 
-    def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None:
-        ...
+    def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None: ...
 
-    def dlq_length(self, dlq_name: str) -> int:
-        ...
+    def dlq_length(self, dlq_name: str) -> int: ...
 
-    def peek_dead_letters(self, dlq_name: str, offset: int = 0, limit: int = 50) -> list[QueueMessage]:
-        ...
+    def peek_dead_letters(
+        self, dlq_name: str, offset: int = 0, limit: int = 50
+    ) -> list[QueueMessage]: ...
 
-    def requeue_dead_letter(self, dlq_name: str, target_queue: str, count: int = 1) -> int:
-        ...
+    def requeue_dead_letter(
+        self, dlq_name: str, target_queue: str, count: int = 1
+    ) -> int: ...
 
 
 class JobServiceError(RuntimeError):
@@ -112,12 +113,20 @@ def canonical_json(data: Dict[str, Any]) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def compute_idempotency_key(job_type: str, normalized_payload: Dict[str, Any], user_id: str) -> str:
+def compute_idempotency_key(
+    job_type: str, normalized_payload: Dict[str, Any], user_id: str
+) -> str:
     raw = f"{job_type}|{canonical_json(normalized_payload)}|{user_id}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
-def add_event(session: Session, job_id: str, event_type: str, message: str, payload: Dict[str, Any] | None = None) -> None:
+def add_event(
+    session: Session,
+    job_id: str,
+    event_type: str,
+    message: str,
+    payload: Dict[str, Any] | None = None,
+) -> None:
     session.add(
         JobEvent(
             job_id=job_id,
@@ -149,7 +158,9 @@ def add_trace_event(
     )
 
 
-def _persist_trace_events(session: Session, job_id: str, trace: TraceEventEmitter) -> None:
+def _persist_trace_events(
+    session: Session, job_id: str, trace: TraceEventEmitter
+) -> None:
     existing_ids = {
         row[0]
         for row in session.query(JobEvent.trace_event_id)
@@ -190,9 +201,103 @@ def add_artifact(
     )
 
 
-def serialize_job(job: Job) -> Dict[str, Any]:
+def _compact_str(value: Any, max_length: int = 600) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 1]}…"
+
+
+def _normalize_problem_steps(raw_steps: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_steps, list):
+        return []
+
+    steps: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_steps, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get("id") or item.get("step_id") or index
+        try:
+            step_id = int(raw_id)
+        except (TypeError, ValueError):
+            step_id = index
+        title = (
+            item.get("title")
+            or item.get("name")
+            or item.get("heading")
+            or f"第 {step_id} 步"
+        )
+        narration = (
+            item.get("narration")
+            or item.get("text")
+            or item.get("content")
+            or item.get("description")
+            or ""
+        )
+        steps.append(
+            {
+                "id": step_id,
+                "title": _compact_str(title, 120),
+                "narration": _compact_str(narration, 1200),
+            }
+        )
+    return steps
+
+
+def get_problem_job_result_payload(job: Job) -> Dict[str, Any]:
+    """Return result payload augmented with reusable problem-solving context."""
+
     engine_state = job.engine_state or {}
-    partial_result = engine_state.get("partial_result") if isinstance(engine_state, dict) else None
+    partial_result = (
+        engine_state.get("partial_result") if isinstance(engine_state, dict) else None
+    )
+    result: Dict[str, Any] = (
+        dict(partial_result) if isinstance(partial_result, dict) else {}
+    )
+    result.update(job.result_payload or {})
+
+    if isinstance(partial_result, dict):
+        steps = _normalize_problem_steps(partial_result.get("steps"))
+        if steps and "steps" not in result:
+            result["steps"] = steps
+    else:
+        steps = _normalize_problem_steps(result.get("steps"))
+
+    payload = job.normalized_payload or job.input_payload or {}
+    problem_text = _compact_str(payload.get("problem_text"), 800)
+    requirement_hint = (
+        _compact_str(engine_state.get("requirement_hint"), 800)
+        if isinstance(engine_state, dict)
+        else ""
+    )
+    snapshot_summary = problem_text or requirement_hint
+
+    if steps and "problem_snapshot" not in result:
+        result["problem_snapshot"] = {
+            "source": "problem_video_job",
+            "job_id": job.id,
+            "summary": snapshot_summary
+            or "拍题任务已生成解题步骤，题面文字未手动补充。",
+            "allSteps": steps,
+        }
+
+    if not result and isinstance(partial_result, dict):
+        result = partial_result
+
+    return result
+
+
+def serialize_job(job: Job) -> Dict[str, Any]:
+    if job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value:
+        result = get_problem_job_result_payload(job)
+    else:
+        engine_state = job.engine_state or {}
+        partial_result = (
+            engine_state.get("partial_result") if isinstance(engine_state, dict) else None
+        )
+        result = job.result_payload or (
+            partial_result if isinstance(partial_result, dict) else None
+        )
     return {
         "job_id": job.id,
         "job_type": job.job_type,
@@ -201,7 +306,7 @@ def serialize_job(job: Job) -> Dict[str, Any]:
         "step": job.step,
         "error_code": job.error_code,
         "error_message": job.error_message,
-        "result": job.result_payload or (partial_result if isinstance(partial_result, dict) else None),
+        "result": result,
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
     }
@@ -213,7 +318,9 @@ def create_or_get_job(
     settings: Settings,
 ) -> tuple[Job, bool]:
     normalized_payload = validate_job_payload(request.job_type, request.payload)
-    idem_key = compute_idempotency_key(request.job_type.value, normalized_payload, request.user_id)
+    idem_key = compute_idempotency_key(
+        request.job_type.value, normalized_payload, request.user_id
+    )
 
     existing = (
         session.query(Job)
@@ -221,7 +328,9 @@ def create_or_get_job(
         .order_by(Job.created_at.desc())
         .first()
     )
-    if existing and existing.status in RUNNING_STATUSES.union({JobStatus.SUCCEEDED.value}):
+    if existing and existing.status in RUNNING_STATUSES.union(
+        {JobStatus.SUCCEEDED.value}
+    ):
         return existing, False
     if existing:
         idem_key = f"{idem_key}:retry:{uuid4().hex}"
@@ -251,11 +360,15 @@ def create_or_get_job(
             .order_by(Job.created_at.desc())
             .first()
         )
-        if existing and existing.status in RUNNING_STATUSES.union({JobStatus.SUCCEEDED.value}):
+        if existing and existing.status in RUNNING_STATUSES.union(
+            {JobStatus.SUCCEEDED.value}
+        ):
             return existing, False
         raise
 
-    add_event(session, job.id, "queued", "Job accepted and queued", {"queue": queue_name})
+    add_event(
+        session, job.id, "queued", "Job accepted and queued", {"queue": queue_name}
+    )
     return job, True
 
 
@@ -278,7 +391,9 @@ def dequeue_next_queued_job(
             continue
         for job in jobs:
             if is_job_ready_for_execution(job, now):
-                return QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name)
+                return QueueMessage(
+                    job_id=job.id, job_type=job.job_type, queue_name=job.queue_name
+                )
     return None
 
 
@@ -341,7 +456,9 @@ def recover_stale_running_jobs(
         )
         queue_client.enqueue(
             job.queue_name,
-            QueueMessage(job_id=job.id, job_type=job.job_type, queue_name=job.queue_name),
+            QueueMessage(
+                job_id=job.id, job_type=job.job_type, queue_name=job.queue_name
+            ),
         )
         recovered += 1
 
@@ -382,12 +499,18 @@ def fail_jobs_with_missing_input_objects(
 
         normalized_payload = job.normalized_payload or {}
         input_payload = job.input_payload or {}
-        image_object_key = (
-            str(normalized_payload.get("image_object_key") or input_payload.get("image_object_key") or "")
-            .strip()
-        )
+        image_object_key = str(
+            normalized_payload.get("image_object_key")
+            or input_payload.get("image_object_key")
+            or ""
+        ).strip()
         if not image_object_key:
-            _mark_failed(session, job, "JOB_INPUT_MISSING", "Missing required field: image_object_key")
+            _mark_failed(
+                session,
+                job,
+                "JOB_INPUT_MISSING",
+                "Missing required field: image_object_key",
+            )
             failed += 1
             continue
 
@@ -404,7 +527,11 @@ def fail_jobs_with_missing_input_objects(
             continue
 
         if exists:
-            geometry_object_key = str(normalized_payload.get("geometry_file") or input_payload.get("geometry_file") or "").strip()
+            geometry_object_key = str(
+                normalized_payload.get("geometry_file")
+                or input_payload.get("geometry_file")
+                or ""
+            ).strip()
             if not geometry_object_key:
                 continue
             try:
@@ -422,53 +549,105 @@ def fail_jobs_with_missing_input_objects(
             if geometry_exists:
                 continue
 
-            _mark_failed(session, job, "JOB_INPUT_MISSING", f"Input geometry object missing in storage: {geometry_object_key}")
+            _mark_failed(
+                session,
+                job,
+                "JOB_INPUT_MISSING",
+                f"Input geometry object missing in storage: {geometry_object_key}",
+            )
             failed += 1
             continue
 
-        _mark_failed(session, job, "JOB_INPUT_MISSING", f"Input object missing in storage: {image_object_key}")
+        _mark_failed(
+            session,
+            job,
+            "JOB_INPUT_MISSING",
+            f"Input object missing in storage: {image_object_key}",
+        )
         failed += 1
 
     return failed
 
 
 def _reconcile_running_problem_video_job(session: Session, job: Job) -> bool:
-    if job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value or job.status != JobStatus.RUNNING.value:
+    if (
+        job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value
+        or job.status != JobStatus.RUNNING.value
+    ):
         return False
 
-    video_artifact = (
+    # Determine render_mode from payload for correct artifact lookup
+    render_mode = (
+        str(
+            (job.normalized_payload or {}).get("render_mode")
+            or (job.input_payload or {}).get("render_mode")
+            or "video"
+        ).strip()
+        or "video"
+    )
+
+    primary_artifact_type = (
+        "problem_visualization" if render_mode == "matplotlib" else "problem_video"
+    )
+    fallback_artifact_type = (
+        "problem_video" if render_mode == "matplotlib" else "problem_visualization"
+    )
+
+    # Query primary artifact type first, then fallback for backward compatibility
+    artifact = (
         session.query(JobArtifact)
-        .filter(JobArtifact.job_id == job.id, JobArtifact.artifact_type == "problem_video")
+        .filter(
+            JobArtifact.job_id == job.id,
+            JobArtifact.artifact_type == primary_artifact_type,
+        )
         .order_by(JobArtifact.id.desc())
         .first()
     )
-    if not video_artifact:
+    if not artifact:
+        artifact = (
+            session.query(JobArtifact)
+            .filter(
+                JobArtifact.job_id == job.id,
+                JobArtifact.artifact_type == fallback_artifact_type,
+            )
+            .order_by(JobArtifact.id.desc())
+            .first()
+        )
+    if not artifact:
         return False
 
     debug_artifact = (
         session.query(JobArtifact)
-        .filter(JobArtifact.job_id == job.id, JobArtifact.artifact_type == "debug_bundle")
+        .filter(
+            JobArtifact.job_id == job.id, JobArtifact.artifact_type == "debug_bundle"
+        )
         .order_by(JobArtifact.id.desc())
         .first()
     )
 
     engine_state = job.engine_state or {}
     result_payload = {
-        "video_url": video_artifact.url,
+        "video_url": artifact.url,
         "duration_sec": engine_state.get("duration_sec"),
         "script_steps_count": engine_state.get("script_steps_count"),
         "debug_bundle_url": (
-            debug_artifact.url if debug_artifact else engine_state.get("debug_bundle_url")
+            debug_artifact.url
+            if debug_artifact
+            else engine_state.get("debug_bundle_url")
         ),
     }
+    # Matplotlib 模式：同时返回 image_url 字段
+    if render_mode == "matplotlib" and artifact.url:
+        result_payload["image_url"] = artifact.url
     add_event(
         session,
         job.id,
         "reconciled",
         "Recovered succeeded status from uploaded artifacts after interrupted worker execution",
         {
-            "artifact_type": "problem_video",
-            "video_url": video_artifact.url,
+            "artifact_type": artifact.artifact_type,
+            "artifact_url": artifact.url,
+            "render_mode": render_mode,
         },
     )
     _mark_succeeded(session, job, result_payload)
@@ -508,7 +687,9 @@ def reconcile_running_problem_video_jobs_with_artifacts(
     return reconciled
 
 
-def reconcile_single_running_problem_video_job_with_artifacts(session: Session, job: Job) -> bool:
+def reconcile_single_running_problem_video_job_with_artifacts(
+    session: Session, job: Job
+) -> bool:
     return _reconcile_running_problem_video_job(session, job)
 
 
@@ -545,7 +726,9 @@ def purge_prestart_nonterminal_jobs(
     return purged
 
 
-def _mark_running(session: Session, job: Job, step: str, message: str, progress: int) -> None:
+def _mark_running(
+    session: Session, job: Job, step: str, message: str, progress: int
+) -> None:
     now = _utcnow()
     if not job.started_at:
         job.started_at = now
@@ -554,7 +737,9 @@ def _mark_running(session: Session, job: Job, step: str, message: str, progress:
     job.status = JobStatus.RUNNING.value
     job.step = step
     job.progress = max(0, min(100, progress))
-    add_event(session, job.id, "progress", message, {"step": step, "progress": job.progress})
+    add_event(
+        session, job.id, "progress", message, {"step": step, "progress": job.progress}
+    )
 
 
 def _mark_failed(session: Session, job: Job, error_code: str, message: str) -> None:
@@ -616,18 +801,24 @@ def _prepare_course_payload(
 ) -> Dict[str, Any]:
     source_text = str(payload.get("source_text") or "").strip()
     source_object_key = str(payload.get("source_object_key") or "").strip()
-    source_file_name = Path(str(payload.get("source_file_name") or "").strip()).name or "material"
+    source_file_name = (
+        Path(str(payload.get("source_file_name") or "").strip()).name or "material"
+    )
 
     if not source_text and source_object_key:
         tmp_dir = Path(mkdtemp(prefix="course-source-", dir=settings.worker_temp_root))
         local_path = tmp_dir / source_file_name
         try:
             storage.download_file(source_object_key, str(local_path))
-            source_text = extract_text_from_bytes(source_file_name, local_path.read_bytes())
+            source_text = extract_text_from_bytes(
+                source_file_name, local_path.read_bytes()
+            )
         except DocumentExtractionError as exc:
             raise AnotherMeError(f"Failed to extract course material: {exc}") from exc
         except FileNotFoundError as exc:
-            raise MissingInputObjectError(f"required course material object missing: {source_object_key}") from exc
+            raise MissingInputObjectError(
+                f"required course material object missing: {source_object_key}"
+            ) from exc
         except Exception as exc:
             raise AnotherMeError(f"Failed to read course material: {exc}") from exc
         finally:
@@ -644,6 +835,23 @@ def _prepare_course_payload(
     return prepared
 
 
+def _sync_course_classroom_to_gateway_store(
+    client: AnotherMeClient,
+    classroom_id: str,
+) -> None:
+    classroom_payload = client.get_classroom(classroom_id)
+    classroom = (
+        classroom_payload.get("classroom")
+        if isinstance(classroom_payload.get("classroom"), dict)
+        else classroom_payload
+    )
+    if not isinstance(classroom, dict):
+        raise AnotherMeError(
+            f"AnotherMe classroom response for {classroom_id!r} did not contain classroom data"
+        )
+    save_classroom_payload(classroom_id, classroom)
+
+
 def _run_course_generate(
     session: Session,
     job: Job,
@@ -656,7 +864,13 @@ def _run_course_generate(
     trace.emit_workflow_started(total_steps=4, message="Course generation started")
     try:
         provider = create_course_generation_provider(settings, client)
-        _mark_running(session, job, "submitting_anotherme", "Submitting course generation to AnotherMe", 5)
+        _mark_running(
+            session,
+            job,
+            "submitting_anotherme",
+            "Submitting course generation to AnotherMe",
+            5,
+        )
         session.commit()
 
         trace.start_step("submit", "Submitting to AnotherMe engine")
@@ -664,13 +878,24 @@ def _run_course_generate(
         submitted = provider.submit(prepared_payload)
         anotherme_job_id = submitted.get("jobId") or submitted.get("job_id")
         if not anotherme_job_id:
-            raise AnotherMeError(f"AnotherMe submit response missing jobId: {submitted}")
+            raise AnotherMeError(
+                f"AnotherMe submit response missing jobId: {submitted}"
+            )
 
-        job.engine_state = {**(job.engine_state or {}), "anotherme_job_id": anotherme_job_id}
+        job.engine_state = {
+            **(job.engine_state or {}),
+            "anotherme_job_id": anotherme_job_id,
+        }
 
         trace.complete_step("submit", payload={"anotherme_job_id": anotherme_job_id})
 
-        add_event(session, job.id, "engine_state", "AnotherMe job submitted", {"anotherme_job_id": anotherme_job_id})
+        add_event(
+            session,
+            job.id,
+            "engine_state",
+            "AnotherMe job submitted",
+            {"anotherme_job_id": anotherme_job_id},
+        )
         session.commit()
 
         trace.start_step("polling", "Polling AnotherMe for progress")
@@ -685,10 +910,16 @@ def _run_course_generate(
             message = str(poll.get("message") or "Polling AnotherMe job")
             result = poll.get("result") if isinstance(poll.get("result"), dict) else {}
             if result:
-                classroom_id = result.get("classroomId") or result.get("classroom_id") or result.get("id")
+                classroom_id = (
+                    result.get("classroomId")
+                    or result.get("classroom_id")
+                    or result.get("id")
+                )
                 if classroom_id:
                     classroom_url = result.get("url") or result.get("classroom_url")
-                    scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
+                    scenes_count = int(
+                        result.get("scenesCount") or result.get("scenes_count") or 0
+                    )
                     job.engine_state = {
                         **(job.engine_state or {}),
                         "partial_result": {
@@ -702,17 +933,33 @@ def _run_course_generate(
             session.commit()
 
             if step != last_step:
-                trace.complete_step(last_step if last_step else "polling", payload={"step": step, "progress": progress})
+                trace.complete_step(
+                    last_step if last_step else "polling",
+                    payload={"step": step, "progress": progress},
+                )
                 trace.start_step(step, message)
                 last_step = step
 
             done = bool(poll.get("done")) or status in {"succeeded", "failed"}
             if done:
                 if status == "succeeded":
-                    classroom_id = result.get("classroomId") or result.get("classroom_id")
+                    classroom_id = result.get("classroomId") or result.get(
+                        "classroom_id"
+                    )
+                    if not classroom_id:
+                        raise AnotherMeError(
+                            f"AnotherMe job {anotherme_job_id} succeeded without classroom_id"
+                        )
                     classroom_url = result.get("url") or result.get("classroom_url")
-                    scenes_count = int(result.get("scenesCount") or result.get("scenes_count") or 0)
-                    meta_payload = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+                    scenes_count = int(
+                        result.get("scenesCount") or result.get("scenes_count") or 0
+                    )
+                    _sync_course_classroom_to_gateway_store(client, str(classroom_id))
+                    meta_payload = (
+                        result.get("meta")
+                        if isinstance(result.get("meta"), dict)
+                        else {}
+                    )
                     meta = {}
                     quality_score = meta_payload.get("quality_score")
                     engine_version = meta_payload.get("engine_version")
@@ -721,8 +968,16 @@ def _run_course_generate(
                     if engine_version is not None:
                         meta["engine_version"] = engine_version
 
-                    trace.complete_step(last_step or "polling", payload={"classroom_id": classroom_id, "scenes_count": scenes_count})
-                    trace.emit_workflow_completed(message="Course generation completed successfully")
+                    trace.complete_step(
+                        last_step or "polling",
+                        payload={
+                            "classroom_id": classroom_id,
+                            "scenes_count": scenes_count,
+                        },
+                    )
+                    trace.emit_workflow_completed(
+                        message="Course generation completed successfully"
+                    )
                     _persist_trace_events(session, job.id, trace)
                     session.commit()
 
@@ -736,7 +991,9 @@ def _run_course_generate(
                 raise AnotherMeError(poll.get("error") or "AnotherMe job failed")
 
             if (time.time() - start) > settings.anotherme_timeout_seconds:
-                raise AnotherMeError(f"AnotherMe polling timeout ({settings.anotherme_timeout_seconds}s)")
+                raise AnotherMeError(
+                    f"AnotherMe polling timeout ({settings.anotherme_timeout_seconds}s)"
+                )
 
             time.sleep(max(settings.anotherme_poll_seconds, 1))
     finally:
@@ -758,7 +1015,9 @@ def _resolve_learner_context(
     learner_user_id = str(payload.get("learner_user_id") or job.user_id or "").strip()
     learner_session_id_raw = str(payload.get("learner_session_id") or "").strip()
     learner_session_id = learner_session_id_raw or None
-    lookback_days = _clamp_int(payload.get("learner_lookback_days"), default=120, lower=14, upper=365)
+    lookback_days = _clamp_int(
+        payload.get("learner_lookback_days"), default=120, lower=14, upper=365
+    )
     return (learner_user_id or None, learner_session_id, lookback_days)
 
 
@@ -793,7 +1052,11 @@ def _build_memory_event(record: Dict[str, Any]) -> Dict[str, Any] | None:
     else:
         event_type = "wrong"
 
-    weight = 1.3 if difficulty == "hard" and event_type in {"not_understood", "wrong"} else 1.0
+    weight = (
+        1.3
+        if difficulty == "hard" and event_type in {"not_understood", "wrong"}
+        else 1.0
+    )
     return {
         "type": event_type,
         "knowledge_points": [knowledge_point],
@@ -806,7 +1069,9 @@ def _build_learner_memory_bundle(
     job: Job,
     payload: Dict[str, Any],
 ) -> Dict[str, Any] | None:
-    learner_user_id, learner_session_id, lookback_days = _resolve_learner_context(job, payload)
+    learner_user_id, learner_session_id, lookback_days = _resolve_learner_context(
+        job, payload
+    )
     if not learner_user_id:
         return None
 
@@ -822,7 +1087,9 @@ def _build_learner_memory_bundle(
         AILearningRecord.created_at >= cutoff,
     )
     if learner_session_id:
-        records_query = records_query.filter(AILearningRecord.session_id == learner_session_id)
+        records_query = records_query.filter(
+            AILearningRecord.session_id == learner_session_id
+        )
 
     rows = records_query.order_by(AILearningRecord.created_at.desc()).limit(120).all()
     rows.reverse()
@@ -834,14 +1101,40 @@ def _build_learner_memory_bundle(
         if event is not None:
             events.append(event)
 
-    return {
+    learning_context = (
+        payload.get("learning_context")
+        if isinstance(payload.get("learning_context"), dict)
+        else {}
+    )
+    step_personalization = None
+    if learning_context:
+        raw_step_personalization = learning_context.get("stepPersonalization")
+        if isinstance(raw_step_personalization, dict):
+            step_personalization = raw_step_personalization
+
+    # Include BKT mastery states for unified mastery tracking
+    bkt_states = get_student_knowledge_states(session, learner_user_id, limit=200)
+    bkt_mastery = {
+        s["knowledge_point_id"]: s["p_mastery"]
+        for s in bkt_states
+        if s.get("p_mastery") is not None
+    }
+
+    bundle = {
         "user_id": learner_user_id,
         "session_id": learner_session_id,
         "lookback_days": lookback_days,
         "profile_snapshot": profile_snapshot,
         "recent_learning_records": serialized_records,
         "derived_learning_events": events,
+        "bkt_mastery": bkt_mastery,
     }
+    if learning_context:
+        bundle["learning_context"] = learning_context
+    if step_personalization:
+        bundle["step_personalization"] = step_personalization
+
+    return bundle
 
 
 def _resolve_problem_video_run_output_dir(artifact_path: str) -> Path | None:
@@ -859,20 +1152,46 @@ def _upload_problem_video_artifacts(
     storage: ObjectStorage,
     trace: TraceEventEmitter,
     exec_result: ProblemVideoExecutionResult,
-) -> tuple[str, str | None]:
-    video_ext = Path(exec_result.video_path).suffix or ".mp4"
-    video_key = f"jobs/{job.id}/problem_video/final{video_ext}"
-    video_url = storage.upload_file(exec_result.video_path, video_key)
-    add_artifact(session, job.id, "problem_video", video_key, video_url)
+    render_mode: str = "video",
+) -> tuple[str, str | None, str | None]:
+    if render_mode == "matplotlib":
+        artifact_type = "problem_visualization"
+        artifact_prefix = "problem_viz"
+        fallback_ext = ".png"
+        artifact_content_type = "image/png"
+    elif render_mode == "interactive":
+        artifact_type = "problem_interactive"
+        artifact_prefix = "problem_interactive"
+        fallback_ext = ".html"
+        artifact_content_type = "text/html; charset=utf-8"
+    else:
+        artifact_type = "problem_video"
+        artifact_prefix = "problem_video"
+        fallback_ext = ".mp4"
+        artifact_content_type = None
+    artifact_ext = Path(exec_result.video_path).suffix or fallback_ext
+    artifact_key = f"jobs/{job.id}/{artifact_prefix}/final{artifact_ext}"
+    artifact_url = storage.upload_file(
+        exec_result.video_path,
+        artifact_key,
+        content_type=artifact_content_type,
+    )
+    add_artifact(session, job.id, artifact_type, artifact_key, artifact_url)
 
-    trace_event = trace.emit(TraceEvent(
-        type="video_rendered",
-        step="uploading_artifacts",
-        status="completed",
-        message=f"Video rendered and uploaded: {video_key}",
-        severity="success",
-        payload={"video_key": video_key, "video_url": video_url},
-    ))
+    trace_event = trace.emit(
+        TraceEvent(
+            type="video_rendered",
+            step="uploading_artifacts",
+            status="completed",
+            message=f"Artifact rendered and uploaded: {artifact_key}",
+            severity="success",
+            payload={
+                "artifact_key": artifact_key,
+                "artifact_url": artifact_url,
+                "artifact_type": artifact_type,
+            },
+        )
+    )
     add_trace_event(
         session,
         job.id,
@@ -880,16 +1199,40 @@ def _upload_problem_video_artifacts(
         "Problem video artifact uploaded",
         trace_event_id=trace_event.id,
         trace_event_type=trace_event.type,
-        payload={"video_key": video_key, "video_url": video_url},
+        payload={
+            "artifact_key": artifact_key,
+            "artifact_url": artifact_url,
+            "artifact_type": artifact_type,
+        },
     )
 
     debug_url = None
+    scene_package_url = None
+    if render_mode == "interactive":
+        scene_package_path = Path(exec_result.video_path).parent / "scene_package.json"
+        if scene_package_path.exists():
+            scene_package_key = f"jobs/{job.id}/problem_interactive/scene_package.json"
+            scene_package_url = storage.upload_file(
+                str(scene_package_path),
+                scene_package_key,
+                content_type="application/json; charset=utf-8",
+            )
+            add_artifact(
+                session,
+                job.id,
+                "scene_package",
+                scene_package_key,
+                scene_package_url,
+            )
+
     if exec_result.debug_bundle_path and Path(exec_result.debug_bundle_path).exists():
         debug_key = f"jobs/{job.id}/problem_video/debug_bundle.zip"
-        debug_url = storage.upload_file(exec_result.debug_bundle_path, debug_key, content_type="application/zip")
+        debug_url = storage.upload_file(
+            exec_result.debug_bundle_path, debug_key, content_type="application/zip"
+        )
         add_artifact(session, job.id, "debug_bundle", debug_key, debug_url)
 
-    return video_url, debug_url
+    return artifact_url, debug_url, scene_package_url
 
 
 def _run_problem_video_generate(
@@ -900,9 +1243,13 @@ def _run_problem_video_generate(
     storage: ObjectStorage,
 ) -> Dict[str, Any]:
     trace = TraceEventEmitter(job_id=job.id)
-    trace.emit_workflow_started(total_steps=5, message="Problem video generation started")
+    trace.emit_workflow_started(
+        total_steps=5, message="Problem video generation started"
+    )
 
-    _mark_running(session, job, "running_anotherme2", "Running AnotherMe2 video pipeline", 10)
+    _mark_running(
+        session, job, "running_anotherme2", "Running AnotherMe2 video pipeline", 10
+    )
     session.commit()
 
     learner_memory = _build_learner_memory_bundle(session, job, payload)
@@ -926,6 +1273,12 @@ def _run_problem_video_generate(
                 "learner_session_id": learner_memory.get("session_id"),
                 "records": len(learner_memory.get("recent_learning_records") or []),
                 "events": len(learner_memory.get("derived_learning_events") or []),
+                "step_personalization_steps": len(
+                    (learner_memory.get("step_personalization") or {}).get(
+                        "standardSteps"
+                    )
+                    or []
+                ),
             },
         )
         session.commit()
@@ -936,48 +1289,123 @@ def _run_problem_video_generate(
 
     trace.start_step("video_generation", "Generating problem video with AnotherMe2")
 
-    exec_result = run_problem_video_job(
-        executor_payload,
-        storage=storage,
-        temp_root=settings.worker_temp_root,
-        output_root=settings.worker_output_root,
-        keep_run_output=settings.keep_run_output,
-    )
+    # 启动轮询线程：在子进程生成脚本步骤后，提前将解题步骤写入 engine_state
+    stop_polling = threading.Event()
+    poll_thread: threading.Thread | None = None
+
+    render_mode = str(payload.get("render_mode") or "video").strip() or "video"
+    # Debug: 写文件确认 render_mode 值
+    try:
+        debug_path = Path(mkdtemp()).parent / "am2_debug_render_mode.txt"
+        debug_path.write_text(
+            f"render_mode={render_mode}\npayload_keys={list(payload.keys())}\njob_id={job.id}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    def _start_polling(output_dir: str) -> None:
+        nonlocal poll_thread
+        steps_file = Path(output_dir) / "intermediate" / "script_steps.json"
+
+        def _poll():
+            while not stop_polling.wait(3):
+                try:
+                    if steps_file.exists():
+                        data = json.loads(steps_file.read_text(encoding="utf-8"))
+                        if data.get("steps"):
+                            job.engine_state = {
+                                **(job.engine_state or {}),
+                                "partial_result": data,
+                            }
+                            session.merge(job)
+                            session.commit()
+                except Exception:
+                    pass
+
+        poll_thread = threading.Thread(target=_poll, daemon=True)
+        poll_thread.start()
+
+    try:
+        exec_result = run_problem_video_job(
+            executor_payload,
+            storage=storage,
+            temp_root=settings.worker_temp_root,
+            output_root=settings.worker_output_root,
+            keep_run_output=settings.keep_run_output,
+            on_output_dir_ready=_start_polling,
+            render_mode=render_mode,
+        )
+    finally:
+        stop_polling.set()
+        if poll_thread:
+            poll_thread.join(timeout=5)
+
     run_output_dir = _resolve_problem_video_run_output_dir(exec_result.video_path)
 
-    trace.complete_step("video_generation", payload={"duration_sec": exec_result.duration_sec})
+    trace.complete_step(
+        "video_generation", payload={"duration_sec": exec_result.duration_sec}
+    )
 
-    _mark_running(session, job, "uploading_artifacts", "Uploading generated artifacts", 80)
+    _mark_running(
+        session, job, "uploading_artifacts", "Uploading generated artifacts", 80
+    )
     session.commit()
     try:
-        video_url, debug_url = _upload_problem_video_artifacts(session, job, storage, trace, exec_result)
-        trace.emit_workflow_completed(message="Problem video generation completed successfully")
+        video_url, debug_url, scene_package_url = _upload_problem_video_artifacts(
+            session, job, storage, trace, exec_result, render_mode=render_mode
+        )
+        trace.emit_workflow_completed(
+            message="Problem video generation completed successfully"
+        )
         job.engine_state = {
             **(job.engine_state or {}),
             "requirement_hint": exec_result.requirement_hint,
             "duration_sec": exec_result.duration_sec,
             "script_steps_count": exec_result.script_steps_count,
             "debug_bundle_url": debug_url,
+            "scene_package_url": scene_package_url,
             "run_output_dir": str(run_output_dir) if run_output_dir else None,
-            "learner_memory_records": len((learner_memory or {}).get("recent_learning_records") or []),
-            "learner_memory_events": len((learner_memory or {}).get("derived_learning_events") or []),
+            "learner_memory_records": len(
+                (learner_memory or {}).get("recent_learning_records") or []
+            ),
+            "learner_memory_events": len(
+                (learner_memory or {}).get("derived_learning_events") or []
+            ),
             "trace_events": trace.to_event_list(),
         }
         _persist_trace_events(session, job.id, trace)
         session.commit()
 
-        return {
+        result = {
             "video_url": video_url,
             "duration_sec": exec_result.duration_sec,
             "script_steps_count": exec_result.script_steps_count,
             "debug_bundle_url": debug_url,
-            "learner_memory_records": len((learner_memory or {}).get("recent_learning_records") or []),
-            "learner_memory_events": len((learner_memory or {}).get("derived_learning_events") or []),
+            "scene_package_url": scene_package_url,
+            "learner_memory_records": len(
+                (learner_memory or {}).get("recent_learning_records") or []
+            ),
+            "learner_memory_events": len(
+                (learner_memory or {}).get("derived_learning_events") or []
+            ),
             "trace_events": trace.to_event_list(),
         }
+        # Matplotlib 模式：同时返回 image_url 字段
+        if render_mode == "matplotlib" and video_url:
+            result["image_url"] = video_url
+        if render_mode == "interactive" and video_url:
+            result["interactive_url"] = video_url
+            if scene_package_url:
+                result["scene_package_url"] = scene_package_url
+        return result
     finally:
         # Optional cleanup: preserve run_output when keep_run_output is enabled.
-        if (not settings.keep_run_output) and run_output_dir and run_output_dir.exists():
+        if (
+            (not settings.keep_run_output)
+            and run_output_dir
+            and run_output_dir.exists()
+        ):
             run_root = run_output_dir.parent
             shutil.rmtree(run_output_dir, ignore_errors=True)
             try:
@@ -1010,7 +1438,9 @@ def _create_inline_child_job(
     )
     session.add(child)
     session.flush()
-    add_event(session, child.id, "queued", "Inline child task created", {"parent": parent.id})
+    add_event(
+        session, child.id, "queued", "Inline child task created", {"parent": parent.id}
+    )
     return child
 
 
@@ -1025,7 +1455,9 @@ def _run_study_package(
     outputs = payload["outputs"]
     package_id = f"pkg_{job.id}"
 
-    _mark_running(session, job, "package_started", "Running study package orchestration", 5)
+    _mark_running(
+        session, job, "package_started", "Running study package orchestration", 5
+    )
     session.commit()
 
     course_result: Dict[str, Any] | None = None
@@ -1049,7 +1481,9 @@ def _run_study_package(
     def _mark_parent_task_done(task: str, step: str, message: str) -> None:
         nonlocal completed_weight
         completed_weight += task_weights.get(task, 0.0)
-        _mark_running(session, job, step, message, min(99, int(round(completed_weight))))
+        _mark_running(
+            session, job, step, message, min(99, int(round(completed_weight)))
+        )
         session.commit()
 
     if source["type"] == "topic":
@@ -1073,19 +1507,27 @@ def _run_study_package(
                 },
                 settings,
             )
-            course_result = _run_course_generate(session, child, child.input_payload, settings, storage)
+            course_result = _run_course_generate(
+                session, child, child.input_payload, settings, storage
+            )
             _mark_succeeded(session, child, course_result)
             session.commit()
-            _mark_parent_task_done("course", "topic_course_done", "Topic course generated")
+            _mark_parent_task_done(
+                "course", "topic_course_done", "Topic course generated"
+            )
 
         if outputs.get("problem_video", False):
             core_text = topic
             if course_result and course_result.get("classroom_id"):
-                classroom_payload = AnotherMeClient(settings.anotherme_base_url).get_classroom(course_result["classroom_id"])
+                classroom_payload = AnotherMeClient(
+                    settings.anotherme_base_url
+                ).get_classroom(course_result["classroom_id"])
                 core_text = extract_core_example_text(classroom_payload)
 
             synthetic_key = f"jobs/{job.id}/synthetic/topic_problem.png"
-            synthesize_problem_image_from_text(core_text, storage, synthetic_key, settings.worker_temp_root)
+            synthesize_problem_image_from_text(
+                core_text, storage, synthetic_key, settings.worker_temp_root
+            )
             child = _create_inline_child_job(
                 session,
                 job,
@@ -1098,10 +1540,16 @@ def _run_study_package(
                 },
                 settings,
             )
-            problem_result = _run_problem_video_generate(session, child, child.input_payload, settings, storage)
+            problem_result = _run_problem_video_generate(
+                session, child, child.input_payload, settings, storage
+            )
             _mark_succeeded(session, child, problem_result)
             session.commit()
-            _mark_parent_task_done("problem_video", "topic_problem_video_done", "Topic problem video generated")
+            _mark_parent_task_done(
+                "problem_video",
+                "topic_problem_video_done",
+                "Topic problem video generated",
+            )
     else:
         image_object_key = source["image_object_key"]
         requirement_hint: str | None = None
@@ -1119,16 +1567,26 @@ def _run_study_package(
                 },
                 settings,
             )
-            problem_result = _run_problem_video_generate(session, child, child.input_payload, settings, storage)
+            problem_result = _run_problem_video_generate(
+                session, child, child.input_payload, settings, storage
+            )
             _mark_succeeded(session, child, problem_result)
             session.commit()
             requirement_hint = (child.engine_state or {}).get("requirement_hint")
-            _mark_parent_task_done("problem_video", "photo_problem_video_done", "Photo problem video generated")
+            _mark_parent_task_done(
+                "problem_video",
+                "photo_problem_video_done",
+                "Photo problem video generated",
+            )
 
         if outputs.get("course", False):
             if not requirement_hint:
                 try:
-                    tmp_dir = Path(mkdtemp(prefix="photo-requirement-", dir=settings.worker_temp_root))
+                    tmp_dir = Path(
+                        mkdtemp(
+                            prefix="photo-requirement-", dir=settings.worker_temp_root
+                        )
+                    )
                     local_image = tmp_dir / "source_photo.png"
                     storage.download_file(image_object_key, str(local_image))
                     requirement_hint = build_requirement_from_photo(str(local_image))
@@ -1152,10 +1610,14 @@ def _run_study_package(
                 },
                 settings,
             )
-            course_result = _run_course_generate(session, child, child.input_payload, settings, storage)
+            course_result = _run_course_generate(
+                session, child, child.input_payload, settings, storage
+            )
             _mark_succeeded(session, child, course_result)
             session.commit()
-            _mark_parent_task_done("course", "photo_course_done", "Photo-derived course generated")
+            _mark_parent_task_done(
+                "course", "photo_course_done", "Photo-derived course generated"
+            )
 
     result = {"package_id": package_id}
     if course_result is not None:
@@ -1175,13 +1637,19 @@ def _run_learning_record_extract(
         user_id=payload.get("user_id"),
         extract_version=str(payload.get("extract_version") or "v1"),
         latest_user_message_id=(
-            str(payload.get("latest_user_message_id")) if payload.get("latest_user_message_id") else None
+            str(payload.get("latest_user_message_id"))
+            if payload.get("latest_user_message_id")
+            else None
         ),
-        message_count=int(payload["message_count"]) if payload.get("message_count") is not None else None,
+        message_count=int(payload["message_count"])
+        if payload.get("message_count") is not None
+        else None,
     )
 
 
-def execute_job(session: Session, job: Job, settings: Settings, storage: ObjectStorage) -> Dict[str, Any]:
+def execute_job(
+    session: Session, job: Job, settings: Settings, storage: ObjectStorage
+) -> Dict[str, Any]:
     payload = job.normalized_payload
 
     if job.job_type == JobType.COURSE_GENERATE.value:
@@ -1191,7 +1659,13 @@ def execute_job(session: Session, job: Job, settings: Settings, storage: ObjectS
     if job.job_type == JobType.STUDY_PACKAGE_GENERATE.value:
         return _run_study_package(session, job, payload, settings, storage)
     if job.job_type == JobType.LEARNING_RECORD_EXTRACT.value:
-        _mark_running(session, job, "extracting_learning_records", "Extracting learning records", 30)
+        _mark_running(
+            session,
+            job,
+            "extracting_learning_records",
+            "Extracting learning records",
+            30,
+        )
         session.commit()
         return _run_learning_record_extract(session, payload)
 
@@ -1230,7 +1704,10 @@ def handle_worker_message(
             # Alert on non-retriable failure
             try:
                 from .alert_service import get_alert_service
-                get_alert_service(settings).notify_job_failed(job.id, job.job_type, "JOB_INPUT_MISSING", str(exc))
+
+                get_alert_service(settings).notify_job_failed(
+                    job.id, job.job_type, "JOB_INPUT_MISSING", str(exc)
+                )
             except Exception:
                 pass
             return
@@ -1262,14 +1739,19 @@ def handle_worker_message(
             session.commit()
         else:
             _mark_failed(session, job, "JOB_EXECUTION_FAILED", error_message)
-            dlq_name = settings.dlq_mapping.get(job.queue_name, f"{settings.queue_dead_letter_prefix}.{job.queue_name}")
+            dlq_name = settings.dlq_mapping.get(
+                job.queue_name, f"{settings.queue_dead_letter_prefix}.{job.queue_name}"
+            )
             queue_client.push_dead_letter(dlq_name, message)
 
             # Alert on permanent failure
             try:
                 from .alert_service import get_alert_service
+
                 alert = get_alert_service(settings)
-                alert.notify_job_failed(job.id, job.job_type, "JOB_EXECUTION_FAILED", error_message)
+                alert.notify_job_failed(
+                    job.id, job.job_type, "JOB_EXECUTION_FAILED", error_message
+                )
                 dlq_depth = queue_client.dlq_length(dlq_name)
                 alert.notify_dlq_depth(dlq_name, dlq_depth)
             except Exception:

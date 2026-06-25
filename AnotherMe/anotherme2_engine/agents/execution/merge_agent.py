@@ -15,6 +15,8 @@ from ..foundation.base_agent import BaseAgent
 from .error_classifier import classify_render_error
 from .formal_video_validator import FormalVideoValidator
 from .repair_agent import RepairAgent
+from .render_vs_source_validator import RenderVsSourceValidator
+from .semantic_render_reviewer import SemanticRenderReviewer
 from ..foundation.state import VideoProject
 try:
     from output_paths import DEFAULT_OUTPUT_DIR
@@ -25,7 +27,12 @@ except ModuleNotFoundError:
 class MergeAgent(BaseAgent):
     """合成智能体"""
 
-    def __init__(self, config: Dict[str, Any], llm: Optional[Any] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        llm: Optional[Any] = None,
+        vision_tool: Optional[Any] = None,
+    ):
         super().__init__(config, llm)
         self.output_dir = Path(config.get("output_dir", str(DEFAULT_OUTPUT_DIR)))
         self.resolution = config.get("resolution", "1920x1080")
@@ -33,8 +40,17 @@ class MergeAgent(BaseAgent):
         # 默认低画质以提升稳定性与调试速度（可通过配置覆盖为 -qm/-qh）
         self.manim_quality = config.get("manim_quality", "-ql")
         self.render_timeout = int(config.get("render_timeout", 900))
+        self.ffmpeg_timeout = int(config.get("ffmpeg_timeout", 180))
+        self.mobile_compatible_output = bool(config.get("mobile_compatible_output", True))
         self.max_repair_rounds = int(config.get("max_repair_rounds", 2))
         self.allow_degraded_output = bool(config.get("allow_degraded_output", False))
+        self.enforce_render_review = bool(config.get("enforce_render_review", False))
+        self.auto_render_review_repair = bool(
+            config.get("auto_render_review_repair", False)
+        )
+        self.max_render_review_rounds = int(
+            config.get("max_render_review_rounds", 1)
+        )
         media_root = config.get("manim_media_root")
         self.manim_media_root = (
             Path(str(media_root))
@@ -46,12 +62,17 @@ class MergeAgent(BaseAgent):
             "frame_height": 8.0,
             "frame_width": 14.222,
             "safe_margin": 0.4,
-            "left_panel_x_max": 0.75,
-            "right_panel_x_min": 1.8,
+            "left_panel_x_max": 1.45,
+            "right_panel_x_min": 2.1,
         })
         self.layout = config.get("layout", "left_graph_right_formula")
         self._last_render_error = ""
         self.validator = FormalVideoValidator(self.canvas_config)
+        self.render_review_validator = RenderVsSourceValidator(
+            self.canvas_config,
+            ffmpeg_timeout=self.ffmpeg_timeout,
+        )
+        self.semantic_render_reviewer = SemanticRenderReviewer(vision_tool=vision_tool)
         self.repair_agent = RepairAgent(
             config={
                 "use_llm_repair": False,
@@ -66,6 +87,23 @@ class MergeAgent(BaseAgent):
                 "right_panel_x_min": self.canvas_config.get("right_panel_x_min", 1.8),
             },
             llm=None,
+        )
+
+    def _render_output_is_degraded(self, metadata: Dict[str, Any]) -> bool:
+        calibration = metadata.get("calibration")
+        visual_geometry = metadata.get("visual_geometry_source")
+        overlay_fallback = (
+            str(calibration.get("overlay_fallback", "")).strip()
+            if isinstance(calibration, dict)
+            else ""
+        )
+        if overlay_fallback == "uncalibrated_image_overlay":
+            return True
+        if not isinstance(visual_geometry, dict) or not isinstance(calibration, dict):
+            return False
+        return (
+            str(visual_geometry.get("mode", "")).strip() == "image_overlay"
+            and calibration.get("is_valid") is False
         )
 
     def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -272,10 +310,15 @@ class MergeAgent(BaseAgent):
         audio_file = project.audio_merged_file
         if render_success and project.audio_embedded:
             # 音频已通过 self.add_sound() 嵌入 Manim 渲染结果，直接使用
-            project.final_video_path = str(video_file)
+            final_video = self.output_dir / "final_video.mp4"
+            project.final_video_path = (
+                str(final_video)
+                if self._transcode_mobile_compatible_mp4(str(video_file), str(final_video))
+                else str(video_file)
+            )
             state["messages"].append({
                 "role": "assistant",
-                "content": f"音频已嵌入动画（add_sound），输出视频：{video_file}"
+                "content": f"音频已嵌入动画（add_sound），输出视频：{project.final_video_path}"
             })
         elif audio_file and os.path.exists(audio_file):
             if render_success and os.path.exists(video_file):
@@ -316,17 +359,29 @@ class MergeAgent(BaseAgent):
         else:
             # 只有视频
             if render_success and os.path.exists(video_file):
-                project.final_video_path = str(video_file)
+                final_video = self.output_dir / "final_video.mp4"
+                project.final_video_path = (
+                    str(final_video)
+                    if self._transcode_mobile_compatible_mp4(str(video_file), str(final_video))
+                    else str(video_file)
+                )
                 state["messages"].append({
                     "role": "assistant",
-                    "content": f"输出无声视频：{video_file}"
+                    "content": f"输出无声视频：{project.final_video_path}"
                 })
 
         # 更新状态
         project.animation_rendered = os.path.exists(video_file)
         if project.final_video_path:
             if render_success:
-                project.status = "completed"
+                if self._render_output_is_degraded(metadata):
+                    project.status = "completed_degraded"
+                    project.error_message = (
+                        project.error_message
+                        or "Rendered with degraded visual geometry: uncalibrated image overlay."
+                    )
+                else:
+                    project.status = "completed"
             else:
                 project.status = "completed_with_fallback"
                 project.error_message = (
@@ -337,10 +392,108 @@ class MergeAgent(BaseAgent):
             project.status = "failed"
         if not project.final_video_path:
             project.error_message = project.error_message or "未能生成最终视频文件"
+        render_review = self.render_review_validator.validate(
+            render_scene=metadata.get("render_scene"),
+            geometry_ir=metadata.get("geometry_ir"),
+            manim_code=working_code,
+            render_topology_validation=metadata.get("render_topology_validation"),
+            visual_geometry_source=metadata.get("visual_geometry_source"),
+            final_video_path=project.final_video_path,
+            output_dir=self.output_dir,
+        )
+        metadata["render_vs_source_validation"] = render_review
+        self._write_debug_json("render_vs_source_validation.json", render_review)
+        try:
+            semantic_review = self.semantic_render_reviewer.review(
+                source_image_path=str(
+                    metadata.get("original_problem_image")
+                    or getattr(project, "problem_image", "")
+                    or ""
+                ).strip(),
+                rendered_frame_path=str(
+                    (render_review.get("artifact_review") or {}).get("frame_path", "")
+                ).strip(),
+                problem_text=str(getattr(project, "problem_text", "") or ""),
+                geometry_ir=metadata.get("geometry_ir"),
+                render_scene=metadata.get("render_scene"),
+                render_review=render_review,
+            )
+        except Exception as exc:
+            semantic_review = {
+                "version": "semantic_render_review.v1",
+                "status": "skipped",
+                "reason": "semantic_review_exception",
+                "overall_match": "unknown",
+                "confidence": 0.0,
+                "summary": f"Semantic render review skipped after exception: {exc}",
+                "issues": [],
+                "corrections": [],
+            }
+        metadata["semantic_render_review"] = semantic_review
+        self._write_debug_json("semantic_render_review.json", semantic_review)
+        metadata["render_review_retry_requested"] = False
+        metadata["render_review_next_step"] = "end"
+        semantic_review_failed = self._semantic_review_requires_retry(semantic_review)
+        if (not render_review.get("is_valid")) or semantic_review_failed:
+            failed_checks = (
+                render_review.get("failed_checks")
+                if isinstance(render_review.get("failed_checks"), list)
+                else []
+            )
+            first_failure = (
+                str(failed_checks[0].get("detail", "")).strip()
+                if failed_checks and isinstance(failed_checks[0], dict)
+                else ""
+            )
+            if not first_failure and semantic_review_failed:
+                first_failure = str(semantic_review.get("summary", "")).strip()
+            state["messages"].append(
+                {
+                    "role": "assistant",
+                    "content": f"渲染后校验发现问题：{first_failure or 'source-vs-render review failed'}",
+                }
+            )
+            retry_count = int(metadata.get("render_review_retry_count", 0) or 0)
+            if (
+                self.auto_render_review_repair
+                and project.final_video_path
+                and retry_count < self.max_render_review_rounds
+            ):
+                metadata["render_review_retry_requested"] = True
+                project.status = "render_review_retry_pending"
+                project.error_message = first_failure or ""
+                state["project"] = project
+                state["current_step"] = "merge_completed"
+                return state
+            if self.enforce_render_review and project.final_video_path:
+                project.status = "failed"
+                project.error_message = first_failure or "render_vs_source validation failed"
+                state["project"] = project
+                state["current_step"] = "merge_failed"
+                return state
+        else:
+            if project.status != "completed_degraded":
+                project.error_message = ""
         state["project"] = project
         state["current_step"] = "merge_completed"
 
         return state
+
+    def _semantic_review_requires_retry(
+        self,
+        semantic_review: Optional[Dict[str, Any]],
+    ) -> bool:
+        if not isinstance(semantic_review, dict):
+            return False
+        status = str(semantic_review.get("status", "")).strip().lower()
+        if status in {"needs_correction", "major_mismatch"}:
+            return True
+        for issue in semantic_review.get("issues", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            if str(issue.get("severity", "")).strip().lower() == "error":
+                return True
+        return False
 
     def _write_debug_json(self, filename: str, payload: Any) -> None:
         debug_dir = self.output_dir / "debug"
@@ -602,11 +755,15 @@ class MergeAgent(BaseAgent):
                 "ffmpeg", "-y",
                 "-i", video_file,
                 "-i", audio_file,
-                "-c:v", "copy",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
+                "-b:a", "128k",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-shortest",
+                "-movflags", "+faststart",
                 output_file
             ]
 
@@ -616,7 +773,7 @@ class MergeAgent(BaseAgent):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=self.ffmpeg_timeout
             )
 
             if result.returncode == 0:
@@ -634,4 +791,47 @@ class MergeAgent(BaseAgent):
             return False
         except Exception as e:
             print(f"FFmpeg 异常：{e}")
+            return False
+
+    def _transcode_mobile_compatible_mp4(self, input_file: str, output_file: str) -> bool:
+        """Normalize Manim output to a browser/mobile-friendly MP4 container."""
+        if not self.mobile_compatible_output:
+            return False
+        if not input_file or not output_file or os.path.abspath(input_file) == os.path.abspath(output_file):
+            return False
+        if not os.path.exists(input_file):
+            return False
+
+        try:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", input_file,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                output_file,
+            ]
+            print(f"执行 FFmpeg 移动端兼容转码：{' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.ffmpeg_timeout,
+            )
+            if result.returncode == 0 and os.path.exists(output_file):
+                print(f"移动端兼容视频输出成功：{output_file}")
+                return True
+            print(f"移动端兼容转码失败：{result.stderr}")
+            return False
+        except subprocess.TimeoutExpired:
+            print("移动端兼容转码超时")
+            return False
+        except FileNotFoundError:
+            print("未找到 ffmpeg 命令，跳过移动端兼容转码")
+            return False
+        except Exception as exc:
+            print(f"移动端兼容转码异常：{exc}")
             return False

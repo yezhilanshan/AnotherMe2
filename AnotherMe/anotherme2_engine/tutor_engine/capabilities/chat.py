@@ -47,12 +47,29 @@ class ChatCapability(BaseCapability):
 
         logger.info("Fast mode: direct LLM call, %d messages", len(messages))
 
-        async for chunk in agent.generate_stream(messages):
+        async for chunk in agent.generate_stream(
+            messages,
+            attachments=context.attachments,
+        ):
             await stream.emit(
                 StreamEvent(
                     type=StreamEventType.CONTENT,
                     content=chunk,
-                    source="chat",
+                    source=self.name,
                     stage="responding",
                 )
             )
+
+
+class VisualSolveFastCapability(ChatCapability):
+    manifest = CapabilityManifest(
+        name="visual_solve_fast",
+        description="Fast visual question answering path for image-based tutoring.",
+        stages=["vision", "responding"],
+        tools_used=[],
+        cli_aliases=["visual_solve_fast"],
+        request_schema=get_capability_request_schema("visual_solve_fast"),
+    )
+
+    async def run(self, context: UnifiedContext, stream: StreamBus) -> None:
+        await self._run_fast(context, stream)

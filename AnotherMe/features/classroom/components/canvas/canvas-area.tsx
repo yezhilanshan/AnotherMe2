@@ -55,6 +55,8 @@ export function CanvasArea({
   // Mobile landscape: toolbar auto-hide after 3s of inactivity
   const [toolbarVisible, setToolbarVisible] = useState(true);
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const slideRef = useRef<HTMLDivElement>(null);
+  const lastTouchEndRef = useRef(0);
 
   const resetToolbarTimer = useCallback(() => {
     setToolbarVisible(true);
@@ -81,37 +83,40 @@ export function CanvasArea({
     };
   }, [isMobileLandscape, resetToolbarTimer]);
   const showControls = mode === 'playback' && !whiteboardOpen;
-  const showPlayHint =
-    showControls &&
-    engineState !== 'playing' &&
-    currentScene?.type === 'slide' &&
-    !isLiveSession &&
-    !isPendingScene;
 
-  const handleSlideClick = useCallback(
-    (e: React.MouseEvent) => {
-      resetToolbarTimer(); // Reset auto-hide on any canvas tap
-      if (!showControls || isLiveSession || currentScene?.type !== 'slide') return;
-      // Don't trigger page play/pause when clicking inside a video element's visual area.
-      // Video elements may be visually covered by other slide elements (e.g. text),
-      // so we check click coordinates against all video element bounding rects.
-      const container = e.currentTarget as HTMLElement;
-      const videoEls = container.querySelectorAll('[data-video-element]');
-      for (const el of videoEls) {
-        const rect = el.getBoundingClientRect();
-        if (
-          e.clientX >= rect.left &&
-          e.clientX <= rect.right &&
-          e.clientY >= rect.top &&
-          e.clientY <= rect.bottom
-        ) {
-          return;
-        }
+  // Native touch/click listener for WebView compatibility
+  useEffect(() => {
+    const el = slideRef.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const now = Date.now();
+      if (e.type === 'touchend') {
+        lastTouchEndRef.current = now;
+      } else if (e.type === 'click' && now - lastTouchEndRef.current < 500) {
+        return;
+      }
+
+      resetToolbarTimer();
+      if (!showControls || isLiveSession) return;
+      // Don't pause when tapping video elements
+      const videoEls = el.querySelectorAll('[data-video-element]');
+      const clientX = (e as MouseEvent).clientX ?? (e as TouchEvent).changedTouches?.[0]?.clientX ?? 0;
+      const clientY = (e as MouseEvent).clientY ?? (e as TouchEvent).changedTouches?.[0]?.clientY ?? 0;
+      for (const ve of videoEls) {
+        const rect = ve.getBoundingClientRect();
+        if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) return;
       }
       onPlayPause();
-    },
-    [showControls, isLiveSession, onPlayPause, currentScene?.type, resetToolbarTimer],
-  );
+    };
+    el.addEventListener('click', handler);
+    el.addEventListener('touchend', handler);
+    return () => {
+      el.removeEventListener('click', handler);
+      el.removeEventListener('touchend', handler);
+    };
+  }, [showControls, isLiveSession, onPlayPause, resetToolbarTimer]);
+  const showPlayHint =
+    showControls && engineState !== 'playing' && !isLiveSession && !isPendingScene;
 
   return (
     <div className="w-full h-full flex flex-col bg-[#f6f4f0] dark:bg-gray-950 group/canvas relative">
@@ -131,12 +136,13 @@ export function CanvasArea({
             'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-900 shadow-2xl rounded-[22px] overflow-hidden relative transition-all duration-700',
             'max-md:h-auto max-md:w-full max-md:rounded-[18px]',
             isMobileLandscape && '!h-full !w-full !rounded-lg !max-h-full !max-w-full',
-            showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
+            showControls && !isLiveSession && 'cursor-pointer',
             currentScene?.type === 'interactive'
               ? 'shadow-sky-200/50 dark:shadow-sky-900/50 ring-1 ring-sky-900/5 dark:ring-sky-500/10'
               : 'shadow-gray-200/70 dark:shadow-gray-950/60 ring-1 ring-gray-950/5 dark:ring-white/5',
           )}
-          onClick={handleSlideClick}
+          ref={slideRef}
+          data-testid="classroom-slide-surface"
         >
           {/* Whiteboard Layer */}
           <div className="absolute inset-0 z-[110] pointer-events-none">
@@ -153,6 +159,7 @@ export function CanvasArea({
               </SceneProvider>
             </div>
           )}
+
 
           {/* Pending Scene Loading Overlay */}
           <AnimatePresence>

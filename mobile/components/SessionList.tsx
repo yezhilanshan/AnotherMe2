@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session } from '../lib/types';
+import { colors } from '../lib/theme';
 
 interface SessionListProps {
   visible: boolean;
@@ -95,7 +96,7 @@ export function SessionList({
             value={newTitle}
             onChangeText={setNewTitle}
             placeholder="新建会话标题..."
-            placeholderTextColor="#999"
+            placeholderTextColor={colors.textMuted}
             returnKeyType="done"
             onSubmitEditing={handleCreate}
           />
@@ -148,7 +149,7 @@ export function SessionList({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
   },
   header: {
     flexDirection: 'row',
@@ -157,35 +158,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: colors.divider,
+    backgroundColor: colors.bgCard,
   },
   title: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
   },
   closeButton: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     borderRadius: 14,
   },
   closeButtonText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 14,
     fontWeight: '600',
   },
   createRow: {
     flexDirection: 'row',
     padding: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     marginBottom: 8,
   },
   createInput: {
     flex: 1,
     height: 40,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
     borderRadius: 8,
     paddingHorizontal: 12,
     fontSize: 15,
@@ -194,23 +195,23 @@ const styles = StyleSheet.create({
   createButton: {
     paddingHorizontal: 16,
     height: 40,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
   createButtonDisabled: {
-    backgroundColor: '#99C5FF',
+    backgroundColor: colors.primaryLight,
   },
   createButtonText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 15,
     fontWeight: '600',
   },
   sessionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     paddingHorizontal: 16,
     paddingVertical: 14,
     marginHorizontal: 16,
@@ -219,9 +220,9 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   activeSession: {
-    backgroundColor: '#F0F8FF',
+    backgroundColor: colors.primaryLight,
     borderWidth: 1,
-    borderColor: '#007AFF',
+    borderColor: colors.primary,
   },
   sessionInfo: {
     flex: 1,
@@ -229,22 +230,22 @@ const styles = StyleSheet.create({
   sessionTitle: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#333',
+    color: colors.textPrimary,
   },
   sessionMeta: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textMuted,
     marginTop: 2,
   },
   activeBadge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     borderRadius: 10,
     marginLeft: 8,
   },
   activeBadgeText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 11,
     fontWeight: '600',
   },
@@ -253,7 +254,7 @@ const styles = StyleSheet.create({
     paddingTop: 40,
   },
   emptyText: {
-    color: '#999',
+    color: colors.textMuted,
     fontSize: 14,
   },
 });

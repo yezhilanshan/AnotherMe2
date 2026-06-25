@@ -12,7 +12,7 @@
  * Route: /course/[id]
  */
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -38,8 +38,9 @@ export default function CourseDetailScreen() {
   const webViewRef = useRef<WebView>(null);
   const [loading, setLoading] = useState(true);
   const [webError, setWebError] = useState(false);
+  const webViewVersion = useMemo(() => Date.now().toString(), [id]);
 
-  const webUrl = `${WEB_URL}/classroom/${id}`;
+  const webUrl = `${WEB_URL}/classroom/${id}?mobile=1&v=${webViewVersion}`;
 
   // Lock to landscape for immersive classroom experience
   useEffect(() => {
@@ -93,6 +94,7 @@ export default function CourseDetailScreen() {
         javaScriptEnabled
         domStorageEnabled
         sharedCookiesEnabled
+        cacheEnabled={false}
         startInLoadingState
         allowsBackForwardNavigationGestures
         scalesPageToFit={false}
@@ -200,7 +202,7 @@ const styles = StyleSheet.create({
 
   // Error
   errorOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(245,245,245,0.97)",
     justifyContent: "center",
     alignItems: "center",

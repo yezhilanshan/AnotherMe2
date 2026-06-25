@@ -37,6 +37,34 @@ class TeachingIRTests(unittest.TestCase):
             "geometry_facts": {"points": ["A", "B", "C", "D", "E"], "segments": ["DE"]},
         }
 
+    def _triangle_geometry_ir(self):
+        return {
+            "version": "v1",
+            "problem_type": "geometry_static",
+            "problem_pattern": "similarity_congruence",
+            "sub_pattern": "triangle_similarity",
+            "points": ["A", "B", "C", "D", "E", "F"],
+            "segments": [
+                {"id": "seg_AB", "label": "AB", "points": ["A", "B"]},
+                {"id": "seg_BC", "label": "BC", "points": ["B", "C"]},
+                {"id": "seg_CA", "label": "CA", "points": ["C", "A"]},
+                {"id": "seg_DE", "label": "DE", "points": ["D", "E"]},
+                {"id": "seg_EF", "label": "EF", "points": ["E", "F"]},
+                {"id": "seg_FD", "label": "FD", "points": ["F", "D"]},
+            ],
+            "shapes": [
+                {"id": "tri_ABC", "type": "polygon", "points": ["A", "B", "C"]},
+                {"id": "tri_DEF", "type": "polygon", "points": ["D", "E", "F"]},
+            ],
+            "relations": [
+                {"type": "parallel", "entities": ["seg_AB", "seg_DE"]},
+                {"type": "similar", "polygons": ["ABC", "DEF"]},
+                {"type": "congruent", "polygons": ["ABC", "DEF"]},
+            ],
+            "templates": [],
+            "transform": {"fold_axis": "", "image_pairs": [], "invariants": []},
+        }
+
     def test_build_geometry_ir_detects_fold_axis_and_images(self) -> None:
         geometry_ir = self.planner.build_geometry_ir(
             metadata=self._metadata(),
@@ -46,6 +74,44 @@ class TeachingIRTests(unittest.TestCase):
         self.assertEqual(geometry_ir["problem_type"], "fold_transform")
         self.assertEqual(geometry_ir["transform"]["fold_axis"], "seg_DE")
         self.assertTrue(any(item.get("image") == "B1" for item in geometry_ir["transform"]["image_pairs"]))
+
+    def test_build_geometry_ir_prefers_stable_geometry_ir_boundary_when_present(self) -> None:
+        metadata = self._metadata()
+        metadata["geometry_ir"] = {
+            "version": "geometry_ir.v1",
+            "scene_draft": {
+                "points": [{"id": "A"}, {"id": "B"}, {"id": "B'"}, {"id": "D"}, {"id": "E"}],
+                "visible_segments": [
+                    {"id": "seg_DE", "points": ["D", "E"]},
+                ],
+                "fold_correspondences": [{"source": "B", "image": "B'"}],
+            },
+            "facts": {
+                "visual_observed": {
+                    "segments": [{"id": "seg_DE", "points": ["D", "E"]}],
+                    "relations": [{"type": "collinear", "entities": ["D", "E", "B'"]}],
+                },
+                "text_explicit": {"relations": []},
+                "solver_derived": {},
+            },
+            "geometry_facts": {"templates": ["fold"]},
+        }
+
+        geometry_ir = self.planner.build_geometry_ir(
+            metadata=metadata,
+            problem_text="沿 DE 折叠，得到像点 B'",
+        )
+
+        self.assertTrue(
+            any(item.get("image") == "B'" for item in geometry_ir["transform"]["image_pairs"])
+        )
+        self.assertFalse(
+            any(item.get("image") == "B1" for item in geometry_ir["transform"]["image_pairs"])
+        )
+        self.assertIn(
+            {"type": "collinear", "entities": ["D", "E", "B'"]},
+            geometry_ir["relations"],
+        )
 
     def test_build_teaching_ir_generates_fold_and_auxiliary_actions(self) -> None:
         geometry_ir = self.planner.build_geometry_ir(
@@ -418,6 +484,58 @@ class TeachingIRTests(unittest.TestCase):
         self.assertIn("highlight_entity", action_names)
         self.assertNotIn("draw_perpendicular_auxiliary", action_names)
 
+    def test_teaching_ir_merges_coordinate_model_trace_into_first_step(self) -> None:
+        steps = [
+            ScriptStep(
+                id=1,
+                title="建立模型",
+                duration=2.0,
+                narration="先建立坐标系。",
+                visual_cues=[],
+                audio_duration=2.0,
+            ),
+            ScriptStep(
+                id=2,
+                title="继续推导",
+                duration=2.0,
+                narration="继续计算。",
+                visual_cues=[],
+                audio_duration=2.0,
+            ),
+        ]
+        geometry_ir = {
+            "version": "v1",
+            "problem_type": "geometry_static",
+            "problem_pattern": "",
+            "sub_pattern": "",
+            "points": ["A", "B", "C"],
+            "segments": [],
+            "shapes": [],
+            "relations": [],
+            "templates": ["triangle"],
+            "transform": {},
+            "coordinate_model_trace": {
+                "source": "template_solver",
+                "items": [
+                    {"kind": "title", "text": "建立标准坐标系"},
+                    {"kind": "description", "text": "取 B 为原点，BC 为 x 轴"},
+                    {"kind": "formula", "text": "B=(0,0)"},
+                    {"kind": "formula", "text": "C=(5,0)"},
+                ],
+            },
+        }
+
+        teaching_ir = self.planner.build_teaching_ir(
+            steps=steps,
+            geometry_ir=geometry_ir,
+            metadata={},
+            problem_text="",
+        )
+
+        self.assertIn("建立标准坐标系", teaching_ir["steps"][0]["spoken_formulas"])
+        self.assertIn("B=(0,0)", teaching_ir["steps"][0]["spoken_formulas"])
+        self.assertNotIn("B=(0,0)", teaching_ir["steps"][1]["spoken_formulas"])
+
     def test_scene_graph_updater_respects_required_actions_and_visible_segments(self) -> None:
         updater = SceneGraphUpdater()
         base_scene = self._metadata()["drawable_scene"]
@@ -662,6 +780,127 @@ class TeachingIRTests(unittest.TestCase):
         operations = step_scene["operations"]
         self.assertTrue(any(item.get("type") == "maintain" for item in operations))
         self.assertFalse(any(item.get("type") == "transform" for item in operations))
+
+    def test_build_teaching_ir_adds_triangle_sum_and_cosine_theorem_hints(self) -> None:
+        steps = [
+            ScriptStep(
+                id=1,
+                title="内角和",
+                duration=2.0,
+                narration="在三角形ABC中使用三角形内角和。",
+                visual_cues=["A", "B", "C"],
+            ),
+            ScriptStep(
+                id=2,
+                title="余弦定理",
+                duration=2.0,
+                narration="在三角形ABC中使用余弦定理计算边长。",
+                visual_cues=["AB", "AC", "BC"],
+            ),
+        ]
+
+        teaching_ir = self.planner.build_teaching_ir(
+            steps=steps,
+            geometry_ir=self._triangle_geometry_ir(),
+            metadata={},
+            problem_text="已知三角形ABC，求边长。",
+        )
+
+        triangle_sum_step = teaching_ir["steps"][0]
+        cosine_step = teaching_ir["steps"][1]
+
+        self.assertEqual(
+            [item.get("theorem") for item in triangle_sum_step["theorem_hints"]],
+            ["triangle_angle_sum"],
+        )
+        self.assertIn("∠A + ∠B + ∠C = 180°", triangle_sum_step["spoken_formulas"])
+        self.assertIn(
+            {"action": "highlight_relation", "targets": ["A", "B", "C"]},
+            triangle_sum_step["actions"],
+        )
+
+        self.assertEqual(
+            [item.get("theorem") for item in cosine_step["theorem_hints"]],
+            ["cosine_theorem"],
+        )
+        self.assertIn("BC^2 = AB^2 + AC^2 - 2*AB*AC*cos∠A", cosine_step["spoken_formulas"])
+
+    def test_build_teaching_ir_adds_parallel_theorem_hint_from_parallel_relation(self) -> None:
+        step = ScriptStep(
+            id=1,
+            title="平行线定理",
+            duration=2.0,
+            narration="由 AB ∥ DE，使用平行线定理得到内错角相等。",
+            visual_cues=["AB", "DE"],
+        )
+
+        teaching_ir = self.planner.build_teaching_ir(
+            steps=[step],
+            geometry_ir=self._triangle_geometry_ir(),
+            metadata={},
+            problem_text="由平行关系求角。",
+        )
+
+        teaching_step = teaching_ir["steps"][0]
+        self.assertEqual(
+            [item.get("theorem") for item in teaching_step["theorem_hints"]],
+            ["parallel_lines"],
+        )
+        self.assertIn("平行线性质：内错角相等，同位角相等", teaching_step["spoken_formulas"])
+        self.assertTrue(
+            any(
+                item.get("action") == "highlight_relation"
+                and set(item.get("targets", [])) == {"seg_AB", "seg_DE"}
+                for item in teaching_step["actions"]
+            )
+        )
+
+    def test_build_teaching_ir_adds_similarity_and_congruence_hints(self) -> None:
+        steps = [
+            ScriptStep(
+                id=1,
+                title="相似三角形",
+                duration=2.0,
+                narration="证明三角形ABC与DEF相似，并利用相似三角形。",
+                visual_cues=["ABC", "DEF"],
+            ),
+            ScriptStep(
+                id=2,
+                title="全等三角形",
+                duration=2.0,
+                narration="证明三角形ABC与DEF全等，并利用全等三角形。",
+                visual_cues=["ABC", "DEF"],
+            ),
+        ]
+
+        teaching_ir = self.planner.build_teaching_ir(
+            steps=steps,
+            geometry_ir=self._triangle_geometry_ir(),
+            metadata={},
+            problem_text="比较两个三角形。",
+        )
+
+        similar_step = teaching_ir["steps"][0]
+        congruent_step = teaching_ir["steps"][1]
+
+        self.assertEqual(
+            [item.get("theorem") for item in similar_step["theorem_hints"]],
+            ["similar_triangles"],
+        )
+        self.assertIn("△ABC ∼ △DEF", similar_step["spoken_formulas"])
+        self.assertTrue(
+            any(
+                item.get("action") == "highlight_relation"
+                and {"A", "B", "C", "D", "E", "F"}.issubset(set(item.get("targets", [])))
+                for item in similar_step["actions"]
+            )
+        )
+
+        self.assertEqual(
+            [item.get("theorem") for item in congruent_step["theorem_hints"]],
+            ["congruent_triangles"],
+        )
+        self.assertIn("△ABC ≅ △DEF", congruent_step["spoken_formulas"])
 
 
 if __name__ == "__main__":

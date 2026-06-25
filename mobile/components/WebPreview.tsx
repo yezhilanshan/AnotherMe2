@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
+import { colors } from '../lib/theme';
 
 interface WebPreviewProps {
   visible: boolean;
@@ -18,15 +19,21 @@ interface WebPreviewProps {
   onClose: () => void;
 }
 
-export function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProps) {
+export const WebPreview = React.memo(function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProps) {
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [inputUrl, setInputUrl] = useState(initialUrl);
   const [loading, setLoading] = useState(true);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
-  let webViewRef: WebView | null = null;
+  const webViewRef = useRef<WebView>(null);
 
-  const handleNavigate = () => {
+  // 当 initialUrl 变化时同步状态
+  useEffect(() => {
+    setCurrentUrl(initialUrl);
+    setInputUrl(initialUrl);
+  }, [initialUrl]);
+
+  const handleNavigate = useCallback(() => {
     let navigateUrl = inputUrl.trim();
     if (navigateUrl && !navigateUrl.startsWith('http')) {
       navigateUrl = 'https://' + navigateUrl;
@@ -34,11 +41,19 @@ export function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProp
     if (navigateUrl) {
       setCurrentUrl(navigateUrl);
     }
-  };
+  }, [inputUrl]);
 
-  const handleRefresh = () => {
-    webViewRef?.reload();
-  };
+  const handleRefresh = useCallback(() => {
+    webViewRef.current?.reload();
+  }, []);
+
+  const handleLoadStart = useCallback(() => setLoading(true), []);
+  const handleLoadEnd = useCallback(() => setLoading(false), []);
+  const handleNavChange = useCallback((navState: { canGoBack: boolean; canGoForward: boolean; url: string }) => {
+    setCanGoBack(navState.canGoBack);
+    setCanGoForward(navState.canGoForward);
+    setInputUrl(navState.url);
+  }, []);
 
   return (
     <Modal
@@ -51,11 +66,11 @@ export function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProp
         {/* 顶部导航栏 */}
         <View style={styles.navBar}>
           <TouchableOpacity onPress={onClose} style={styles.navBtn}>
-            <Ionicons name="close" size={22} color="#333" />
+            <Ionicons name="close" size={22} color={colors.textPrimary} />
           </TouchableOpacity>
 
           <View style={styles.urlBar}>
-            <Ionicons name="globe-outline" size={14} color="#999" style={styles.urlIcon} />
+            <Ionicons name="globe-outline" size={14} color={colors.textMuted} style={styles.urlIcon} />
             <TextInput
               style={styles.urlInput}
               value={inputUrl}
@@ -70,26 +85,22 @@ export function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProp
           </View>
 
           <TouchableOpacity onPress={handleRefresh} style={styles.navBtn}>
-            <Ionicons name="refresh" size={20} color="#333" />
+            <Ionicons name="refresh" size={20} color={colors.textPrimary} />
           </TouchableOpacity>
         </View>
 
         {/* WebView 内容 */}
         <WebView
-          ref={ref => { webViewRef = ref; }}
+          ref={webViewRef}
           source={{ uri: currentUrl }}
           style={styles.webview}
-          onLoadStart={() => setLoading(true)}
-          onLoadEnd={() => setLoading(false)}
-          onNavigationStateChange={navState => {
-            setCanGoBack(navState.canGoBack);
-            setCanGoForward(navState.canGoForward);
-            setInputUrl(navState.url);
-          }}
+          onLoadStart={handleLoadStart}
+          onLoadEnd={handleLoadEnd}
+          onNavigationStateChange={handleNavChange}
           startInLoadingState
           renderLoading={() => (
             <View style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color="#007AFF" />
+              <ActivityIndicator size="large" color={colors.primary} />
               <Text style={styles.loadingText}>加载中...</Text>
             </View>
           )}
@@ -98,77 +109,77 @@ export function WebPreview({ visible, url: initialUrl, onClose }: WebPreviewProp
         {/* 底部工具栏 */}
         <View style={styles.toolbar}>
           <TouchableOpacity
-            onPress={() => webViewRef?.goBack()}
+            onPress={() => webViewRef.current?.goBack()}
             disabled={!canGoBack}
             style={styles.toolBtn}
           >
-            <Ionicons name="arrow-back" size={20} color={canGoBack ? '#333' : '#ccc'} />
+            <Ionicons name="arrow-back" size={20} color={canGoBack ? colors.textPrimary : colors.textMuted} />
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => webViewRef?.goForward()}
+            onPress={() => webViewRef.current?.goForward()}
             disabled={!canGoForward}
             style={styles.toolBtn}
           >
-            <Ionicons name="arrow-forward" size={20} color={canGoForward ? '#333' : '#ccc'} />
+            <Ionicons name="arrow-forward" size={20} color={canGoForward ? colors.textPrimary : colors.textMuted} />
           </TouchableOpacity>
           <TouchableOpacity onPress={handleRefresh} style={styles.toolBtn}>
-            <Ionicons name="refresh" size={20} color="#333" />
+            <Ionicons name="refresh" size={20} color={colors.textPrimary} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     </Modal>
   );
-}
+});
 
 /**
  * 网页预览触发按钮 — 在消息气泡中显示
  */
-export function WebPreviewButton({ url, onPress }: { url: string; onPress: () => void }) {
+export const WebPreviewButton = React.memo(function WebPreviewButton({ url, onPress }: { url: string; onPress: () => void }) {
   return (
     <TouchableOpacity style={buttonStyles.container} onPress={onPress} activeOpacity={0.7}>
-      <Ionicons name="globe-outline" size={16} color="#007AFF" />
+      <Ionicons name="globe-outline" size={16} color={colors.primary} />
       <Text style={buttonStyles.text} numberOfLines={1}>
         {url}
       </Text>
-      <Ionicons name="open-outline" size={14} color="#007AFF" />
+      <Ionicons name="open-outline" size={14} color={colors.primary} />
     </TouchableOpacity>
   );
-}
+});
 
 const buttonStyles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#f0f7ff',
+    backgroundColor: colors.infoLight,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
     marginTop: 6,
     borderWidth: 1,
-    borderColor: '#d0e3ff',
+    borderColor: colors.borderLight,
     maxWidth: '100%',
   },
   text: {
     flex: 1,
     fontSize: 13,
-    color: '#007AFF',
+    color: colors.primary,
   },
 });
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.bgCard,
   },
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 8,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: colors.quoteBg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
+    borderBottomColor: colors.border,
     gap: 8,
   },
   navBtn: {
@@ -178,10 +189,10 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.bgCard,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
     paddingHorizontal: 8,
     height: 36,
   },
@@ -191,7 +202,7 @@ const styles = StyleSheet.create({
   urlInput: {
     flex: 1,
     fontSize: 14,
-    color: '#333',
+    color: colors.textPrimary,
     padding: 0,
   },
   webview: {
@@ -205,21 +216,21 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.bgCard,
   },
   loadingText: {
     marginTop: 8,
     fontSize: 14,
-    color: '#666',
+    color: colors.textSecondary,
   },
   toolbar: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 32,
     paddingVertical: 8,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: colors.quoteBg,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e0e0e0',
+    borderTopColor: colors.border,
   },
   toolBtn: {
     padding: 8,

@@ -115,11 +115,20 @@ export async function getConversations() {
   return api.messages.listConversations({ user_id: USER_ID });
 }
 
-export async function askQuestionWithImage(imageBase64: string, description?: string) {
-  const content = description
-    ? `${description}\n\n[图片: data:image/jpeg;base64,${imageBase64}]`
-    : `[图片: data:image/jpeg;base64,${imageBase64}]`;
-  return { content, capability: CAPABILITY_IDS.deep_solve };
+export async function askQuestionWithImageObject(
+  objectKey: string,
+  description?: string,
+) {
+  return {
+    content: description?.trim() || '请分析这张图片',
+    capability: CAPABILITY_IDS.deep_solve,
+    attachments: [
+      {
+        type: 'image',
+        object_key: objectKey,
+      },
+    ],
+  };
 }
 
 export { normalizeCapability, CAPABILITY_IDS };

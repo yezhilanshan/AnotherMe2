@@ -3,7 +3,7 @@ Model and runtime configuration.
 """
 
 import os
-from typing import Any, Dict, Iterable, Union, Optional
+from typing import Any, Dict, Iterable, Optional, Union
 
 try:
     from env_loader import load_project_env
@@ -53,7 +53,11 @@ DEEPSEEK_BASE_URL_ENV_NAMES = ("DEEPSEEK_BASE_URL",)
 
 # Qwen / DashScope / Bailian
 DASHSCOPE_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "BAILIAN_API_KEY", "QWEN_API_KEY")
-DASHSCOPE_BASE_URL_ENV_NAMES = ("DASHSCOPE_BASE_URL", "BAILIAN_BASE_URL", "QWEN_BASE_URL")
+DASHSCOPE_BASE_URL_ENV_NAMES = (
+    "DASHSCOPE_BASE_URL",
+    "BAILIAN_BASE_URL",
+    "QWEN_BASE_URL",
+)
 TEXT_API_KEY_ENV_NAME = DASHSCOPE_API_KEY_ENV_NAMES[0]
 VISION_API_KEY_ENV_NAME = DASHSCOPE_API_KEY_ENV_NAMES[0]
 
@@ -117,8 +121,8 @@ PROVIDER_MODELS = {
         "ocr": "deepseek-chat",
     },
     "qwen": {
-        "text": "qwen3.5-plus",
-        "vision": "qwen3-vl-plus",
+        "text": "qwen3.5-plus-2026-04-20",
+        "vision": "qwen3.5-plus-2026-04-20",
         "ocr": "qwen-vl-ocr-latest",
     },
     "kimi": {
@@ -235,7 +239,9 @@ def _env_first(*names: str) -> str:
 
 def _provider_for_model_type(model_type: str) -> Optional[str]:
     role = str(model_type or "text").strip().upper()
-    explicit = _normalise_provider(_env_first(f"PROBLEM_VIDEO_{role}_PROVIDER", f"{role}_PROVIDER"))
+    explicit = _normalise_provider(
+        _env_first(f"PROBLEM_VIDEO_{role}_PROVIDER", f"{role}_PROVIDER")
+    )
     if explicit:
         return explicit
 
@@ -272,7 +278,7 @@ def _detect_provider() -> Optional[str]:
         "doubao": ARK_API_KEY_ENV_NAMES,
         "grok": GROK_API_KEY_ENV_NAMES,
     }
-    
+
     for provider in PROVIDER_PRIORITY:
         env_names = provider_checks.get(provider, ())
         if _read_api_key_from_env_name(env_names):
@@ -283,17 +289,48 @@ def _detect_provider() -> Optional[str]:
 def _get_provider_base_url(provider: str) -> str:
     """Get base URL for a provider."""
     url_getters = {
-        "openai": lambda: _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES) or OPENAI_DEFAULT_BASE_URL,
-        "anthropic": lambda: _read_api_key_from_env_name(ANTHROPIC_BASE_URL_ENV_NAMES) or ANTHROPIC_DEFAULT_BASE_URL,
-        "gemini": lambda: _read_api_key_from_env_name(GEMINI_BASE_URL_ENV_NAMES) or GEMINI_DEFAULT_BASE_URL,
-        "deepseek": lambda: _read_api_key_from_env_name(DEEPSEEK_BASE_URL_ENV_NAMES) or DEEPSEEK_DEFAULT_BASE_URL,
-        "qwen": lambda: _read_api_key_from_env_name(DASHSCOPE_BASE_URL_ENV_NAMES) or DASHSCOPE_COMPAT_BASE_URL,
-        "kimi": lambda: _read_api_key_from_env_name(KIMI_BASE_URL_ENV_NAMES) or KIMI_DEFAULT_BASE_URL,
-        "minimax": lambda: _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES) or MINIMAX_DEFAULT_BASE_URL,
-        "glm": lambda: _read_api_key_from_env_name(GLM_BASE_URL_ENV_NAMES) or GLM_DEFAULT_BASE_URL,
-        "siliconflow": lambda: _read_api_key_from_env_name(SILICONFLOW_BASE_URL_ENV_NAMES) or SILICONFLOW_DEFAULT_BASE_URL,
-        "doubao": lambda: _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL,
-        "grok": lambda: _read_api_key_from_env_name(GROK_BASE_URL_ENV_NAMES) or GROK_DEFAULT_BASE_URL,
+        "openai": lambda: (
+            _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES)
+            or OPENAI_DEFAULT_BASE_URL
+        ),
+        "anthropic": lambda: (
+            _read_api_key_from_env_name(ANTHROPIC_BASE_URL_ENV_NAMES)
+            or ANTHROPIC_DEFAULT_BASE_URL
+        ),
+        "gemini": lambda: (
+            _read_api_key_from_env_name(GEMINI_BASE_URL_ENV_NAMES)
+            or GEMINI_DEFAULT_BASE_URL
+        ),
+        "deepseek": lambda: (
+            _read_api_key_from_env_name(DEEPSEEK_BASE_URL_ENV_NAMES)
+            or DEEPSEEK_DEFAULT_BASE_URL
+        ),
+        "qwen": lambda: (
+            _read_api_key_from_env_name(DASHSCOPE_BASE_URL_ENV_NAMES)
+            or DASHSCOPE_COMPAT_BASE_URL
+        ),
+        "kimi": lambda: (
+            _read_api_key_from_env_name(KIMI_BASE_URL_ENV_NAMES)
+            or KIMI_DEFAULT_BASE_URL
+        ),
+        "minimax": lambda: (
+            _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES)
+            or MINIMAX_DEFAULT_BASE_URL
+        ),
+        "glm": lambda: (
+            _read_api_key_from_env_name(GLM_BASE_URL_ENV_NAMES) or GLM_DEFAULT_BASE_URL
+        ),
+        "siliconflow": lambda: (
+            _read_api_key_from_env_name(SILICONFLOW_BASE_URL_ENV_NAMES)
+            or SILICONFLOW_DEFAULT_BASE_URL
+        ),
+        "doubao": lambda: (
+            _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL
+        ),
+        "grok": lambda: (
+            _read_api_key_from_env_name(GROK_BASE_URL_ENV_NAMES)
+            or GROK_DEFAULT_BASE_URL
+        ),
     }
     return url_getters.get(provider, lambda: "")()
 
@@ -309,7 +346,9 @@ def _get_provider_api_key(provider: str) -> str:
         "kimi": lambda: _read_api_key_from_env_name(KIMI_API_KEY_ENV_NAMES),
         "minimax": lambda: _read_api_key_from_env_name(MINIMAX_API_KEY_ENV_NAMES),
         "glm": lambda: _read_api_key_from_env_name(GLM_API_KEY_ENV_NAMES),
-        "siliconflow": lambda: _read_api_key_from_env_name(SILICONFLOW_API_KEY_ENV_NAMES),
+        "siliconflow": lambda: _read_api_key_from_env_name(
+            SILICONFLOW_API_KEY_ENV_NAMES
+        ),
         "doubao": lambda: _read_api_key_from_env_name(ARK_API_KEY_ENV_NAMES),
         "grok": lambda: _read_api_key_from_env_name(GROK_API_KEY_ENV_NAMES),
     }
@@ -319,16 +358,6 @@ def _get_provider_api_key(provider: str) -> str:
 def _get_model_for_provider(provider: str, model_type: str = "text") -> str:
     """Get default model for a provider and model type."""
     provider = _normalise_provider(provider) or provider
-    if model_type == "text":
-        env_prefix = PROVIDER_MODEL_ENV_PREFIXES.get(provider)
-        provider_models = os.getenv(f"{env_prefix}_MODELS", "") if env_prefix else ""
-        first_configured_model = next(
-            (model.strip() for model in provider_models.split(",") if model.strip()),
-            "",
-        )
-        if first_configured_model:
-            return _strip_model_provider(first_configured_model)
-
     models = PROVIDER_MODELS.get(provider, {})
     return models.get(model_type, models.get("text", "gpt-4o"))
 
@@ -363,7 +392,7 @@ def _vision_base_url() -> str:
 
 
 def _text_model() -> str:
-    configured_model = _env_first("PROBLEM_VIDEO_TEXT_MODEL", "TEXT_MODEL", "DEFAULT_MODEL")
+    configured_model = _env_first("PROBLEM_VIDEO_TEXT_MODEL", "TEXT_MODEL")
     if configured_model:
         return _strip_model_provider(configured_model)
 
@@ -406,18 +435,18 @@ def build_llm_config_for_provider(
     api_key = _get_provider_api_key(provider)
     base_url = _get_provider_base_url(provider)
     model = _get_model_for_provider(provider, model_type)
-    
+
     config: Dict[str, Any] = {
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
     }
-    
+
     if temperature is not None:
         config["temperature"] = temperature
     if max_tokens is not None:
         config["max_tokens"] = max_tokens
-        
+
     return config
 
 
@@ -471,7 +500,11 @@ def build_voice_model_config() -> Dict[str, Any]:
 TTS_PROVIDER_VOICES = {
     "edge": {
         "default": "zh-CN-XiaoxiaoNeural",
-        "zh-CN-XiaoxiaoNeural": {"name": "晓晓", "language": "zh-CN", "gender": "female"},
+        "zh-CN-XiaoxiaoNeural": {
+            "name": "晓晓",
+            "language": "zh-CN",
+            "gender": "female",
+        },
         "zh-CN-YunxiNeural": {"name": "云希", "language": "zh-CN", "gender": "male"},
         "zh-CN-YunjianNeural": {"name": "云健", "language": "zh-CN", "gender": "male"},
         "zh-CN-XiaoyiNeural": {"name": "晓伊", "language": "zh-CN", "gender": "female"},
@@ -488,14 +521,30 @@ TTS_PROVIDER_VOICES = {
     },
     "azure": {
         "default": "zh-CN-XiaoxiaoNeural",
-        "zh-CN-XiaoxiaoNeural": {"name": "晓晓", "language": "zh-CN", "gender": "female"},
+        "zh-CN-XiaoxiaoNeural": {
+            "name": "晓晓",
+            "language": "zh-CN",
+            "gender": "female",
+        },
         "zh-CN-YunxiNeural": {"name": "云希", "language": "zh-CN", "gender": "male"},
     },
     "doubao": {
         "default": "zh_female_wanwanxiao",
-        "zh_female_wanwanxiao": {"name": "弯弯小夕", "language": "zh-CN", "gender": "female"},
-        "zh_male_wanqudashu": {"name": "弯区大叔", "language": "zh-CN", "gender": "male"},
-        "zh_female_qingxinnvsheng": {"name": "清新女声", "language": "zh-CN", "gender": "female"},
+        "zh_female_wanwanxiao": {
+            "name": "弯弯小夕",
+            "language": "zh-CN",
+            "gender": "female",
+        },
+        "zh_male_wanqudashu": {
+            "name": "弯区大叔",
+            "language": "zh-CN",
+            "gender": "male",
+        },
+        "zh_female_qingxinnvsheng": {
+            "name": "清新女声",
+            "language": "zh-CN",
+            "gender": "female",
+        },
     },
     "minimax": {
         "default": "female-yujie",
@@ -525,7 +574,7 @@ def _detect_tts_provider() -> str:
     tts_provider = os.getenv("TTS_PROVIDER", "").strip().lower()
     if tts_provider and tts_provider in TTS_PROVIDER_VOICES:
         return tts_provider
-    
+
     # Auto-detect based on available API keys
     provider = _detect_provider()
     if provider == "openai" and _read_api_key_from_env_name(OPENAI_API_KEY_ENV_NAMES):
@@ -534,7 +583,7 @@ def _detect_tts_provider() -> str:
         return "doubao"
     if provider == "minimax" and _read_api_key_from_env_name(MINIMAX_API_KEY_ENV_NAMES):
         return "minimax"
-    
+
     # Default to edge (local)
     return "edge"
 
@@ -542,7 +591,7 @@ def _detect_tts_provider() -> str:
 def build_tts_config() -> Dict[str, Any]:
     """Build TTS config with provider auto-detection."""
     provider = _detect_tts_provider()
-    
+
     if provider == "edge":
         # Edge TTS (local, free)
         return {
@@ -554,20 +603,28 @@ def build_tts_config() -> Dict[str, Any]:
             "pitch": 0,
             "volume": 50,
         }
-    
+
     # Cloud TTS providers
     api_key = ""
     base_url = ""
-    
+
     if provider == "openai":
         api_key = _read_api_key_from_env_name(OPENAI_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES) or OPENAI_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES)
+            or OPENAI_DEFAULT_BASE_URL
+        )
     elif provider == "doubao":
         api_key = _read_api_key_from_env_name(ARK_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL
+        )
     elif provider == "minimax":
         api_key = _read_api_key_from_env_name(MINIMAX_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES) or MINIMAX_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES)
+            or MINIMAX_DEFAULT_BASE_URL
+        )
     elif provider == "elevenlabs":
         api_key = _read_api_key_from_env_name(("ELEVENLABS_API_KEY",))
         base_url = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1")
@@ -575,12 +632,14 @@ def build_tts_config() -> Dict[str, Any]:
         api_key = os.getenv("AZURE_TTS_API_KEY", "")
         region = os.getenv("AZURE_TTS_REGION", "eastasia")
         base_url = TTS_PROVIDER_ENDPOINTS["azure"].format(region=region)
-    
+
     return {
         "provider": provider,
         "api_key": api_key,
         "base_url": base_url,
-        "voice": TTS_PROVIDER_VOICES.get(provider, {}).get("default", "zh-CN-XiaoxiaoNeural"),
+        "voice": TTS_PROVIDER_VOICES.get(provider, {}).get(
+            "default", "zh-CN-XiaoxiaoNeural"
+        ),
         "speed": 1.0,
         "pitch": 0,
         "volume": 50,
@@ -591,19 +650,27 @@ def get_tts_provider_config(provider: str) -> Dict[str, Any]:
     """Get TTS configuration for a specific provider."""
     if provider == "edge":
         return build_tts_config()
-    
+
     api_key = ""
     base_url = ""
-    
+
     if provider == "openai":
         api_key = _read_api_key_from_env_name(OPENAI_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES) or OPENAI_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(OPENAI_BASE_URL_ENV_NAMES)
+            or OPENAI_DEFAULT_BASE_URL
+        )
     elif provider == "doubao":
         api_key = _read_api_key_from_env_name(ARK_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(ARK_BASE_URL_ENV_NAMES) or ARK_DEFAULT_BASE_URL
+        )
     elif provider == "minimax":
         api_key = _read_api_key_from_env_name(MINIMAX_API_KEY_ENV_NAMES)
-        base_url = _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES) or MINIMAX_DEFAULT_BASE_URL
+        base_url = (
+            _read_api_key_from_env_name(MINIMAX_BASE_URL_ENV_NAMES)
+            or MINIMAX_DEFAULT_BASE_URL
+        )
     elif provider == "elevenlabs":
         api_key = _read_api_key_from_env_name(("ELEVENLABS_API_KEY",))
         base_url = os.getenv("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io/v1")
@@ -611,12 +678,14 @@ def get_tts_provider_config(provider: str) -> Dict[str, Any]:
         api_key = os.getenv("AZURE_TTS_API_KEY", "")
         region = os.getenv("AZURE_TTS_REGION", "eastasia")
         base_url = TTS_PROVIDER_ENDPOINTS["azure"].format(region=region)
-    
+
     return {
         "provider": provider,
         "api_key": api_key,
         "base_url": base_url,
-        "voice": TTS_PROVIDER_VOICES.get(provider, {}).get("default", "zh-CN-XiaoxiaoNeural"),
+        "voice": TTS_PROVIDER_VOICES.get(provider, {}).get(
+            "default", "zh-CN-XiaoxiaoNeural"
+        ),
         "speed": 1.0,
         "pitch": 0,
         "volume": 50,
@@ -642,8 +711,8 @@ MANIM_CANVAS_CONFIG = {
     "pixel_height": 1080,
     "pixel_width": 1920,
     "safe_margin": 0.4,
-    "left_panel_x_max": 0.75,
-    "right_panel_x_min": 1.8,
+    "left_panel_x_max": 1.45,
+    "right_panel_x_min": 2.1,
     "formula_max_visible_slots": 8,
     "formula_math_font_size": 24,
     "formula_text_font_size": 24,

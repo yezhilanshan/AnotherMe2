@@ -12,13 +12,13 @@ export interface Session {
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
   timestamp: number;
   agentName?: string;
   serverMessageId?: string;
-  feedback?: 'like' | 'dislike';
+  feedback?: "like" | "dislike";
   /** 推理链内容（thinking 事件累积） */
   reasoning?: string;
   /** 本次消息使用的 capability */
@@ -26,18 +26,81 @@ export interface Message {
   /** 引用来源 */
   sources?: Array<{ title: string; url?: string }>;
   /** 工具调用记录 */
-  toolCalls?: Array<{ name: string; state: 'running' | 'completed' | 'error'; input?: string; output?: string; error?: string }>;
+  toolCalls?: Array<{
+    name: string;
+    state: "running" | "completed" | "error";
+    input?: string;
+    output?: string;
+    error?: string;
+  }>;
   /** 消息已排队等待网络恢复后发送 */
   queued?: boolean;
+  /** 附件（图片/文件） */
+  attachments?: MessageAttachment[];
+  /** 检索结果（文档问答引用来源） */
+  retrievalResults?: {
+    query: string;
+    chunks: Array<{
+      chunk_id: string;
+      filename: string;
+      page: number | null;
+      sheet_name: string | null;
+      score: number;
+      preview: string;
+    }>;
+  };
   /** 能力结构化结果（math_animator 等） */
   capabilityResult?: {
     output_mode?: string;
     render_type?: string;
-    artifacts?: Array<{ type: string; url: string; filename: string; label: string }>;
+    artifacts?: Array<{
+      type: string;
+      url: string;
+      filename: string;
+      label: string;
+    }>;
     code?: { language: string; content: string };
     analysis?: Record<string, unknown>;
     review?: Record<string, unknown>;
     summary?: Record<string, unknown>;
+  };
+}
+
+/** 消息附件 */
+export interface MessageAttachment {
+  /** 附件类型 */
+  type: "image" | "file";
+  /** 本地 URI（仅采集/发送前需要；持久化历史可能只有 objectKey/url） */
+  uri?: string;
+  /** 文件名 */
+  name?: string;
+  /** Persisted/gateway filename field */
+  file_name?: string;
+  /** MIME 类型 */
+  mimeType?: string;
+  /** Persisted/gateway MIME field */
+  mime_type?: string;
+  /** base64 编码的数据（发送时填充） */
+  base64?: string;
+  /** Gateway object storage key after upload */
+  objectKey?: string;
+  /** Persisted/gateway object storage key */
+  object_key?: string;
+  /** Public or local object URL returned by Gateway */
+  url?: string;
+  /** Persisted/gateway object URL */
+  file_url?: string;
+  /** 文件大小（字节） */
+  size?: number;
+  /** Persisted/gateway file size */
+  file_size?: number;
+  /** 附件采集/坐标元数据 */
+  metadata?: {
+    width?: number;
+    height?: number;
+    pixelCoordSpace?: "source" | "crop";
+    preservesOriginalImage?: boolean;
+    cropRect?: { x: number; y: number; width: number; height: number };
   };
 }
 
@@ -48,6 +111,22 @@ export interface KnowledgeState {
   mastery: number;
   attempts: number;
   last_practiced_at?: string;
+}
+
+export interface ReviewPlanItem {
+  knowledgePointId: string;
+  name: string;
+  subject?: string;
+  mastery: number;
+  attempts: number;
+  lastPracticedAt?: string;
+  nextReviewAt: string;
+  dueToday: boolean;
+  overdueDays: number;
+  intervalDays: number;
+  reason: string;
+  material: string;
+  checkQuestion: string;
 }
 
 export interface LearningRecord {
@@ -79,7 +158,7 @@ export interface DiagnosticProbe {
   correctAnswer: string | string[];
   explanation: string;
   hints?: string[];
-  probeType: 'choice' | 'fill_blank' | 'step_by_step';
+  probeType: "choice" | "fill_blank" | "step_by_step";
   difficulty: number;
   knowledgePointId?: string;
   teachingAction?: string;

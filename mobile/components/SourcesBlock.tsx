@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../lib/theme';
 
 interface Source {
   title: string;
@@ -20,10 +21,10 @@ export const SourcesBlock = React.memo(function SourcesBlock({ sources }: Source
     <View style={styles.container}>
       <TouchableOpacity style={styles.header} onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
         <View style={styles.headerLeft}>
-          <Ionicons name="book-outline" size={14} color="#007AFF" />
+          <Ionicons name="book-outline" size={14} color={colors.primary} />
           <Text style={styles.headerText}>引用了 {sources.length} 个来源</Text>
         </View>
-        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="#007AFF" />
+        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.primary} />
       </TouchableOpacity>
 
       {expanded && (
@@ -36,7 +37,7 @@ export const SourcesBlock = React.memo(function SourcesBlock({ sources }: Source
               activeOpacity={source.url ? 0.6 : 1}
               disabled={!source.url}
             >
-              <Ionicons name="link-outline" size={12} color="#007AFF" />
+              <Ionicons name="link-outline" size={12} color={colors.primary} />
               <Text style={[styles.sourceTitle, source.url && styles.sourceLink]} numberOfLines={1}>
                 {source.title}
               </Text>
@@ -50,10 +51,10 @@ export const SourcesBlock = React.memo(function SourcesBlock({ sources }: Source
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#f0f7ff',
+    backgroundColor: colors.infoLight,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#d0e3ff',
+    borderColor: colors.borderLight,
     marginVertical: 4,
     overflow: 'hidden',
   },
@@ -71,7 +72,7 @@ const styles = StyleSheet.create({
   },
   headerText: {
     fontSize: 13,
-    color: '#007AFF',
+    color: colors.primary,
     fontWeight: '600',
   },
   content: {
@@ -86,11 +87,11 @@ const styles = StyleSheet.create({
   },
   sourceTitle: {
     fontSize: 13,
-    color: '#555',
+    color: colors.textSecondary,
     flex: 1,
   },
   sourceLink: {
-    color: '#007AFF',
+    color: colors.primary,
     textDecorationLine: 'underline',
   },
 });

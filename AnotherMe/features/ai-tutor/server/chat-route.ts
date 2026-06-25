@@ -28,6 +28,8 @@ import {
 } from '@/lib/server/anotherme2-gateway';
 import { getAuthenticatedUserFromRequest } from '@/lib/auth/session';
 import { buildLearningContext } from '@/lib/server/learning-context';
+import { refreshMemoryFromTurn } from '@/lib/server/memory-service';
+import { extractGatewayMemories } from '@/lib/server/anotherme2-gateway/memory';
 import { createLearningContext, type LearningContext } from '@/lib/types/learning-context';
 import { createDefaultRuntime, type CapabilityHandler } from '../orchestration/capability-runtime';
 import type { CapabilityId as RuntimeCapabilityId } from '../orchestration/capability-registry';
@@ -243,6 +245,7 @@ function buildSelectedCapabilityPayload(params: {
       detailedAnswer: true,
       languageModel,
       conversationContext: buildConversationContext(body.messages),
+      maxRounds: typeof toolConfig?.maxRounds === 'number' ? toolConfig.maxRounds : 2,
     };
   }
 
@@ -521,6 +524,13 @@ export async function POST(req: NextRequest) {
           checkGuard: async () => ({ passed: true }),
           emitTrace: async (event) => {
             globalStreamBus.publish(event);
+            await writer
+              .write(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: 'teaching_trace', data: event })}\n\n`,
+                ),
+              )
+              .catch(() => {});
           },
           persistResult: async (result) => {
             const output = result.output as Record<string, unknown> | undefined;
@@ -561,6 +571,24 @@ export async function POST(req: NextRequest) {
 
             // Persist ClassroomBook artifact for this chat turn
             if (!wasAborted && assistantText.trim() && persistenceUserId) {
+              void refreshMemoryFromTurn({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                topic: learningContext?.metadata?.topic,
+                source: learningContext?.metadata?.source || 'chat',
+              }).catch((error) => {
+                log.warn('Failed to refresh persistent memory:', error);
+              });
+
+              // DB-backed memory extraction (fire-and-forget)
+              void extractGatewayMemories({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                sourceSessionId: persistenceSessionId || undefined,
+              }).catch(() => {});
+
               try {
                 const knowledgePointIds =
                   (result.stages.find((s) => s.stage === 'post_process')?.output
@@ -616,6 +644,11 @@ export async function POST(req: NextRequest) {
             capabilityId: 'visualize',
             handler: visualizeHandler as unknown as CapabilityHandler<never>,
           },
+          auto: {
+            capabilityId: 'auto',
+            // auto 能力通过 gateway 调用 Python 引擎，这里只是类型占位
+            handler: aiTutorChatHandler as unknown as CapabilityHandler<never>,
+          },
         };
 
         const selectedCapability = capabilityHandlers[requestedCapability as CapabilityType];
@@ -637,6 +670,130 @@ export async function POST(req: NextRequest) {
           body.config?.useAgenticPipeline === true &&
           requestedCapability === 'chat' &&
           isAnotherMe2GatewayConfigured();
+
+        // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
+        const useAutoGateway =
+          requestedCapability === 'auto' && isAnotherMe2GatewayConfigured();
+
+        // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
+        if (useAutoGateway) {
+          log.info(`Using Python DeepTutor gateway for auto capability`);
+
+          try {
+            const gatewayMessages = body.messages.map((msg) => {
+              const textContent =
+                msg.parts
+                  ?.filter((part) => part.type === 'text')
+                  .map((part) => (part as { text?: string }).text)
+                  .filter((text): text is string => typeof text === 'string')
+                  .join('') || '';
+              return {
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: textContent,
+              };
+            });
+
+            const gatewayWillPersistMessages = Boolean(persistenceSessionId);
+
+            const gatewayResponse = await streamGatewayChat({
+              messages: gatewayMessages,
+              model: body.model || 'gpt-4o',
+              apiKey: resolvedApiKey || '',
+              baseUrl: body.baseUrl,
+              capability: 'auto',
+              userId: persistenceUserId || 'anonymous',
+              requestId,
+              learningContext: (learningContext as unknown as Record<string, unknown>) || undefined,
+              persistenceSessionId,
+              persistMessages: gatewayWillPersistMessages,
+              persistUserMessage: false,
+              signal,
+            });
+
+            if (!gatewayResponse.ok) {
+              const errText = await gatewayResponse.text().catch(() => 'Gateway error');
+              throw new Error(`Gateway returned ${gatewayResponse.status}: ${errText}`);
+            }
+
+            if (!gatewayResponse.body) {
+              throw new Error('Gateway returned no response body');
+            }
+
+            const reader = gatewayResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let assistantText = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed === ':heartbeat' || trimmed === ':end') continue;
+
+                if (trimmed.startsWith('data: ')) {
+                  try {
+                    const event = JSON.parse(trimmed.slice(6));
+
+                    if (event.type === 'text_delta') {
+                      const content = event.data?.content;
+                      if (typeof content === 'string') {
+                        assistantText += content;
+                      }
+                    }
+
+                    await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                  } catch {
+                    // 跳过无法解析的行
+                  }
+                }
+              }
+            }
+
+            if (persistenceSessionId && assistantText.trim()) {
+              try {
+                await createGatewayAIMessage({
+                  sessionId: persistenceSessionId,
+                  role: 'assistant',
+                  userId: persistenceUserId,
+                  content: assistantText.trim(),
+                  contentType: 'text',
+                  modelName: body.model,
+                  requestId: `auto-assistant-${persistenceSessionId}`,
+                });
+              } catch (error) {
+                log.warn('Failed to persist auto response from gateway:', error);
+              }
+            }
+
+            stopHeartbeat();
+            await writer.close();
+            return;
+          } catch (error) {
+            if (signal.aborted) {
+              log.info('Auto gateway request aborted');
+              try {
+                await writer.close();
+              } catch {
+                /* already closed */
+              }
+              return;
+            }
+            log.error('Auto gateway pipeline failed:', error);
+            const errorEvent: StatelessEvent = {
+              type: 'error',
+              data: { message: `Auto 路由失败: ${error instanceof Error ? error.message : String(error)}` },
+            };
+            await writer.write(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
+            await writer.close();
+            return;
+          }
+        }
 
         if (useGatewayPipeline) {
           log.info(`Using Python DeepTutor gateway for agentic chat`);
@@ -756,6 +913,24 @@ export async function POST(req: NextRequest) {
 
             // 持久化 ClassroomBook
             if (assistantText.trim() && persistenceUserId) {
+              void refreshMemoryFromTurn({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                topic: learningContext?.metadata?.topic,
+                source: learningContext?.metadata?.source || 'chat',
+              }).catch((error) => {
+                log.warn('Failed to refresh persistent memory from gateway:', error);
+              });
+
+              // DB-backed memory extraction (fire-and-forget)
+              void extractGatewayMemories({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                sourceSessionId: persistenceSessionId || undefined,
+              }).catch(() => {});
+
               try {
                 const book = buildChatClassroomBook({
                   userId: persistenceUserId,

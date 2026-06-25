@@ -16,18 +16,21 @@ from api_gateway.config import Settings
 from api_gateway.db import init_db, nested_session_scope, reconfigure_db, session_scope
 from api_gateway.job_service import (
     _mark_failed,
+    _run_course_generate,
     _run_problem_video_generate,
     create_or_get_job,
     fail_jobs_with_missing_input_objects,
     handle_worker_message,
     purge_prestart_nonterminal_jobs,
     reconcile_single_running_problem_video_job_with_artifacts,
+    serialize_job,
 )
 from api_gateway.course_generation_provider import (
     LegacyCourseGenerationProvider,
     MiddleSchoolMathCourseGenerationProvider,
     create_course_generation_provider,
 )
+from api_gateway.classroom_store import list_classrooms, load_classroom, save_classroom_payload
 from api_gateway.models import (
     AIChatMessage,
     AIChatSession,
@@ -82,6 +85,32 @@ class StubCourseClient:
         return {"jobId": job_id, "status": "running"}
 
 
+def test_gateway_classroom_store_accepts_web_classroom_shape(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLASSROOM_DATA_DIR", str(tmp_path / "classrooms"))
+
+    save_classroom_payload(
+        "class-mobile-1",
+        {
+            "id": "class-mobile-1",
+            "stage": {"id": "class-mobile-1", "name": "移动端函数课堂"},
+            "scenes": [{"id": "scene-1"}, {"id": "scene-2"}],
+            "createdAt": "2026-06-23T10:00:00.000Z",
+        },
+    )
+
+    summaries = list_classrooms()
+
+    assert summaries == [
+        {
+            "id": "class-mobile-1",
+            "title": "移动端函数课堂",
+            "created_at": "2026-06-23T10:00:00.000Z",
+            "scenes_count": 2,
+        }
+    ]
+    assert load_classroom("class-mobile-1")["stage"]["name"] == "移动端函数课堂"
+
+
 def test_settings_startup_purge_requires_safety_latch():
     settings_unarmed = Settings(
         purge_prestart_jobs_on_startup=True,
@@ -111,6 +140,233 @@ def test_course_generation_provider_switch_and_payload_injection():
     msm_provider.submit({"requirement": "讲解勾股定理"})
     assert stub.last_payload is not None
     assert stub.last_payload["pedagogy_profile"]["domain"] == "middle-school-math"
+
+
+def test_course_generate_syncs_upstream_classroom_to_gateway_store(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CLASSROOM_DATA_DIR", str(tmp_path / "classrooms"))
+    db_path = tmp_path / "course-sync.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    class FakeCourseProvider:
+        def submit(self, payload):
+            return {"jobId": "upstream-course-job"}
+
+        def poll(self, job_id):
+            return {
+                "jobId": job_id,
+                "status": "succeeded",
+                "done": True,
+                "progress": 100,
+                "step": "completed",
+                "result": {
+                    "classroomId": "class-mobile-sync",
+                    "url": "http://localhost:3000/classroom/class-mobile-sync",
+                    "scenesCount": 1,
+                },
+            }
+
+    class FakeAnotherMeClient:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        def get_classroom(self, classroom_id):
+            return {
+                "classroom": {
+                    "id": classroom_id,
+                    "stage": {"id": classroom_id, "name": "同步后的课堂"},
+                    "scenes": [{"id": "scene-1", "type": "lecture", "order": 1}],
+                    "createdAt": "2026-06-23T11:00:00.000Z",
+                }
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "api_gateway.job_service.create_course_generation_provider",
+        lambda settings, client: FakeCourseProvider(),
+    )
+    monkeypatch.setattr(
+        "api_gateway.job_service.AnotherMeClient",
+        FakeAnotherMeClient,
+    )
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+        worker_temp_root=str(tmp_path / "tmp"),
+        anotherme_base_url="http://localhost:3000",
+    )
+
+    with session_scope() as session:
+        request = CreateJobRequest(
+            job_type=JobType.COURSE_GENERATE,
+            user_id="mobile-user",
+            payload={"requirement": "讲解一次函数"},
+        )
+        job, _ = create_or_get_job(session, request, settings)
+        session.commit()
+        session.refresh(job)
+
+        result = _run_course_generate(
+            session,
+            job,
+            job.normalized_payload,
+            settings,
+            LocalObjectStorage(storage_root),
+        )
+
+    assert result["classroom_id"] == "class-mobile-sync"
+    assert list_classrooms()[0]["title"] == "同步后的课堂"
+    assert load_classroom("class-mobile-sync")["scenes"][0]["id"] == "scene-1"
+
+
+def test_course_job_serialization_exposes_partial_classroom_result(
+    tmp_path: Path,
+):
+    db_path = tmp_path / "course-partial.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    with session_scope() as session:
+        job = Job(
+            job_type=JobType.COURSE_GENERATE.value,
+            queue_name="q.course",
+            user_id="mobile-user",
+            idempotency_key="course-partial",
+            status=JobStatus.RUNNING.value,
+            progress=70,
+            step="persisting",
+            input_payload={"requirement": "讲解一次函数"},
+            normalized_payload={"requirement": "讲解一次函数"},
+            engine_state={
+                "partial_result": {
+                    "classroom_id": "class-partial-1",
+                    "classroom_url": "http://localhost:3000/classroom/class-partial-1",
+                    "scenes_count": 1,
+                }
+            },
+        )
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+
+        payload = serialize_job(job)
+
+    assert payload["status"] == "running"
+    assert payload["result"] == {
+        "classroom_id": "class-partial-1",
+        "classroom_url": "http://localhost:3000/classroom/class-partial-1",
+        "scenes_count": 1,
+    }
+
+
+def test_mobile_course_generate_full_gateway_flow(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLASSROOM_DATA_DIR", str(tmp_path / "classrooms"))
+    db_path = tmp_path / "mobile-course-flow.db"
+    storage_root = tmp_path / "objects"
+
+    class FakeCourseProvider:
+        def submit(self, payload):
+            return {"jobId": "upstream-mobile-flow"}
+
+        def poll(self, job_id):
+            return {
+                "jobId": job_id,
+                "status": "succeeded",
+                "done": True,
+                "progress": 100,
+                "step": "completed",
+                "result": {
+                    "classroomId": "class-mobile-flow",
+                    "url": "http://localhost:3000/classroom/class-mobile-flow",
+                    "scenesCount": 1,
+                },
+            }
+
+    class FakeAnotherMeClient:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        def get_classroom(self, classroom_id):
+            return {
+                "classroom": {
+                    "id": classroom_id,
+                    "stage": {"id": classroom_id, "name": "移动端全流程课堂"},
+                    "scenes": [{"id": "scene-flow", "type": "lecture", "order": 1}],
+                    "createdAt": "2026-06-23T12:00:00.000Z",
+                }
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "api_gateway.job_service.create_course_generation_provider",
+        lambda settings, client: FakeCourseProvider(),
+    )
+    monkeypatch.setattr(
+        "api_gateway.job_service.AnotherMeClient",
+        FakeAnotherMeClient,
+    )
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+        worker_temp_root=str(tmp_path / "tmp"),
+        anotherme_base_url="http://localhost:3000",
+    )
+    queue = FakeQueueClient()
+    storage = LocalObjectStorage(storage_root)
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=queue,
+        storage_override=storage,
+    )
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/v1/jobs",
+        json={
+            "job_type": "course_generate",
+            "user_id": "mobile-user",
+            "payload": {"requirement": "讲解移动端课堂创建"},
+        },
+    )
+
+    assert create_resp.status_code == 200
+    job_id = create_resp.json()["job_id"]
+    assert queue.items
+
+    with session_scope() as session:
+        handle_worker_message(session, queue, queue.items[0][1], settings, storage)
+        session.commit()
+
+    job_resp = client.get(f"/v1/jobs/{job_id}")
+    assert job_resp.status_code == 200
+    job_payload = job_resp.json()
+    assert job_payload["status"] == "succeeded"
+    assert job_payload["result"]["classroom_id"] == "class-mobile-flow"
+
+    list_resp = client.get("/v1/classrooms?limit=10")
+    assert list_resp.status_code == 200
+    assert list_resp.json()["classrooms"][0] == {
+        "id": "class-mobile-flow",
+        "title": "移动端全流程课堂",
+        "created_at": "2026-06-23T12:00:00.000Z",
+        "scenes_count": 1,
+    }
+
+    detail_resp = client.get("/v1/classrooms/class-mobile-flow")
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["classroom"]["scenes"][0]["id"] == "scene-flow"
 
 
 def test_anotherme_client_disables_system_proxy_env(monkeypatch):
@@ -354,6 +610,13 @@ def test_ai_chat_non_streaming_persists_to_unified_database(tmp_path: Path):
         yield {"type": "done"}
 
     with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        upload = client.post(
+            "/v1/uploads",
+            files={"file": ("problem.png", b"fakepng", "image/png")},
+        )
+        assert upload.status_code == 200
+        object_key = upload.json()["object_key"]
+
         response = client.post(
             "/v1/ai/chat/non-streaming",
             json={
@@ -367,6 +630,15 @@ def test_ai_chat_non_streaming_persists_to_unified_database(tmp_path: Path):
                 "persist_messages": True,
                 "persist_user_message": True,
                 "persist_assistant_message": True,
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": object_key,
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                        "size": 7,
+                    }
+                ],
             },
         )
 
@@ -387,6 +659,248 @@ def test_ai_chat_non_streaming_persists_to_unified_database(tmp_path: Path):
             (2, "assistant", "统一数据库回复"),
         ]
         assert rows[0].capability == "chat"
+        assert rows[0].attachments_json == [
+            {
+                "type": "image",
+                "object_key": object_key,
+                "file_name": "problem.png",
+                "mime_type": "image/png",
+                "file_size": 7,
+            }
+        ]
+        assert "base64" not in rows[0].attachments_json[0]
+
+
+def test_ai_chat_image_auto_routes_to_visual_solve_fast(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-visual-fast.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    async def _fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "stream", "content": "图片快答回复"}
+        yield {"type": "done"}
+
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", b"fakepng", "image/png")},
+    )
+    assert upload.status_code == 200
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "这道题怎么做？"}],
+                "model": "test-model",
+                "api_key": "test-key",
+                "capability": "auto",
+                "mode": "auto",
+                "user_id": "stu-visual-fast",
+                "request_id": "req-visual-fast",
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": upload.json()["object_key"],
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["assistant_text"] == "图片快答回复"
+    assert captured["capability"] == "visual_solve_fast"
+    assert captured["config_overrides"] == {"mode": "fast"}
+    assert captured["attachments"][0]["type"] == "image"
+    assert captured["attachments"][0]["base64"]
+
+
+def test_ai_chat_image_chat_routes_to_visual_solve_fast(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-visual-chat.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    async def _fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "stream", "content": "图片聊天快答"}
+        yield {"type": "done"}
+
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", b"fakepng", "image/png")},
+    )
+    assert upload.status_code == 200
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "看图讲一下"}],
+                "model": "test-model",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "auto",
+                "user_id": "stu-visual-chat",
+                "request_id": "req-visual-chat",
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": upload.json()["object_key"],
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["capability"] == "visual_solve_fast"
+    assert captured["config_overrides"] == {"mode": "fast"}
+
+
+def test_ai_chat_image_deep_solve_stays_deep_solve(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-deep-image.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    captured: dict[str, Any] = {}
+
+    async def _fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield {"type": "stream", "content": "深度解题回复"}
+        yield {"type": "done"}
+
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", b"fakepng", "image/png")},
+    )
+    assert upload.status_code == 200
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "请严格推导"}],
+                "model": "test-model",
+                "api_key": "test-key",
+                "capability": "deep_solve",
+                "mode": "auto",
+                "user_id": "stu-deep-image",
+                "request_id": "req-deep-image",
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": upload.json()["object_key"],
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["capability"] == "deep_solve"
+    assert captured.get("config_overrides") is None
+
+
+def test_ai_learning_message_sanitizes_attachment_refs(tmp_path: Path):
+    db_path = tmp_path / "ai-learning-attachments.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    session_response = client.post(
+        "/v1/ai/sessions",
+        json={"user_id": "stu-attach", "title": "附件测试"},
+    )
+    assert session_response.status_code == 200
+    session_id = session_response.json()["session_id"]
+
+    message_response = client.post(
+        f"/v1/ai/sessions/{session_id}/messages",
+        json={
+            "role": "user",
+            "content": "请分析这张图片",
+            "user_id": "stu-attach",
+            "attachments": [
+                {
+                    "type": "image",
+                    "objectKey": "uploads/problem.png",
+                    "name": "problem.png",
+                    "mimeType": "image/png",
+                    "size": 7,
+                    "uri": "file:///local/problem.png",
+                    "base64": "ZmFrZXBuZw==",
+                }
+            ],
+        },
+    )
+
+    assert message_response.status_code == 200
+    attachment = message_response.json()["attachments"][0]
+    assert attachment == {
+        "type": "image",
+        "object_key": "uploads/problem.png",
+        "file_name": "problem.png",
+        "mime_type": "image/png",
+        "file_size": 7,
+    }
+    assert "base64" not in attachment
+    assert "uri" not in attachment
 
 
 def test_api_contract_uploads_and_jobs(tmp_path: Path):
@@ -506,6 +1020,16 @@ def test_local_storage_root_is_independent_from_process_cwd(tmp_path: Path, monk
     assert isinstance(storage, LocalObjectStorage)
     assert storage.root.is_absolute()
     assert storage.root == Path(__file__).resolve().parents[1] / "gateway_data" / "test-objects"
+
+
+def test_local_storage_returns_gateway_object_url(tmp_path: Path):
+    source = tmp_path / "final.mp4"
+    source.write_bytes(b"video")
+    storage = LocalObjectStorage(tmp_path / "objects")
+
+    url = storage.upload_file(str(source), "jobs/job-1/problem_video/final.mp4")
+
+    assert url == "/v1/objects/jobs/job-1/problem_video/final.mp4"
 
 
 def test_study_package_requires_output():
@@ -629,7 +1153,7 @@ def test_problem_video_runtime_config_does_not_inherit_text_credentials_for_expl
 
 
 def test_problem_video_server_defaults_use_env_when_mobile_omits_llm_config(monkeypatch):
-    monkeypatch.setenv("DEFAULT_MODEL", "qwen:qwen3.5-plus-2026-02-15")
+    monkeypatch.setenv("DEFAULT_MODEL", "qwen:qwen3.6-max-preview")
     monkeypatch.setenv("QWEN_API_KEY", "server-qwen-key")
     monkeypatch.setenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     monkeypatch.delenv("PROBLEM_VIDEO_TEXT_MODEL", raising=False)
@@ -645,7 +1169,7 @@ def test_problem_video_server_defaults_use_env_when_mobile_omits_llm_config(monk
 
     assert llm_config["api_key"] == "server-qwen-key"
     assert llm_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    assert llm_config["model"] == "qwen3.5-plus-2026-02-15"
+    assert llm_config["model"] == "qwen3.6-max-preview"
     assert vision_config["api_key"] == "server-qwen-key"
     assert vision_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
     assert vision_config["model"] == "qwen3-vl-plus"
@@ -773,6 +1297,30 @@ def test_problem_video_pipeline_attaches_learner_memory_bundle(tmp_path: Path):
                 "learner_user_id": "stu-memory-1",
                 "learner_session_id": "sess-memory-1",
                 "learner_lookback_days": 30,
+                "learning_context": {
+                    "userId": "stu-memory-1",
+                    "stepPersonalization": {
+                        "overallMode": "remedial",
+                        "standardSteps": [
+                            {
+                                "id": "step-1",
+                                "title": "建立勾股关系",
+                                "knowledgePointIds": ["勾股定理"],
+                                "abilityTags": ["建模"],
+                            }
+                        ],
+                        "stepDecisions": [
+                            {
+                                "stepId": "step-1",
+                                "mastery": 0.32,
+                                "riskLevel": "high",
+                                "expansionStrategy": "full_scaffold",
+                                "needsExpansion": True,
+                                "likelyStuck": True,
+                            }
+                        ],
+                    },
+                },
             },
             engine_state={},
         )
@@ -828,6 +1376,9 @@ def test_problem_video_pipeline_attaches_learner_memory_bundle(tmp_path: Path):
         assert learner_memory["session_id"] == "sess-memory-1"
         assert len(learner_memory["recent_learning_records"]) == 1
         assert len(learner_memory["derived_learning_events"]) == 1
+        assert learner_memory["learning_context"]["userId"] == "stu-memory-1"
+        assert learner_memory["step_personalization"]["overallMode"] == "remedial"
+        assert learner_memory["step_personalization"]["standardSteps"][0]["id"] == "step-1"
         assert result["learner_memory_records"] == 1
         assert result["learner_memory_events"] == 1
 

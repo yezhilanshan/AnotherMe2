@@ -259,6 +259,7 @@ class Logger:
         self,
         level: int,
         message: str,
+        *args,
         display_level: Optional[str] = None,
         **kwargs,
     ):
@@ -274,32 +275,32 @@ class Logger:
             "stack_info": kwargs.get("stack_info", False),
             "stacklevel": kwargs.get("stacklevel", 1),
         }
-        self.logger.log(level, message, **log_kwargs)
+        self.logger.log(level, message, *args, **log_kwargs)
 
     # Standard logging methods
-    def debug(self, message: str, **kwargs):
+    def debug(self, message: str, *args, **kwargs):
         """Debug level log [DEBUG]"""
-        self._log(logging.DEBUG, message, **kwargs)
+        self._log(logging.DEBUG, message, *args, **kwargs)
 
-    def info(self, message: str, **kwargs):
+    def info(self, message: str, *args, **kwargs):
         """Info level log [INFO]"""
-        self._log(logging.INFO, message, **kwargs)
+        self._log(logging.INFO, message, *args, **kwargs)
 
-    def warning(self, message: str, **kwargs):
+    def warning(self, message: str, *args, **kwargs):
         """Warning level log [WARNING]"""
-        self._log(logging.WARNING, message, **kwargs)
+        self._log(logging.WARNING, message, *args, **kwargs)
 
-    def error(self, message: str, **kwargs):
+    def error(self, message: str, *args, **kwargs):
         """Error level log [ERROR]"""
-        self._log(logging.ERROR, message, **kwargs)
+        self._log(logging.ERROR, message, *args, **kwargs)
 
-    def critical(self, message: str, **kwargs):
+    def critical(self, message: str, *args, **kwargs):
         """Critical level log [CRITICAL]"""
-        self._log(logging.CRITICAL, message, **kwargs)
+        self._log(logging.CRITICAL, message, *args, **kwargs)
 
-    def exception(self, message: str, **kwargs):
+    def exception(self, message: str, *args, **kwargs):
         """Log exception with traceback"""
-        self.logger.exception(message, extra={"module_name": self.name, "display_level": "ERROR"})
+        self._log(logging.ERROR, message, *args, exc_info=True, **kwargs)
 
     # Convenience methods
     def success(self, message: str, elapsed: Optional[float] = None, **kwargs):
@@ -308,13 +309,13 @@ class Logger:
             message = f"{message} in {elapsed:.1f}s"
         self._log(logging.INFO, message, display_level="SUCCESS", **kwargs)
 
-    def progress(self, message: str, **kwargs):
+    def progress(self, message: str, *args, **kwargs):
         """Progress log [PROGRESS]"""
-        self._log(logging.INFO, message, display_level="PROGRESS", **kwargs)
+        self._log(logging.INFO, message, *args, display_level="PROGRESS", **kwargs)
 
-    def complete(self, message: str, **kwargs):
+    def complete(self, message: str, *args, **kwargs):
         """Completion log [COMPLETE]"""
-        self._log(logging.INFO, message, display_level="COMPLETE", **kwargs)
+        self._log(logging.INFO, message, *args, display_level="COMPLETE", **kwargs)
 
     def stage(self, stage_name: str, status: str = "start", detail: Optional[str] = None):
         """

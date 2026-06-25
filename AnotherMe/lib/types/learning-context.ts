@@ -26,6 +26,56 @@ export interface KnowledgeTracingSnapshot {
   weakestKnowledgePointContext: string | null;
 }
 
+export type StepRiskLevel = 'low' | 'medium' | 'high';
+
+export type StepExpansionStrategy =
+  | 'full_scaffold'
+  | 'guided_hint'
+  | 'concise_bridge'
+  | 'skip_or_challenge';
+
+export interface StandardSolutionStepSnapshot {
+  /** Stable step identifier used by downstream video planning */
+  id: string;
+  /** Human-readable step title */
+  title: string;
+  /** What this step should accomplish */
+  description: string;
+  /** Knowledge points required by this step */
+  knowledgePointIds: string[];
+  /** Ability demands such as modeling, calculation, or proof */
+  abilityTags: string[];
+}
+
+export interface StepPersonalizationDecisionSnapshot {
+  stepId: string;
+  /** Average mastery across the knowledge points required by this step */
+  mastery: number;
+  riskLevel: StepRiskLevel;
+  expansionStrategy: StepExpansionStrategy;
+  /** Whether the video script should expand this step */
+  needsExpansion: boolean;
+  /** Whether the Student Agent predicts this as a likely stuck point */
+  likelyStuck: boolean;
+  reason: string;
+}
+
+export interface StepPersonalizationSnapshot {
+  problemText: string | null;
+  generatedAt: string;
+  source: 'heuristic_kt_v1';
+  overallMode: 'remedial' | 'standard' | 'advanced';
+  standardSteps: StandardSolutionStepSnapshot[];
+  stepDecisions: StepPersonalizationDecisionSnapshot[];
+  stuckStepIds: string[];
+  summary: {
+    weakKnowledgePointIds: string[];
+    highRiskStepIds: string[];
+    overallMastery: number;
+    instruction: string;
+  };
+}
+
 export interface DiagnosticProbeSnapshot {
   /** Knowledge point targeted by this probe */
   knowledgePointId: string;
@@ -79,6 +129,12 @@ export interface LearningContext {
 
   /** Latest diagnostic session results (populated from frontend) */
   diagnosticSession: DiagnosticSessionSnapshot | null;
+
+  /** Persistent profile and learning journey memory for personalization */
+  memoryContext: string | null;
+
+  /** Step-level personalization for problem solving and video generation */
+  stepPersonalization: StepPersonalizationSnapshot | null;
   
   /** Enabled tools/capabilities for this learning session */
   enabledTools: EnabledTool[];
@@ -176,6 +232,8 @@ export function createLearningContext(
     enabledTools: [],
     knowledgeTracing: null,
     diagnosticSession: null,
+    memoryContext: null,
+    stepPersonalization: null,
     metadata: {
       source: 'chat',
       topic: null,

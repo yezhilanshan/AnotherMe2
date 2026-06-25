@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -30,6 +30,13 @@ interface BookProgressState {
 const PROGRESS_PREFIX = '@anotherme/live-book/progress/';
 
 type RawRecord = Record<string, unknown>;
+type NormalizedQuizQuestion = {
+  question_id: string;
+  question: string;
+  options: string[];
+  correct_answer: string;
+  explanation: string;
+};
 
 function asRecord(value: unknown): RawRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as RawRecord : {};
@@ -102,7 +109,7 @@ function blockTextFromPayload(type: string, payload: RawRecord, legacyContent: u
   return '';
 }
 
-function normalizeQuizQuestions(block: Block) {
+function normalizeQuizQuestions(block: Block): NormalizedQuizQuestion[] {
   const payloadQuestions = Array.isArray(block.payload?.questions) ? block.payload.questions : [];
   if (payloadQuestions.length > 0) {
     return payloadQuestions.map(rawQuestion => {
@@ -123,13 +130,14 @@ function normalizeQuizQuestions(block: Block) {
   }
 
   try {
-    const parsed = JSON.parse(block.content);
-    return [parsed as {
-      question_id?: string;
-      question?: string;
-      options?: string[];
-      correct_answer?: string;
-      explanation?: string;
+    const parsed = asRecord(JSON.parse(block.content));
+    const rawOptions = parsed.options;
+    return [{
+      question_id: stringValue(parsed.question_id),
+      question: stringValue(parsed.question),
+      options: Array.isArray(rawOptions) ? rawOptions.map(String) : [],
+      correct_answer: stringValue(parsed.correct_answer),
+      explanation: stringValue(parsed.explanation),
     }];
   } catch {
     return [];
@@ -165,6 +173,101 @@ function parseBookDetail(raw: RawRecord): { title: string; status: string; pages
     pages,
   };
 }
+
+// ── 独立的 memo 化 Quiz 组件，避免 quiz 交互导致整页重渲染 ──
+const QuizBlockView = React.memo(function QuizBlockView({
+  block,
+  questions,
+  quizAnswers,
+  quizResults,
+  onSelectAnswer,
+  onSubmit,
+}: {
+  block: Block;
+  questions: Array<{
+    question_id: string;
+    question: string;
+    options: string[];
+    correct_answer: string;
+    explanation: string;
+  }>;
+  quizAnswers: Record<string, string>;
+  quizResults: Record<string, boolean>;
+  onSelectAnswer: (questionKey: string, opt: string) => void;
+  onSubmit: (block: Block, questionKey: string, quizData: any) => void;
+}) {
+  if (questions.length === 0) {
+    return (
+      <View style={styles.quizBlock}>
+        <Text style={styles.quizError}>暂无练习题</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.quizBlock}>
+      {questions.map((quizData, questionIndex) => {
+        const questionKey = `${block.id}:${quizData.question_id || questionIndex}`;
+        const options = quizData.options || [];
+        const selected = quizAnswers[questionKey];
+        const result = quizResults[questionKey];
+        return (
+          <View key={questionKey} style={questionIndex > 0 ? styles.quizQuestionGroup : undefined}>
+            <Text style={styles.quizQuestion}>{quizData.question || ''}</Text>
+            {options.map((opt, i) => {
+              const isSelected = selected === opt;
+              const isCorrectOpt = result !== undefined && opt === quizData.correct_answer;
+              const isWrong = result === false && isSelected;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[
+                    styles.quizOption,
+                    isSelected && styles.quizOptionSelected,
+                    isCorrectOpt && styles.quizOptionCorrect,
+                    isWrong && styles.quizOptionWrong,
+                  ]}
+                  onPress={() => {
+                    if (result === undefined) {
+                      onSelectAnswer(questionKey, opt);
+                    }
+                  }}
+                  disabled={result !== undefined}
+                >
+                  <Text style={[
+                    styles.quizOptionText,
+                    isCorrectOpt && styles.quizOptionTextCorrect,
+                    isWrong && styles.quizOptionTextWrong,
+                  ]}>
+                    {String.fromCharCode(65 + i)}. {opt}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            {selected && result === undefined && (
+              <TouchableOpacity
+                style={styles.quizSubmit}
+                onPress={() => onSubmit(block, questionKey, quizData)}
+              >
+                <Text style={styles.quizSubmitText}>提交</Text>
+              </TouchableOpacity>
+            )}
+            {result !== undefined && (
+              <View style={[styles.quizResult, result ? styles.quizResultCorrect : styles.quizResultWrong]}>
+                <Text style={styles.quizResultText}>
+                  {result ? '回答正确!' : `正确答案: ${quizData.correct_answer}`}
+                </Text>
+                {quizData.explanation ? (
+                  <Text style={styles.quizExplanation}>{quizData.explanation}</Text>
+                ) : null}
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+});
 
 export default function BookReaderScreen() {
   const insets = useSafeAreaInsets();
@@ -264,34 +367,52 @@ export default function BookReaderScreen() {
   const completedCount = Object.keys(completedPageIds).length;
   const progressPercent = pages.length > 0 ? Math.round((completedCount / pages.length) * 100) : 0;
 
-  const persistProgress = useCallback(async (nextCompletedPageIds = completedPageIds) => {
-    if (!bookId || !currentPage) return;
+  // ── 使用 ref 避免 persistProgress 依赖过多 ──
+  const quizAnswersRef = useRef(quizAnswers);
+  const quizResultsRef = useRef(quizResults);
+  const completedPageIdsRef = useRef(completedPageIds);
+  const currentPageRef = useRef(currentPage);
+  const currentPageIndexRef = useRef(currentPageIndex);
+  const pagesLengthRef = useRef(pages.length);
+
+  useEffect(() => { quizAnswersRef.current = quizAnswers; }, [quizAnswers]);
+  useEffect(() => { quizResultsRef.current = quizResults; }, [quizResults]);
+  useEffect(() => { completedPageIdsRef.current = completedPageIds; }, [completedPageIds]);
+  useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
+  useEffect(() => { currentPageIndexRef.current = currentPageIndex; }, [currentPageIndex]);
+  useEffect(() => { pagesLengthRef.current = pages.length; }, [pages.length]);
+
+  const persistProgress = useCallback(async (nextCompletedPageIds?: Record<string, boolean>) => {
+    if (!bookId) return;
+    const page = currentPageRef.current;
+    if (!page) return;
     const AS = getSafeStorage();
 
     const payload: BookProgressState = {
       bookId,
       bookTitle,
-      pageId: currentPage.id,
-      pageIndex: currentPageIndex,
-      totalPages: pages.length,
-      completedPageIds: Object.keys(nextCompletedPageIds),
-      quizAnswers,
-      quizResults,
+      pageId: page.id,
+      pageIndex: currentPageIndexRef.current,
+      totalPages: pagesLengthRef.current,
+      completedPageIds: Object.keys(nextCompletedPageIds ?? completedPageIdsRef.current),
+      quizAnswers: quizAnswersRef.current,
+      quizResults: quizResultsRef.current,
       updatedAt: Date.now(),
     };
     await AS.setItem(`${PROGRESS_PREFIX}${bookId}`, JSON.stringify(payload));
-  }, [bookId, bookTitle, completedPageIds, currentPage, currentPageIndex, pages.length, quizAnswers, quizResults]);
+  }, [bookId, bookTitle]);
 
   useEffect(() => {
     if (!bookId || !currentPage || loading) return;
     let cancelled = false;
 
     const recordPageRead = async () => {
-      const nextCompleted = { ...completedPageIds, [currentPage.id]: true };
+      const nextCompleted = { ...completedPageIdsRef.current, [currentPage.id]: true };
       setCompletedPageIds(nextCompleted);
-      await persistProgress(nextCompleted);
 
-      if (!completedPageIds[currentPage.id]) {
+      // 只在首次阅读该页时记录事件
+      if (!completedPageIdsRef.current[currentPage.id]) {
+        await persistProgress(nextCompleted);
         try {
           await api.learningEvents.createForUser(USER_ID, {
             event_type: 'live_book_page_read',
@@ -316,10 +437,18 @@ export default function BookReaderScreen() {
       if (!cancelled) persistProgress().catch(() => {});
     });
     return () => { cancelled = true; };
-  }, [bookId, bookTitle, currentPage?.id, currentPageIndex, loading]);
+  }, [bookId, bookTitle, currentPage?.id, currentPageIndex, loading, persistProgress]);
 
+  // ── quiz 数据变化时防抖写入（500ms 内多次选择只写一次） ──
+  const quizSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    persistProgress().catch(() => {});
+    if (quizSaveTimerRef.current) clearTimeout(quizSaveTimerRef.current);
+    quizSaveTimerRef.current = setTimeout(() => {
+      persistProgress().catch(() => {});
+    }, 500);
+    return () => {
+      if (quizSaveTimerRef.current) clearTimeout(quizSaveTimerRef.current);
+    };
   }, [quizAnswers, quizResults, persistProgress]);
 
   const handleQuizSubmit = async (
@@ -454,76 +583,17 @@ export default function BookReaderScreen() {
 
       case 'quiz': {
         const questions = normalizeQuizQuestions(block);
-        if (questions.length === 0) {
-          return (
-            <View key={block.id} style={styles.quizBlock}>
-              <Text style={styles.quizError}>暂无练习题</Text>
-            </View>
-          );
-        }
-
         return withBridge(
-          <View style={styles.quizBlock}>
-            {questions.map((quizData, questionIndex) => {
-              const questionKey = `${block.id}:${quizData.question_id || questionIndex}`;
-              const options = quizData.options || [];
-              const selected = quizAnswers[questionKey];
-              const result = quizResults[questionKey];
-              return (
-                <View key={questionKey} style={questionIndex > 0 ? styles.quizQuestionGroup : undefined}>
-                  <Text style={styles.quizQuestion}>{quizData.question || ''}</Text>
-                  {options.map((opt, i) => {
-                    const isSelected = selected === opt;
-                    const isCorrectOpt = result !== undefined && opt === quizData.correct_answer;
-                    const isWrong = result === false && isSelected;
-                    return (
-                <TouchableOpacity
-                  key={i}
-                  style={[
-                    styles.quizOption,
-                    isSelected && styles.quizOptionSelected,
-                    isCorrectOpt && styles.quizOptionCorrect,
-                    isWrong && styles.quizOptionWrong,
-                  ]}
-                  onPress={() => {
-                    if (result === undefined) {
-                      setQuizAnswers(prev => ({ ...prev, [questionKey]: opt }));
-                    }
-                  }}
-                  disabled={result !== undefined}
-                >
-                  <Text style={[
-                    styles.quizOptionText,
-                    isCorrectOpt && styles.quizOptionTextCorrect,
-                    isWrong && styles.quizOptionTextWrong,
-                  ]}>
-                    {String.fromCharCode(65 + i)}. {opt}
-                  </Text>
-                </TouchableOpacity>
-                    );
-                  })}
-                  {selected && result === undefined && (
-                    <TouchableOpacity
-                      style={styles.quizSubmit}
-                      onPress={() => handleQuizSubmit(block, questionKey, quizData)}
-                    >
-                      <Text style={styles.quizSubmitText}>提交</Text>
-                    </TouchableOpacity>
-                  )}
-                  {result !== undefined && (
-                    <View style={[styles.quizResult, result ? styles.quizResultCorrect : styles.quizResultWrong]}>
-                      <Text style={styles.quizResultText}>
-                        {result ? '回答正确!' : `正确答案: ${quizData.correct_answer}`}
-                      </Text>
-                      {quizData.explanation ? (
-                        <Text style={styles.quizExplanation}>{quizData.explanation}</Text>
-                      ) : null}
-                    </View>
-                  )}
-                </View>
-              );
-            })}
-          </View>,
+          <QuizBlockView
+            block={block}
+            questions={questions}
+            quizAnswers={quizAnswers}
+            quizResults={quizResults}
+            onSelectAnswer={(questionKey, opt) => {
+              setQuizAnswers(prev => ({ ...prev, [questionKey]: opt }));
+            }}
+            onSubmit={handleQuizSubmit}
+          />,
         );
       }
 

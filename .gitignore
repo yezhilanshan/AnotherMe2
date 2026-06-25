@@ -38,7 +38,7 @@ blob-report/
 %SystemDrive%/
 OpenMAIC/%SystemDrive%/
 gateway_data/
-AnotherMe/data/
+/data/
 AnotherMe/anotherme2_engine/data/
 AnotherMe/logs/
 AnotherMe/.workbuddy/
@@ -65,6 +65,8 @@ AnotherMe/media/videos/
 *.rar
 media/videos/
 media/texts/
+media/images/
+media/Tex/
 graphify-out/
 AnotherMe/anotherme2_engine/graphify-out/
 AnotherMe/public/generated/
@@ -83,6 +85,9 @@ OpenMAIC/anotherme2_engine/.cache/
 
 # local diagnostics / scratch output
 diff.txt
+output_test/
+tmp_template_frames/
+.pytest-run-tmp-*/
 **/diff_output.txt
 **/staged_diff.txt
 **/unstaged_diff.txt

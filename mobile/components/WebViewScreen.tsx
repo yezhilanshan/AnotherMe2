@@ -3,6 +3,7 @@ import { View, StyleSheet, ActivityIndicator, Text, TouchableOpacity } from 'rea
 import { WebView, type WebViewNavigation } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from '../lib/theme';
 
 interface WebViewScreenProps {
   url: string;
@@ -102,7 +103,7 @@ export function WebViewScreen({ url, title }: WebViewScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
   },
   navBar: {
     height: 44,
@@ -110,9 +111,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    backgroundColor: '#F8F8F8',
+    backgroundColor: colors.quoteBg,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E0E0E0',
+    borderBottomColor: colors.border,
   },
   navButton: {
     padding: 8,
@@ -121,7 +122,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
     textAlign: 'center',
     marginHorizontal: 8,
   },
@@ -136,7 +137,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
   },
   loadingOverlay: {
     position: 'absolute',
@@ -152,23 +153,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 32,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
   },
   errorTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#666',
+    color: colors.textSecondary,
     marginTop: 16,
   },
   errorDesc: {
     fontSize: 14,
-    color: '#999',
+    color: colors.textMuted,
     marginTop: 8,
     textAlign: 'center',
   },
   errorHint: {
     fontSize: 12,
-    color: '#BBB',
+    color: colors.textMuted,
     marginTop: 12,
     textAlign: 'center',
     lineHeight: 18,
@@ -177,11 +178,11 @@ const styles = StyleSheet.create({
     marginTop: 20,
     paddingHorizontal: 24,
     paddingVertical: 10,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     borderRadius: 8,
   },
   retryText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 15,
     fontWeight: '600',
   },

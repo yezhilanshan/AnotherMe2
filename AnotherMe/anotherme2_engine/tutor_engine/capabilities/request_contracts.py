@@ -30,6 +30,10 @@ class ChatRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class VisualSolveFastRequestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class DeepSolveRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -53,6 +57,19 @@ class VisualizeRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     render_mode: Literal["auto", "svg", "chartjs", "mermaid", "html"] = "auto"
+
+
+class AutoRequestConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled_capabilities: list[str] = Field(default_factory=list)
+    max_iterations: int = Field(default=2, ge=1, le=10)  # 优化: 从4降到2
+    max_retries_per_step: int = Field(default=3, ge=1, le=10)
+    max_same_capability_calls: int = Field(default=2, ge=1, le=5)
+    skip_analyzing: bool = Field(default=True, description="跳过 ANALYZING 阶段提速")
+    skip_synthesizing: bool = Field(default=True, description="有结果时跳过 SYNTHESIZING 阶段")
+    parallel_tool_calls: bool = Field(default=True, description="并行执行多个工具调用")
+    router_model: str = Field(default="", description="路由器使用更快的模型，留空用主模型")
 
 
 def _clean_public_config(raw_config: dict[str, Any] | None) -> dict[str, Any]:
@@ -87,6 +104,16 @@ def validate_chat_request_config(raw_config: dict[str, Any] | None) -> ChatReque
     return _validate_model(ChatRequestConfig, raw_config, label="chat")
 
 
+def validate_visual_solve_fast_request_config(
+    raw_config: dict[str, Any] | None,
+) -> VisualSolveFastRequestConfig:
+    return _validate_model(
+        VisualSolveFastRequestConfig,
+        raw_config,
+        label="visual solve fast",
+    )
+
+
 def validate_deep_solve_request_config(
     raw_config: dict[str, Any] | None,
 ) -> DeepSolveRequestConfig:
@@ -105,26 +132,36 @@ def validate_visualize_request_config(
     return _validate_model(VisualizeRequestConfig, raw_config, label="visualize")
 
 
+def validate_auto_request_config(
+    raw_config: dict[str, Any] | None,
+) -> AutoRequestConfig:
+    return _validate_model(AutoRequestConfig, raw_config, label="auto")
+
+
 def build_request_schema(model_type: type[BaseModel]) -> dict[str, Any]:
     return model_type.model_json_schema(mode="validation")
 
 
 CAPABILITY_CONFIG_VALIDATORS: dict[str, Callable[[dict[str, Any] | None], Any]] = {
     "chat": validate_chat_request_config,
+    "visual_solve_fast": validate_visual_solve_fast_request_config,
     "deep_solve": validate_deep_solve_request_config,
     "deep_question": validate_deep_question_request_config,
     "deep_research": validate_research_request_config,
     "math_animator": validate_math_animator_request_config,
     "visualize": validate_visualize_request_config,
+    "auto": validate_auto_request_config,
 }
 
 CAPABILITY_REQUEST_SCHEMAS: dict[str, dict[str, Any]] = {
     "chat": build_request_schema(ChatRequestConfig),
+    "visual_solve_fast": build_request_schema(VisualSolveFastRequestConfig),
     "deep_solve": build_request_schema(DeepSolveRequestConfig),
     "deep_question": build_request_schema(DeepQuestionRequestConfig),
     "deep_research": build_request_schema(DeepResearchRequestConfig),
     "math_animator": build_request_schema(MathAnimatorRequestConfig),
     "visualize": build_request_schema(VisualizeRequestConfig),
+    "auto": build_request_schema(AutoRequestConfig),
 }
 
 
@@ -145,17 +182,21 @@ def get_capability_request_schema(capability: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "AutoRequestConfig",
     "CAPABILITY_CONFIG_VALIDATORS",
     "CAPABILITY_REQUEST_SCHEMAS",
     "ChatRequestConfig",
     "DeepQuestionRequestConfig",
     "DeepSolveRequestConfig",
+    "VisualSolveFastRequestConfig",
     "VisualizeRequestConfig",
     "build_request_schema",
     "get_capability_request_schema",
+    "validate_auto_request_config",
     "validate_capability_config",
     "validate_chat_request_config",
     "validate_deep_question_request_config",
     "validate_deep_solve_request_config",
+    "validate_visual_solve_fast_request_config",
     "validate_visualize_request_config",
 ]

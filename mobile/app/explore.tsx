@@ -8,9 +8,11 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { healthCheck, getCapabilities } from '../../lib/api';
-import { GATEWAY_PORT, GATEWAY_URL, TUNNEL_HEADERS } from '../../lib/config';
+import { healthCheck, getCapabilities } from '../lib/api';
+import { DEFAULT_MODEL, GATEWAY_PORT, GATEWAY_URL, TUNNEL_HEADERS } from '../lib/config';
+import { colors } from '../lib/theme';
 
 interface TestResult {
   name: string;
@@ -56,7 +58,7 @@ export default function ApiTestScreen() {
             headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream', ...TUNNEL_HEADERS },
             body: JSON.stringify({
               messages: [{ role: 'user', content: '你好' }],
-              model: 'gpt-4o',
+              model: DEFAULT_MODEL,
               api_key: '',
               capability: 'chat',
               user_id: 'mobile-test',
@@ -146,7 +148,7 @@ export default function ApiTestScreen() {
             disabled={testing}
           >
             {testing ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={colors.textInverse} />
             ) : (
               <Text style={styles.testButtonText}>运行 API 测试</Text>
             )}
@@ -172,13 +174,26 @@ export default function ApiTestScreen() {
                   result.status === 'pending' && styles.statusPending,
                 ]}
               >
-                <Text style={styles.statusText}>
-                  {result.status === 'success'
-                    ? '✓ 成功'
-                    : result.status === 'error'
-                    ? '✕ 失败'
-                    : '⏳ 测试中'}
-                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Ionicons
+                    name={
+                      result.status === 'success'
+                        ? 'checkmark-circle'
+                        : result.status === 'error'
+                        ? 'close-circle'
+                        : 'hourglass'
+                    }
+                    size={14}
+                    color={result.status === 'success' ? colors.success : result.status === 'error' ? colors.error : colors.warning}
+                  />
+                  <Text style={styles.statusText}>
+                    {result.status === 'success'
+                      ? '成功'
+                      : result.status === 'error'
+                      ? '失败'
+                      : '测试中'}
+                  </Text>
+                </View>
               </View>
             </View>
 
@@ -218,17 +233,17 @@ export default function ApiTestScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.bgPage,
   },
   header: {
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: colors.textInverse,
   },
   gatewayUrl: {
     fontSize: 12,
@@ -245,16 +260,16 @@ const styles = StyleSheet.create({
   },
   testButton: {
     flex: 1,
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',
   },
   testButtonDisabled: {
-    backgroundColor: '#99C5FF',
+    backgroundColor: colors.primaryLight,
   },
   testButtonText: {
-    color: '#FFFFFF',
+    color: colors.textInverse,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -262,7 +277,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#E5E5E5',
+    backgroundColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 12,
@@ -270,14 +285,14 @@ const styles = StyleSheet.create({
   helpButtonText: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#666',
+    color: colors.textSecondary,
   },
   resultCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     borderRadius: 8,
     padding: 12,
     marginBottom: 12,
-    shadowColor: '#000',
+    shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
@@ -292,22 +307,22 @@ const styles = StyleSheet.create({
   resultName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
   },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
-    backgroundColor: '#E5E5E5',
+    backgroundColor: colors.border,
   },
   statusSuccess: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: colors.successLight,
   },
   statusError: {
-    backgroundColor: '#FFE5E5',
+    backgroundColor: colors.errorLight,
   },
   statusPending: {
-    backgroundColor: '#FFF3E0',
+    backgroundColor: colors.warningLight,
   },
   statusText: {
     fontSize: 12,
@@ -315,19 +330,19 @@ const styles = StyleSheet.create({
   },
   duration: {
     fontSize: 12,
-    color: '#999',
+    color: colors.textMuted,
     marginBottom: 8,
   },
   resultMessage: {
     fontSize: 14,
-    color: '#666',
+    color: colors.textSecondary,
     fontFamily: 'monospace',
   },
   errorMessage: {
-    color: '#FF3B30',
+    color: colors.error,
   },
   instructions: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgCard,
     borderRadius: 8,
     padding: 16,
     marginTop: 8,
@@ -336,17 +351,17 @@ const styles = StyleSheet.create({
   instructionsTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: colors.textPrimary,
     marginBottom: 8,
   },
   instructionText: {
     fontSize: 14,
-    color: '#666',
+    color: colors.textSecondary,
     lineHeight: 20,
   },
   code: {
     fontFamily: 'monospace',
-    backgroundColor: '#F0F0F0',
+    backgroundColor: colors.bgInput,
     paddingHorizontal: 4,
   },
 });
