@@ -12,7 +12,7 @@ import { PanelRightClose, BookOpen, MessageSquare, NotebookPen, Plus, Brain } fr
 import { useAuth } from '@/features/auth/components/auth-provider';
 import { MemoryPanel } from './memory-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { useChatSessions } from './use-chat-sessions';
+import { useChatSessions, type SendMessageOptions } from './use-chat-sessions';
 import { SessionList } from './session-list';
 import { LectureNotesView } from './lecture-notes-view';
 import { ToolTracePanel } from './tool-trace-panel';
@@ -54,6 +54,7 @@ export interface ChatAreaRef {
   sendMessage: (
     content: string,
     capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize',
+    options?: SendMessageOptions,
   ) => Promise<void>;
   startDiscussion: (request: DiscussionRequest) => Promise<void>;
   startLecture: (sceneId: string) => Promise<string>;

@@ -41,19 +41,20 @@ import {
   AlertTriangle,
   Play,
   Pause,
-  Repeat,
   Mic,
   MicOff,
   MessageSquare,
   Send,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
+  Square,
 } from 'lucide-react';
 import { VisuallyHidden } from 'radix-ui';
 import { AvatarDisplay } from '@/components/ui/avatar-display';
 import {
   DEFAULT_TEACHER_AVATAR,
   DEFAULT_STUDENT_AVATAR,
-  DEFAULT_USER_AVATAR,
 } from '@/features/classroom/components/roundtable/constants';
 import type { Participant } from '@/lib/types/roundtable';
 import { toast } from 'sonner';
@@ -149,6 +150,18 @@ export function Stage({
     () => selectedAgentIds.map((id) => agentsRecord[id]).filter((a): a is AgentConfig => a != null),
     [agentsRecord, selectedAgentIds],
   );
+  const teacherAgentId = useMemo(
+    () =>
+      selectedAgents.find((agent) => agent.role === 'teacher')?.id ??
+      participants.find((participant) => participant.role === 'teacher')?.id ??
+      'default-1',
+    [participants, selectedAgents],
+  );
+  const teacherAgentIdRef = useRef(teacherAgentId);
+
+  useEffect(() => {
+    teacherAgentIdRef.current = teacherAgentId;
+  }, [teacherAgentId]);
 
   // Discussion TTS: audio indicator state
   const [audioIndicatorState, setAudioIndicatorState] = useState<AudioIndicatorState>('idle');
@@ -554,7 +567,11 @@ export function Stage({
       onUserInterrupt: (text) => {
         if (cancelled || engineRef.current !== engine) return;
         // User interrupted → start a discussion via chat
-        chatAreaRef.current?.sendMessage(text);
+        const teacherId = teacherAgentIdRef.current || 'default-1';
+        chatAreaRef.current?.sendMessage(text, 'chat', {
+          agentIds: [teacherId],
+          defaultAgentId: teacherId,
+        });
       },
       isAgentSelected: (agentId) => {
         const ids = useSettingsStore.getState().selectedAgentIds;
@@ -729,6 +746,64 @@ export function Stage({
       setThinkingState({ stage: 'director' });
     },
     [],
+  );
+
+  const handleClassroomInputActivate = useCallback(() => {
+    // Level-1 pause: freeze buffer tick + TTS audio while SSE keeps buffering.
+    if (chatSessionType === 'qa' || chatSessionType === 'discussion') {
+      const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
+      if (paused) {
+        discussionTTS.pause();
+        setIsDiscussionPaused(true);
+      }
+    }
+    // Also pause playback engine.
+    if (engineRef.current && (engineMode === 'playing' || engineMode === 'live')) {
+      engineRef.current.pause();
+    }
+  }, [chatSessionType, discussionTTS, engineMode]);
+
+  const sendTeacherQaMessage = useCallback(async (text: string) => {
+    const teacherId = teacherAgentIdRef.current || 'default-1';
+    await chatAreaRef.current?.sendMessage(text, 'chat', {
+      agentIds: [teacherId],
+      defaultAgentId: teacherId,
+    });
+  }, []);
+
+  const handleClassroomQuestion = useCallback(
+    async (message: string) => {
+      const text = message.trim();
+      if (!text) return;
+
+      const teacherId = teacherAgentIdRef.current || 'default-1';
+      setIsDiscussionPaused(false);
+      chatAreaRef.current?.resumeActiveLiveBuffer();
+      discussionTTS.cleanup();
+
+      if (isTopicPending) {
+        setIsTopicPending(false);
+        setLiveSpeech(null);
+        setSpeakingAgentId(null);
+      }
+
+      if (
+        engineRef.current &&
+        (engineMode === 'playing' || engineMode === 'live' || engineMode === 'paused')
+      ) {
+        engineRef.current.handleUserInterrupt(text);
+      } else {
+        await sendTeacherQaMessage(text);
+      }
+
+      chatAreaRef.current?.switchToTab('chat');
+      setIsCueUser(false);
+      setChatIsStreaming(true);
+      setChatSessionType(chatSessionType || 'qa');
+      setThinkingState({ stage: 'director', agentId: teacherId });
+      setSpeakingAgentId(teacherId);
+    },
+    [chatSessionType, discussionTTS, engineMode, isTopicPending, sendTeacherQaMessage],
   );
 
   // First speech text for idle display (extracted here for playbackView)
@@ -1183,12 +1258,17 @@ export function Stage({
         </div>
 
         {/* Mobile: full-width subtitle bar above the Roundtable */}
-        {mode === 'playback' && isMobile && !isMobileLandscape && playbackView.sourceText && (
+        {mode === 'playback' &&
+          isMobile &&
+          !isMobileLandscape &&
+          (playbackView.sourceText ||
+            (playbackView.phase === 'discussionActive' && playbackView.bubbleRole)) && (
           <MobileSubtitleBar
             text={playbackView.sourceText}
             role={playbackView.bubbleRole}
             participants={participants}
             speakingAgentId={speakingAgentId}
+            isLoading={!playbackView.sourceText && playbackView.phase === 'discussionActive'}
             buttonState={playbackView.buttonState}
             isPaused={engineMode === 'paused'}
             onBubbleClick={handlePlayPause}
@@ -1231,49 +1311,7 @@ export function Stage({
               thinkingState={thinkingState}
               isCueUser={isCueUser}
               isTopicPending={isTopicPending}
-              onMessageSend={async (msg) => {
-                // Always clear Level-1 pause state — the closure may hold a stale
-                // isDiscussionPaused value (e.g. voice input's onTranscription callback
-                // captures onMessageSend before React re-renders with the updated state).
-                setIsDiscussionPaused(false);
-                // Clear the sticky livePausedRef so the next agent-loop buffer
-                // starts unpaused. (pauseActiveLiveBuffer sets a ref that new
-                // buffers inherit — must be cleared before sendMessage creates one.)
-                chatAreaRef.current?.resumeActiveLiveBuffer();
-                // Flush any buffered / in-flight TTS audio from the previous
-                // agent turn so it doesn't leak into the next round.
-                discussionTTS.cleanup();
-                // Clear soft-paused state — user is continuing the topic
-                if (isTopicPending) {
-                  setIsTopicPending(false);
-                  setLiveSpeech(null);
-                  setSpeakingAgentId(null);
-                }
-                // User interrupts during playback — handleUserInterrupt triggers
-                // onUserInterrupt callback which already calls sendMessage, so skip
-                // the direct sendMessage below to avoid sending twice.
-                // Include 'paused' because onInputActivate pauses the engine before
-                // the user finishes typing — without this the interrupt position
-                // would never be saved and resuming after QA skips to the next sentence.
-                if (
-                  engineRef.current &&
-                  (engineMode === 'playing' || engineMode === 'live' || engineMode === 'paused')
-                ) {
-                  engineRef.current.handleUserInterrupt(msg);
-                } else {
-                  chatAreaRef.current?.sendMessage(msg);
-                }
-                // Auto-switch to chat tab when user sends a message
-                chatAreaRef.current?.switchToTab('chat');
-                setIsCueUser(false);
-                // Immediately mark streaming for synchronized stop button
-                setChatIsStreaming(true);
-                setChatSessionType(chatSessionType || 'qa');
-                // Optimistic thinking: show thinking dots immediately so there's
-                // no blank gap between userMessage expiry and the SSE thinking event.
-                // The real SSE event will overwrite this with the same or updated value.
-                setThinkingState({ stage: 'director' });
-              }}
+              onMessageSend={handleClassroomQuestion}
               onDiscussionStart={() => {
                 // User clicks "Join" on ProactiveCard
                 engineRef.current?.confirmDiscussion();
@@ -1283,23 +1321,7 @@ export function Stage({
                 engineRef.current?.skipDiscussion();
               }}
               onStopDiscussion={handleStopDiscussion}
-              onInputActivate={() => {
-                // Level-1 pause: freeze buffer tick + TTS audio while SSE keeps buffering.
-                // User resumes manually via Space / pause button after closing the input.
-                // No isDiscussionPaused guard — always attempt to pause the buffer.
-                // The return value ensures UI state stays in sync with buffer state.
-                if (chatSessionType === 'qa' || chatSessionType === 'discussion') {
-                  const paused = chatAreaRef.current?.pauseActiveLiveBuffer();
-                  if (paused) {
-                    discussionTTS.pause();
-                    setIsDiscussionPaused(true);
-                  }
-                }
-                // Also pause playback engine
-                if (engineRef.current && (engineMode === 'playing' || engineMode === 'live')) {
-                  engineRef.current.pause();
-                }
-              }}
+              onInputActivate={handleClassroomInputActivate}
               onResumeTopic={doResumeTopic}
               onPlayPause={handlePlayPause}
               isDiscussionPaused={isDiscussionPaused}
@@ -1347,6 +1369,13 @@ export function Stage({
         {/* Mobile Landscape: floating speech overlay (replaces Roundtable) */}
         {mode === 'playback' && isMobileLandscape && (
           <div className="absolute inset-0 z-30 pointer-events-none">
+            <MobileSlideNav
+              currentSceneIndex={currentSceneIndex}
+              scenesCount={totalScenesCount}
+              onPrevSlide={handlePreviousScene}
+              onNextSlide={handleNextScene}
+            />
+
             <PresentationSpeechOverlay
               playbackView={playbackView}
               participants={participants}
@@ -1370,12 +1399,25 @@ export function Stage({
 
             {/* Right-side participation dock — recording (Mic) + typing (MessageSquare) */}
             <MobileLandscapeDock
-              chatAreaRef={chatAreaRef}
-              onInputActivate={() => {
-                if (engineRef.current && (engineMode === 'playing' || engineMode === 'live')) {
-                  engineRef.current.pause();
-                }
-              }}
+              onMessageSend={handleClassroomQuestion}
+              onInputActivate={handleClassroomInputActivate}
+              onPlayPause={handlePlayPause}
+              playbackButtonState={
+                playbackView.phase === 'lecturePlaying' || playbackView.phase === 'discussionActive'
+                  ? 'bars'
+                  : playbackView.phase === 'lecturePaused' ||
+                      playbackView.phase === 'discussionPaused'
+                    ? 'play'
+                    : playbackCompleted
+                      ? 'restart'
+                      : 'none'
+              }
+              isPaused={engineMode === 'paused'}
+              showStopDiscussion={
+                engineMode === 'live' ||
+                (chatIsStreaming && (chatSessionType === 'qa' || chatSessionType === 'discussion'))
+              }
+              onStopDiscussion={handleStopDiscussion}
             />
           </div>
         )}
@@ -1505,12 +1547,61 @@ export function Stage({
   );
 }
 
+function MobileSlideNav({
+  currentSceneIndex,
+  scenesCount,
+  onPrevSlide,
+  onNextSlide,
+}: {
+  readonly currentSceneIndex: number;
+  readonly scenesCount: number;
+  readonly onPrevSlide: () => void;
+  readonly onNextSlide: () => void;
+}) {
+  if (scenesCount <= 1) return null;
+
+  const canGoPrev = currentSceneIndex > 0;
+  const canGoNext = currentSceneIndex < scenesCount - 1;
+  const buttonClass =
+    'pointer-events-auto absolute top-1/2 -translate-y-1/2 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-black/45 text-white shadow-lg backdrop-blur-xl transition-all active:scale-95 disabled:pointer-events-none disabled:opacity-25';
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="上一页"
+        disabled={!canGoPrev}
+        onClick={(event) => {
+          event.stopPropagation();
+          onPrevSlide();
+        }}
+        className={cn(buttonClass, 'left-[calc(env(safe-area-inset-left,0px)+14px)]')}
+      >
+        <ChevronLeft className="h-5 w-5" />
+      </button>
+      <button
+        type="button"
+        aria-label="下一页"
+        disabled={!canGoNext}
+        onClick={(event) => {
+          event.stopPropagation();
+          onNextSlide();
+        }}
+        className={cn(buttonClass, 'right-[calc(env(safe-area-inset-right,0px)+68px)]')}
+      >
+        <ChevronRight className="h-5 w-5" />
+      </button>
+    </>
+  );
+}
+
 /** Mobile full-width subtitle bar — rendered above the Roundtable */
 function MobileSubtitleBar({
   text,
   role,
   participants,
   speakingAgentId,
+  isLoading,
   buttonState,
   isPaused,
   onBubbleClick,
@@ -1519,6 +1610,7 @@ function MobileSubtitleBar({
   readonly role: 'teacher' | 'user' | 'agent' | null;
   readonly participants: Participant[];
   readonly speakingAgentId: string | null;
+  readonly isLoading?: boolean;
   readonly buttonState?: 'play' | 'bars' | 'restart' | 'none';
   readonly isPaused?: boolean;
   readonly onBubbleClick?: () => void;
@@ -1546,7 +1638,7 @@ function MobileSubtitleBar({
         ? speakingStudent?.avatar || DEFAULT_STUDENT_AVATAR
         : '';
 
-  if (!text || !role) return null;
+  if ((!text && !isLoading) || !role) return null;
 
   const playbackButtonLabel =
     buttonState === 'play' || buttonState === 'restart' || isPaused
@@ -1556,9 +1648,8 @@ function MobileSubtitleBar({
   return (
     <div className="shrink-0 px-3 pb-1">
       <div
-        onClick={onBubbleClick}
         className={cn(
-          'w-full rounded-xl border backdrop-blur-xl shadow-lg overflow-hidden cursor-pointer active:scale-[0.99] transition-transform',
+          'w-full rounded-xl border backdrop-blur-xl shadow-lg overflow-hidden transition-transform',
           role === 'user'
             ? 'bg-violet-900/70 border-violet-700/40'
             : role === 'agent'
@@ -1597,9 +1688,22 @@ function MobileSubtitleBar({
                 {name}
               </span>
             )}
-            <p className="text-[13px] leading-snug text-gray-100 line-clamp-2 break-words">
-              {text}
-            </p>
+            {isLoading ? (
+              <div className="flex gap-1 items-center py-0.5">
+                {[0, 0.2, 0.4].map((delay) => (
+                  <motion.div
+                    key={delay}
+                    animate={{ opacity: [0.3, 1, 0.3] }}
+                    transition={{ repeat: Infinity, duration: 1, delay }}
+                    className="w-1.5 h-1.5 rounded-full bg-purple-400"
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-[13px] leading-snug text-gray-100 line-clamp-2 break-words">
+                {text}
+              </p>
+            )}
           </div>
 
           {buttonState && buttonState !== 'none' && role !== 'user' && (
@@ -1635,11 +1739,21 @@ function MobileSubtitleBar({
  * the screen, stacked above the bottom subtitle bar.
  */
 function MobileLandscapeDock({
-  chatAreaRef,
+  onMessageSend,
   onInputActivate,
+  onPlayPause,
+  playbackButtonState,
+  isPaused,
+  showStopDiscussion,
+  onStopDiscussion,
 }: {
-  readonly chatAreaRef: React.RefObject<ChatAreaRef | null>;
+  readonly onMessageSend: (message: string) => Promise<void> | void;
   readonly onInputActivate?: () => void;
+  readonly onPlayPause?: () => void;
+  readonly playbackButtonState?: 'play' | 'bars' | 'restart' | 'none';
+  readonly isPaused?: boolean;
+  readonly showStopDiscussion?: boolean;
+  readonly onStopDiscussion?: () => Promise<void> | void;
 }) {
   const { t } = useI18n();
   const asrEnabled = useSettingsStore((s) => s.asrEnabled);
@@ -1649,6 +1763,9 @@ function MobileLandscapeDock({
   const [inputValue, setInputValue] = useState('');
   const [isSendCooldown, setIsSendCooldown] = useState(false);
   const isSendCooldownRef = useRef(false);
+  const showPlaybackButton = !!onPlayPause && playbackButtonState && playbackButtonState !== 'none';
+  const shouldShowPlayIcon =
+    playbackButtonState === 'play' || playbackButtonState === 'restart' || isPaused;
 
   const { isRecording, isProcessing, startRecording, stopRecording, cancelRecording } =
     useAudioRecorder({
@@ -1662,7 +1779,7 @@ function MobileLandscapeDock({
           setIsVoiceOpen(false);
           return;
         }
-        chatAreaRef.current?.sendMessage(text);
+        void onMessageSend(text);
         setIsSendCooldown(true);
         isSendCooldownRef.current = true;
         setIsVoiceOpen(false);
@@ -1675,12 +1792,23 @@ function MobileLandscapeDock({
 
   const handleSendMessage = useCallback(() => {
     if (!inputValue.trim() || isSendCooldown) return;
-    chatAreaRef.current?.sendMessage(inputValue);
+    void onMessageSend(inputValue);
     setIsSendCooldown(true);
     isSendCooldownRef.current = true;
     setInputValue('');
     setIsInputOpen(false);
-  }, [chatAreaRef, inputValue, isSendCooldown]);
+  }, [inputValue, isSendCooldown, onMessageSend]);
+
+  const handleStopDiscussion = useCallback(() => {
+    if (isRecording || isProcessing) {
+      cancelRecording();
+    }
+    setIsInputOpen(false);
+    setIsVoiceOpen(false);
+    setIsSendCooldown(false);
+    isSendCooldownRef.current = false;
+    void onStopDiscussion?.();
+  }, [cancelRecording, isProcessing, isRecording, onStopDiscussion]);
 
   const handleToggleInput = useCallback(() => {
     if (isSendCooldown) return;
@@ -1833,6 +1961,37 @@ function MobileLandscapeDock({
 
       {/* The dock pill with the two participation buttons */}
       <div className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-white/80 dark:bg-black/60 backdrop-blur-xl border border-gray-200/60 dark:border-white/10 shadow-[0_8px_24px_rgba(0,0,0,0.12)] px-2 py-2">
+        {showPlaybackButton && (
+          <button
+            type="button"
+            aria-label={shouldShowPlayIcon ? '继续讲解' : '暂停讲解'}
+            onClick={onPlayPause}
+            className={cn(
+              'w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95',
+              shouldShowPlayIcon
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-white/10',
+            )}
+          >
+            {shouldShowPlayIcon ? (
+              <Play className="w-4 h-4 ml-0.5" />
+            ) : (
+              <Pause className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
+        {showStopDiscussion && (
+          <button
+            type="button"
+            aria-label={t('roundtable.stopDiscussion')}
+            onClick={handleStopDiscussion}
+            className="w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95 bg-red-500/12 text-red-600 dark:text-red-300 hover:bg-red-500/20 dark:hover:bg-red-500/25"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+          </button>
+        )}
+
         {isSendCooldown ? (
           <div className="flex items-center justify-center w-9 h-9">
             <div className="flex items-center gap-[3px]">

@@ -9,6 +9,7 @@ const workspaceRoot = path.resolve(__dirname, "..");
 // React Native 运行时不包含 Node 标准库，需映射到 npm polyfill
 config.resolver = {
   ...config.resolver,
+  assetExts: Array.from(new Set([...(config.resolver?.assetExts || []), "txt"])),
   extraNodeModules: {
     punycode: path.dirname(require.resolve("punycode/")),
   },
@@ -22,5 +23,14 @@ config.watchFolders = [
   workspaceRoot,
   path.resolve(workspaceRoot, "AnotherMe", "packages"),
 ];
+
+config.transformer = {
+  ...config.transformer,
+  getTransformOptions: async () => ({
+    transform: {
+      inlineRequires: true,
+    },
+  }),
+};
 
 module.exports = config;

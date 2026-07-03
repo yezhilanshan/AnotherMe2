@@ -27,6 +27,7 @@ def run_worker() -> None:
     # Run backend data migrations
     try:
         from tutor_engine.services.migration_registry import run_all_migrations
+
         migration_result = run_all_migrations()
         if migration_result["ran"] > 0 or migration_result["errors"]:
             print(
@@ -42,6 +43,7 @@ def run_worker() -> None:
     queue_order = [
         settings.queue_package,
         settings.queue_problem_video,
+        settings.queue_photo_manim,
         settings.queue_course,
         settings.queue_learning_record,
     ]
@@ -56,7 +58,9 @@ def run_worker() -> None:
                 max_purge=max(0, settings.purge_prestart_jobs_batch),
             )
             if purged:
-                print(f"[gateway-worker] purged {purged} pre-restart queued/running job(s) on startup")
+                print(
+                    f"[gateway-worker] purged {purged} pre-restart queued/running job(s) on startup"
+                )
 
         if settings.purge_prestart_queue_messages_on_startup:
             purge_method = getattr(queue_client, "purge_queues", None)
@@ -69,72 +73,93 @@ def run_worker() -> None:
                 ]
                 purged_messages = int(purge_method(queue_targets) or 0)
                 if purged_messages:
-                    print(f"[gateway-worker] purged {purged_messages} queued message(s) on startup")
+                    print(
+                        f"[gateway-worker] purged {purged_messages} queued message(s) on startup"
+                    )
     elif settings.purge_prestart_jobs_on_startup and not settings.startup_purge_armed:
         print(
             "[gateway-worker] startup purge is requested but skipped because "
             "GATEWAY_STARTUP_PURGE_ARMED is not enabled"
         )
 
-    generation_timeout_sec = max(60, int(os.getenv("ANOTHERME2_GENERATION_TIMEOUT_SEC", "1800")))
-    effective_stale_seconds = max(settings.running_job_stale_seconds, generation_timeout_sec + 120)
+    generation_timeout_sec = max(
+        60, int(os.getenv("ANOTHERME2_GENERATION_TIMEOUT_SEC", "1800"))
+    )
+    effective_stale_seconds = max(
+        settings.running_job_stale_seconds, generation_timeout_sec + 120
+    )
     stale_recovery_queues = [settings.queue_problem_video]
     missing_input_cleanup_queues = [settings.queue_problem_video]
     reconcile_result_queues = [settings.queue_problem_video]
 
     while True:
         idle_sleep_seconds = 0.0
-        with session_scope() as session:
-            reconciled = reconcile_running_problem_video_jobs_with_artifacts(
-                session,
-                reconcile_result_queues,
-                max_reconciliations=max(0, settings.running_job_result_reconcile_batch),
-            )
-            if reconciled:
-                print(f"[gateway-worker] reconciled {reconciled} running job(s) to succeeded from uploaded artifacts")
+        try:
+            with session_scope() as session:
+                reconciled = reconcile_running_problem_video_jobs_with_artifacts(
+                    session,
+                    reconcile_result_queues,
+                    max_reconciliations=max(
+                        0, settings.running_job_result_reconcile_batch
+                    ),
+                )
+                if reconciled:
+                    print(
+                        f"[gateway-worker] reconciled {reconciled} running job(s) to succeeded from uploaded artifacts"
+                    )
 
-            cleaned = fail_jobs_with_missing_input_objects(
-                session,
-                storage,
-                missing_input_cleanup_queues,
-                max_failures=max(0, settings.missing_input_cleanup_batch),
-            )
-            if cleaned:
-                print(f"[gateway-worker] marked {cleaned} job(s) failed due to missing input object")
+                cleaned = fail_jobs_with_missing_input_objects(
+                    session,
+                    storage,
+                    missing_input_cleanup_queues,
+                    max_failures=max(0, settings.missing_input_cleanup_batch),
+                )
+                if cleaned:
+                    print(
+                        f"[gateway-worker] marked {cleaned} job(s) failed due to missing input object"
+                    )
 
-            recovered = recover_stale_running_jobs(
-                session,
-                queue_client,
-                stale_recovery_queues,
-                stale_seconds=effective_stale_seconds,
-                max_recoveries=settings.running_job_recover_batch,
-            )
-            if recovered:
-                print(f"[gateway-worker] recovered {recovered} stale running job(s)")
+                recovered = recover_stale_running_jobs(
+                    session,
+                    queue_client,
+                    stale_recovery_queues,
+                    stale_seconds=effective_stale_seconds,
+                    max_recoveries=settings.running_job_recover_batch,
+                )
+                if recovered:
+                    print(
+                        f"[gateway-worker] recovered {recovered} stale running job(s)"
+                    )
 
-            if queue_backend == "polling":
-                message = dequeue_next_queued_job(session, queue_order)
-                if not message:
-                    idle_sleep_seconds = 0.3
-                    message = None
-            else:
-                item = queue_client.dequeue(queue_order, timeout=3)
-                if not item:
-                    idle_sleep_seconds = 0.1
-                    message = None
+                if queue_backend == "polling":
+                    message = dequeue_next_queued_job(session, queue_order)
+                    if not message:
+                        idle_sleep_seconds = 0.3
+                        message = None
                 else:
-                    _queue_name, message = item
+                    item = queue_client.dequeue(queue_order, timeout=3)
+                    if not item:
+                        idle_sleep_seconds = 0.1
+                        message = None
+                    else:
+                        _queue_name, message = item
 
-            if not message:
-                continue
+                if not message:
+                    continue
 
-            handle_worker_message(
-                session=session,
-                queue_client=queue_client,
-                message=message,
-                settings=settings,
-                storage=storage,
-            )
+                handle_worker_message(
+                    session=session,
+                    queue_client=queue_client,
+                    message=message,
+                    settings=settings,
+                    storage=storage,
+                )
+        except Exception as exc:
+            import traceback
+
+            print(f"[gateway-worker] unhandled error in main loop: {exc}")
+            traceback.print_exc()
+            idle_sleep_seconds = 5.0
 
         if idle_sleep_seconds > 0:
             time.sleep(idle_sleep_seconds)

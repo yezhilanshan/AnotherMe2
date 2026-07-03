@@ -31,12 +31,19 @@ import type { AgentStartItem, ActionItem, ToolStartItem, ToolEndItem } from '@/l
 import type { ToolExecutionTrace } from './tool-trace-panel';
 import type { TutorToolName } from '@/lib/types/tutor-tools';
 import { recordLearningEvent } from '@/lib/learning-events/client';
+import { extractKnowledgePointsFromText } from '@/lib/knowledge-extract';
 import { ActionEngine } from '@/lib/action/engine';
 import { toast } from 'sonner';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ChatSessions');
 const DEFAULT_PERSISTENCE_SOURCE = '课堂互动';
+type ChatCapability = 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize';
+
+export interface SendMessageOptions {
+  agentIds?: string[];
+  defaultAgentId?: string;
+}
 
 interface UseChatSessionsOptions {
   onLiveSpeech?: (text: string | null, agentId?: string | null) => void;
@@ -605,12 +612,13 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               data.success &&
               (data.toolName === 'hint' || data.toolName === 'give_hint' || data.toolName === 'rag')
             ) {
+              const hintContent = (data.output || '').slice(0, 500);
               void recordLearningEvent({
                 eventType: 'hint_used',
-                knowledgePoints: [],
+                knowledgePoints: extractKnowledgePointsFromText(hintContent),
                 payload: {
                   hint_id: `tool-${data.toolId}`,
-                  hint_content: (data.output || '').slice(0, 500),
+                  hint_content: hintContent,
                   question_id: null,
                 },
                 weight: 1.0,
@@ -1379,7 +1387,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
    * Send a message to the active session
    */
   const sendMessage = useCallback(
-    async (content: string, capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize'): Promise<void> => {
+    async (
+      content: string,
+      capability?: ChatCapability,
+      sendOptions?: SendMessageOptions,
+    ): Promise<void> => {
       let sessionId = activeSessionId;
 
       // Interrupt active generation: abort stream and append "..." to the last agent message
@@ -1462,8 +1474,12 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       // Read all selected agent IDs from settings store
       const settingsState = useSettingsStore.getState();
+      const configuredAgentIds =
+        sendOptions?.agentIds?.filter(Boolean) ??
+        (settingsState.selectedAgentIds?.length > 0 ? settingsState.selectedAgentIds : []);
+      const fallbackAgentId = sendOptions?.defaultAgentId || configuredAgentIds[0] || 'default-1';
       const agentIds: string[] =
-        settingsState.selectedAgentIds?.length > 0 ? settingsState.selectedAgentIds : ['default-1'];
+        configuredAgentIds.length > 0 ? Array.from(new Set(configuredAgentIds)) : [fallbackAgentId];
 
       const userMessage: UIMessage<ChatMessageMetadata> = {
         id: userMessageId,
@@ -1479,9 +1495,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       // --- Learning Event: asked_question ---
       const currentSession = sessionsRef.current.find((s) => s.id === sessionId);
+      const userKps = extractKnowledgePointsFromText(content);
       void recordLearningEvent({
         eventType: 'asked_question',
-        knowledgePoints: [],
+        knowledgePoints: userKps,
         payload: {
           question_text: content.slice(0, 500),
           question_category: capability || 'chat',
@@ -1495,7 +1512,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       if (confusionPatterns.test(content)) {
         void recordLearningEvent({
           eventType: 'confusion_detected',
-          knowledgePoints: [],
+          knowledgePoints: userKps,
           payload: {
             detection_method: 'explicit',
             context: content.slice(0, 200),
@@ -1537,7 +1554,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
               agentIds,
               maxTurns: 0, // Not used for runtime — frontend loop manages maxTurns
               currentTurn: 0,
-              defaultAgentId: agentIds[0],
+              defaultAgentId: fallbackAgentId,
             },
             toolCalls: [],
             pendingToolCalls: [],
@@ -1605,6 +1622,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType,
+              defaultAgentId: fallbackAgentId,
               serverDriven: agentIds.length > 1,
               ...tutorToolConfig,
             },

@@ -11,9 +11,16 @@ cd mobile
 npm install
 ```
 
-### 2. 启动 Web/BFF 与 Gateway
+### 2. 启动 Gateway，可选启动 Web/BFF
 
-活书移动端通过 Web 端 `/api/live-book` 代理访问 Python Gateway。真机测试时需要让手机能访问 Web/BFF：
+活书移动端的书籍列表、创建、阅读等核心 API 直接访问 Python Gateway。真机测试时需要让手机能访问 Gateway：
+
+```bash
+cd ../AnotherMe/anotherme2_engine
+conda run -n AnotherMe-V2 python run_gateway.py
+```
+
+如果活书页面中有动画、图片等通过 Web/BFF 代理的资源，再启动 Web 端：
 
 ```bash
 cd ../AnotherMe
@@ -26,7 +33,7 @@ pnpm dev:web
 
 ```text
 Web/BFF: http://<电脑局域网IP>:3000
-Gateway: http://<电脑局域网IP>:8082
+Gateway: http://<电脑局域网IP>:8083
 ```
 
 如果自动检测不准，使用 Expo 公共环境变量覆盖，不需要改源码：
@@ -34,9 +41,11 @@ Gateway: http://<电脑局域网IP>:8082
 ```bash
 set EXPO_PUBLIC_DEV_SERVER_HOST=192.168.x.x
 set EXPO_PUBLIC_WEB_URL=http://192.168.x.x:3000
-set EXPO_PUBLIC_GATEWAY_URL=http://192.168.x.x:8082
+set EXPO_PUBLIC_GATEWAY_URL=http://192.168.x.x:8083
 npm start
 ```
+
+`EXPO_PUBLIC_GATEWAY_OVERRIDE_URL` 和 `EXPO_PUBLIC_WEB_OVERRIDE_URL` 仍然兼容，但推荐使用上面的 `EXPO_PUBLIC_GATEWAY_URL` / `EXPO_PUBLIC_WEB_URL`，它们也和构建脚本保持一致。
 
 在手机无法和电脑处于同一网络时，可以把 Web/BFF 暴露为隧道地址并设置：
 

@@ -97,6 +97,7 @@ export function CanvasArea({
       }
 
       resetToolbarTimer();
+      if (isMobile) return;
       if (!showControls || isLiveSession) return;
       // Don't pause when tapping video elements
       const videoEls = el.querySelectorAll('[data-video-element]');
@@ -114,9 +115,13 @@ export function CanvasArea({
       el.removeEventListener('click', handler);
       el.removeEventListener('touchend', handler);
     };
-  }, [showControls, isLiveSession, onPlayPause, resetToolbarTimer]);
+  }, [isMobile, showControls, isLiveSession, onPlayPause, resetToolbarTimer]);
   const showPlayHint =
-    showControls && engineState !== 'playing' && !isLiveSession && !isPendingScene;
+    showControls &&
+    engineState !== 'playing' &&
+    !isLiveSession &&
+    !isPendingScene &&
+    currentScene?.type !== 'quiz';
 
   return (
     <div className="w-full h-full flex flex-col bg-[#f6f4f0] dark:bg-gray-950 group/canvas relative">
@@ -136,7 +141,7 @@ export function CanvasArea({
             'aspect-[16/9] h-full max-h-full max-w-full bg-white dark:bg-gray-900 shadow-2xl rounded-[22px] overflow-hidden relative transition-all duration-700',
             'max-md:h-auto max-md:w-full max-md:rounded-[18px]',
             isMobileLandscape && '!h-full !w-full !rounded-lg !max-h-full !max-w-full',
-            showControls && !isLiveSession && 'cursor-pointer',
+            showControls && !isLiveSession && !isMobile && 'cursor-pointer',
             currentScene?.type === 'interactive'
               ? 'shadow-sky-200/50 dark:shadow-sky-900/50 ring-1 ring-sky-900/5 dark:ring-sky-500/10'
               : 'shadow-gray-200/70 dark:shadow-gray-950/60 ring-1 ring-gray-950/5 dark:ring-white/5',

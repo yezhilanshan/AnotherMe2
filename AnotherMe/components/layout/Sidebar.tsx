@@ -65,7 +65,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     try {
       await logout();
       router.replace('/login');
-      router.refresh();
     } finally {
       setLoggingOut(false);
     }

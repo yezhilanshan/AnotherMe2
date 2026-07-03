@@ -5,9 +5,15 @@ import { View, StyleSheet, ActivityIndicator, Text } from "react-native";
 import { WebView } from "react-native-webview";
 import * as FileSystem from "expo-file-system";
 import { colors } from "../lib/theme";
+import {
+  CapabilityMediaPreview,
+  hasRenderableCapabilityMedia,
+  type CapabilityArtifact,
+} from "./CapabilityMediaPreview";
 
 interface VisualizePreviewProps {
   render_type?: string;
+  artifacts?: CapabilityArtifact[];
   code?: { language: string; content: string };
 }
 
@@ -55,6 +61,7 @@ async function writeCache(key: string, html: string) {
 
 export const VisualizePreview = React.memo(function VisualizePreview({
   render_type,
+  artifacts,
   code,
 }: VisualizePreviewProps) {
   const [webViewHeight, setWebViewHeight] = useState(MIN_WEBVIEW_HEIGHT);
@@ -63,7 +70,17 @@ export const VisualizePreview = React.memo(function VisualizePreview({
   const webViewRef = useRef<WebView>(null);
   const hasCachedRef = useRef(false);
 
-  // 无代码内容时不渲染
+  if (hasRenderableCapabilityMedia(artifacts)) {
+    return (
+      <CapabilityMediaPreview
+        artifacts={artifacts}
+        title="可视化结果"
+        icon="analytics-outline"
+      />
+    );
+  }
+
+  // 无媒体 artifact 且无代码内容时不渲染
   if (!code?.content) return null;
 
   const renderType = render_type || code.language || "html";

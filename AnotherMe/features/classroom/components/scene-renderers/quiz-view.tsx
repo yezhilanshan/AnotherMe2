@@ -22,6 +22,7 @@ import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/features/ai-tutor/components/audio/speech-button';
 import { recordLearningEvent } from '@/lib/learning-events/client';
 import { useStageStore } from '@/lib/store/stage';
+import { useIsMobileLandscape } from '@/hooks/use-landscape';
 
 const log = createLogger('QuizView');
 
@@ -260,7 +261,7 @@ function SingleChoiceQuestion({
               disabled={disabled}
               onClick={() => !disabled && onChange(opt.value)}
               className={cn(
-                'flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all text-sm',
+                'flex items-center gap-3 px-3 py-2 lg:px-4 lg:py-3 rounded-xl border text-left transition-all text-sm',
                 // Default state
                 !isReview &&
                   !selected &&
@@ -370,7 +371,7 @@ function MultipleChoiceQuestion({
               disabled={disabled}
               onClick={() => toggle(opt.value)}
               className={cn(
-                'flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-all text-sm',
+                'flex items-center gap-3 px-3 py-2 lg:px-4 lg:py-3 rounded-xl border text-left transition-all text-sm',
                 !isReview &&
                   !isSelected &&
                   'border-gray-200 dark:border-gray-600 hover:border-violet-200 dark:hover:border-violet-700 hover:bg-violet-50/50 dark:hover:bg-violet-900/30',
@@ -526,7 +527,7 @@ function QuestionCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
       className={cn(
-        'bg-white dark:bg-gray-800 rounded-2xl border p-5 relative overflow-hidden',
+        'bg-white dark:bg-gray-800 rounded-2xl border p-3 lg:p-5 relative overflow-hidden',
         !isReview && 'border-gray-150 dark:border-gray-700 shadow-sm',
         isReview &&
           result.status === 'correct' &&
@@ -547,7 +548,7 @@ function QuestionCard({
       />
 
       {/* Header */}
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between mb-3 gap-2">
         <div className="flex items-start gap-3">
           <span
             className={cn(
@@ -564,7 +565,7 @@ function QuestionCard({
           >
             {index + 1}
           </span>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-medium text-gray-800 dark:text-gray-100 leading-relaxed">
               {question.question}
             </p>
@@ -700,6 +701,7 @@ function ScoreBanner({
 export function QuizView({ questions, sceneId }: QuizViewProps) {
   const { t, locale } = useI18n();
   const stage = useStageStore((state) => state.stage);
+  const isMobileLandscape = useIsMobileLandscape();
   const [phase, setPhase] = useState<Phase>('not_started');
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [results, setResults] = useState<QuestionResult[]>([]);
@@ -849,6 +851,13 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
     return map;
   }, [results]);
 
+  const mobileLandscapeEdgeStyle = isMobileLandscape
+    ? {
+        paddingRight: 'max(env(safe-area-inset-right, 0px), 72px)',
+        paddingLeft: 'max(env(safe-area-inset-left, 0px), 12px)',
+      }
+    : undefined;
+
   return (
     <div className="w-full h-full bg-gradient-to-b from-gray-50 to-white dark:from-gray-900 dark:to-gray-900 overflow-hidden flex flex-col">
       <AnimatePresence mode="wait">
@@ -877,10 +886,20 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
             className="flex-1 flex flex-col min-h-0"
           >
             {/* Header bar */}
-            <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0">
-              <div className="flex items-center gap-2">
+            <div
+              className="flex items-center justify-between gap-3 px-3 py-2 lg:px-6 lg:py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0"
+              style={
+                isMobileLandscape
+                  ? {
+                      ...mobileLandscapeEdgeStyle,
+                      paddingTop: 'max(env(safe-area-inset-top, 0px), 10px)',
+                    }
+                  : undefined
+              }
+            >
+              <div className="flex min-w-0 items-center gap-2">
                 <PieChart className="w-4 h-4 text-violet-500" />
-                <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                <span className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
                   {t('quiz.answering')}
                 </span>
                 <span className="text-xs text-gray-400 ml-1">
@@ -898,7 +917,7 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
                 onClick={handleSubmit}
                 disabled={!allAnswered}
                 className={cn(
-                  'px-4 py-1.5 rounded-lg text-xs font-medium transition-all',
+                  'min-h-9 shrink-0 px-4 py-1.5 rounded-lg text-xs font-medium transition-all',
                   allAnswered
                     ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-sm hover:shadow-md hover:shadow-violet-200/50 dark:hover:shadow-violet-900/50 active:scale-[0.97]'
                     : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed',
@@ -909,7 +928,17 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
             </div>
 
             {/* Questions */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            <div
+              className="flex-1 overflow-y-auto px-3 py-3 lg:px-6 lg:py-4 space-y-3 lg:space-y-4"
+              style={
+                isMobileLandscape
+                  ? {
+                      ...mobileLandscapeEdgeStyle,
+                      paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 96px)',
+                    }
+                  : undefined
+              }
+            >
               {questions.map((q, i) => {
                 if (q.type === 'single') {
                   return (
@@ -992,7 +1021,17 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
             className="flex-1 flex flex-col min-h-0"
           >
             {/* Header bar */}
-            <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0">
+            <div
+              className="flex items-center justify-between gap-3 px-3 py-2 lg:px-6 lg:py-3 border-b border-gray-100 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur shrink-0"
+              style={
+                isMobileLandscape
+                  ? {
+                      ...mobileLandscapeEdgeStyle,
+                      paddingTop: 'max(env(safe-area-inset-top, 0px), 10px)',
+                    }
+                  : undefined
+              }
+            >
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                 <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
@@ -1009,7 +1048,17 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            <div
+              className="flex-1 overflow-y-auto px-3 py-3 lg:px-6 lg:py-4 space-y-3 lg:space-y-4"
+              style={
+                isMobileLandscape
+                  ? {
+                      ...mobileLandscapeEdgeStyle,
+                      paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 96px)',
+                    }
+                  : undefined
+              }
+            >
               <ScoreBanner score={earnedScore} total={totalPoints} results={results} />
 
               {questions.map((q, i) => {

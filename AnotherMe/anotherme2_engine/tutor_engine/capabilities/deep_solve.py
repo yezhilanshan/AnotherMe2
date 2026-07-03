@@ -9,6 +9,7 @@ Wraps the existing ``MainSolver``.
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from tutor_engine.capabilities.request_contracts import get_capability_request_schema
@@ -21,6 +22,72 @@ from tutor_engine.core.trace import derive_trace_metadata, merge_trace_metadata
 def _image_attachments(attachments: list[Any]) -> list[Any]:
     """Return the image attachments to forward into multimodal LLM calls."""
     return [att for att in attachments or [] if getattr(att, "type", "") == "image"]
+
+
+def _coerce_max_tokens(value: object) -> int | None:
+    try:
+        tokens = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(tokens, 32768))
+
+
+class _WriterStepTracker:
+    """Annotate writer chunks with coarse step metadata."""
+
+    def __init__(self) -> None:
+        self.index = -1
+        self.current_id = ""
+        self.started = False
+
+    @staticmethod
+    def _looks_like_new_step(chunk: str) -> bool:
+        stripped = chunk.lstrip()
+        return bool(
+            re.match(r"^#{1,6}\s+", stripped)
+            or re.match(r"^\*\*\s*(?:\d+[.、]\s*)?(?:步骤|Step|解题|推导|证明)", stripped, re.I)
+            or re.match(r"^\d+[.、]\s+", stripped)
+        )
+
+    @staticmethod
+    def _title(chunk: str, index: int) -> str:
+        for line in chunk.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            heading = re.match(r"^#{1,6}\s+(.+)$", line)
+            if heading:
+                return heading.group(1).strip()[:80]
+            bold = re.match(
+                r"^\*\*\s*((?:\d+[.、]\s*)?(?:步骤|Step|解题|推导|证明)[^*：:]{0,50})[:：]?\s*\*\*",
+                line,
+                re.I,
+            )
+            if bold:
+                return bold.group(1).strip()[:80]
+            numbered = re.match(r"^(\d+[.、]\s+.{1,70})$", line)
+            if numbered:
+                return numbered.group(1).strip()[:80]
+            break
+        return f"解题步骤 {index + 1}"
+
+    def metadata_for_chunk(self, chunk: str) -> dict[str, Any]:
+        event = "delta"
+        title = None
+        if not self.started or self._looks_like_new_step(chunk):
+            self.started = True
+            self.index += 1
+            self.current_id = f"writer-step-{self.index}"
+            event = "start_delta"
+            title = self._title(chunk, self.index)
+        data: dict[str, Any] = {
+            "step_event": event,
+            "step_id": self.current_id,
+            "step_index": self.index,
+        }
+        if title:
+            data["step_title"] = title
+        return data
 
 
 class DeepSolveCapability(BaseCapability):
@@ -45,6 +112,9 @@ class DeepSolveCapability(BaseCapability):
 
         llm_config = get_llm_config()
         detailed = context.config_overrides.get("detailed_answer", True)
+        max_tokens_override = _coerce_max_tokens(
+            context.config_overrides.get("max_tokens")
+        )
         enabled_tools = list(
             self.manifest.tools_used if context.enabled_tools is None else context.enabled_tools
         )
@@ -75,6 +145,7 @@ class DeepSolveCapability(BaseCapability):
             language=context.language,
             enabled_tools=enabled_tools,
             disable_planner_retrieve=not (rag_enabled and kb_name),
+            max_tokens=max_tokens_override,
         )
         await solver.ainit()
 
@@ -253,6 +324,7 @@ class DeepSolveCapability(BaseCapability):
 
         # Content callback — streams writer tokens to the main chat area
         content_streamed = False
+        writer_steps = _WriterStepTracker()
 
         async def _content_sink(chunk: str) -> None:
             nonlocal content_streamed
@@ -261,6 +333,7 @@ class DeepSolveCapability(BaseCapability):
                 chunk,
                 source=self.name,
                 stage="writing",
+                metadata=writer_steps.metadata_for_chunk(chunk),
             )
 
         setattr(solver, "_content_callback", _content_sink)

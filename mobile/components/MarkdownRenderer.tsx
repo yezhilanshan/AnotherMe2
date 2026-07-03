@@ -1,675 +1,414 @@
-// MarkdownRenderer — 自研轻量渲染器，基于 parseMarkdown + MathJax SVG
-// 不依赖 react-native-markdown-display，避免与 React 19 / RN 0.85 的兼容性问题
-
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
   Linking,
+  StyleSheet,
+  Text,
+  View,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import MathJax from "react-native-mathjax-svg";
+import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
-import {
-  parseMarkdown,
-  normalizeStructuredTutorResponse,
-  simplifyLatex,
-  type MarkdownBlock,
-} from "../lib/latex-utils";
 import { colors } from "../lib/theme";
+import { RenderDebugBoundary } from "./RenderDebugBoundary";
 
-const BASE_FONT_SIZE = 15;
-const BASE_LINE_HEIGHT = 23;
-const SMALL_FONT_SIZE = 13;
-const MATH_FONT_SIZE = 15;
-const HEADING_SIZES: Record<number, number> = {
-  1: 18,
-  2: 17,
-  3: 16,
-  4: 15,
-};
-
-// ── 将教学语义行转换为 markdown 引用块格式 ──
-const TEACHING_PATTERNS: Array<{ regex: RegExp; emoji: string }> = [
-  { regex: /^(提示|Hint|思路|启发)[:：]/i, emoji: "💡" },
-  { regex: /^(步骤|解题步骤|推导过程)[:：]/i, emoji: "👣" },
-  { regex: /^(知识点|关键点|核心概念|概念)[:：]/i, emoji: "📚" },
-  { regex: /^(错因分析|常见错误|易错点|误区|错因)[:：]/i, emoji: "⚠️" },
-  { regex: /^(小测|练习|问题|自测)[:：]/i, emoji: "📝" },
-  { regex: /^(学习状态|掌握情况)[:：]/i, emoji: "📊" },
-  { regex: /^(下一步|接下来|建议)[:：]/i, emoji: "👉" },
-];
-
-function preprocessTeachingLines(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => {
-      for (const { regex, emoji } of TEACHING_PATTERNS) {
-        const match = line.trim().match(regex);
-        if (match) {
-          const rest = line
-            .slice(line.indexOf(match[0]) + match[0].length)
-            .trim();
-          return `> **${emoji} ${match[1]}：** ${rest}`;
-        }
-      }
-      return line;
-    })
-    .join("\n");
-}
-
-// ── 代码块语法高亮 ──
-const KEYWORDS: Record<string, string> = {
-  const: "#c678dd",
-  let: "#c678dd",
-  var: "#c678dd",
-  function: "#c678dd",
-  return: "#c678dd",
-  if: "#c678dd",
-  else: "#c678dd",
-  for: "#c678dd",
-  while: "#c678dd",
-  import: "#c678dd",
-  from: "#c678dd",
-  export: "#c678dd",
-  default: "#c678dd",
-  class: "#c678dd",
-  extends: "#c678dd",
-  new: "#c678dd",
-  this: "#c678dd",
-  super: "#c678dd",
-  async: "#c678dd",
-  await: "#c678dd",
-  try: "#c678dd",
-  catch: "#c678dd",
-  throw: "#c678dd",
-  typeof: "#c678dd",
-  instanceof: "#c678dd",
-  in: "#c678dd",
-  of: "#c678dd",
-  switch: "#c678dd",
-  case: "#c678dd",
-  break: "#c678dd",
-  continue: "#c678dd",
-  do: "#c678dd",
-  yield: "#c678dd",
-  delete: "#c678dd",
-  void: "#c678dd",
-  with: "#c678dd",
-  finally: "#c678dd",
-  def: "#c678dd",
-  elif: "#c678dd",
-  pass: "#c678dd",
-  lambda: "#c678dd",
-  global: "#c678dd",
-  nonlocal: "#c678dd",
-  assert: "#c678dd",
-  raise: "#c678dd",
-  as: "#c678dd",
-  True: "#d19a66",
-  False: "#d19a66",
-  None: "#d19a66",
-  print: "#61afef",
-  console: "#61afef",
-  log: "#61afef",
-  len: "#61afef",
-  range: "#61afef",
-  type: "#61afef",
-  int: "#61afef",
-  str: "#61afef",
-  float: "#61afef",
-  list: "#61afef",
-  dict: "#61afef",
-  set: "#61afef",
-  tuple: "#61afef",
-  bool: "#61afef",
-  map: "#61afef",
-  filter: "#61afef",
-  reduce: "#61afef",
-  null: "#d19a66",
-  undefined: "#d19a66",
-  true: "#d19a66",
-  false: "#d19a66",
-  NaN: "#d19a66",
-  Infinity: "#d19a66",
-};
-
-interface Token {
-  text: string;
-  color: string;
-}
-
-function tokenizeLine(line: string): Token[] {
-  const tokens: Token[] = [];
-  const regex =
-    /(#.*$|\/\/.*$|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b\d+\.?\d*\b|\b[a-zA-Z_]\w*\b|[^\s\w]|[\s]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(line)) !== null) {
-    const text = match[0];
-    if (text.startsWith("#") || text.startsWith("//")) {
-      tokens.push({ text, color: "#5c6370" });
-    } else if (
-      text.startsWith('"') ||
-      text.startsWith("'") ||
-      text.startsWith("`")
-    ) {
-      tokens.push({ text, color: "#98c379" });
-    } else if (/^\d/.test(text)) {
-      tokens.push({ text, color: "#d19a66" });
-    } else if (/^[a-zA-Z_]/.test(text)) {
-      tokens.push({ text, color: KEYWORDS[text] || "#abb2bf" });
-    } else {
-      tokens.push({ text, color: "#abb2bf" });
-    }
-  }
-  return tokens;
-}
-
-// ── 代码块渲染组件 ──
-function FenceBlock({
-  content,
-  sourceInfo,
-  blockKey,
-}: {
-  content: string;
-  sourceInfo?: string;
-  blockKey: string;
-}) {
-  const [copied, setCopied] = React.useState(false);
-  const lines: string[] = content.split("\n");
-
-  const handleCopy = () => {
-    try {
-      const Clipboard = require("expo-clipboard");
-      Clipboard.setStringAsync(content).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      });
-    } catch {
-      // fallback
-    }
-  };
-
-  return (
-    <View key={blockKey} style={fenceStyles.container}>
-      <View style={fenceStyles.header}>
-        <Text style={fenceStyles.langLabel}>{sourceInfo || "Code"}</Text>
-        <TouchableOpacity onPress={handleCopy} style={fenceStyles.copyBtn}>
-          <Ionicons
-            name={copied ? "checkmark-circle" : "copy-outline"}
-            size={14}
-            color={copied ? colors.success : "#abb2bf"}
-          />
-        </TouchableOpacity>
-      </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={fenceStyles.codeArea}>
-          {lines.map((line, i) => (
-            <View key={i} style={fenceStyles.lineRow}>
-              <Text style={fenceStyles.lineNumber}>{i + 1}</Text>
-              <Text style={fenceStyles.codeText}>
-                {tokenizeLine(line).map((token, j) => (
-                  <Text key={j} style={{ color: token.color }}>
-                    {token.text}
-                  </Text>
-                ))}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-    </View>
-  );
-}
-
-const fenceStyles = StyleSheet.create({
-  container: {
-    backgroundColor: "#282c34",
-    borderRadius: 8,
-    marginVertical: 6,
-    overflow: "hidden",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: "#21252b",
-  },
-  langLabel: { color: "#5c6370", fontSize: 12, fontFamily: "monospace" },
-  copyBtn: { padding: 4 },
-  codeArea: {
-    padding: 12,
-    maxHeight: 300,
-  },
-  lineRow: { flexDirection: "row" },
-  lineNumber: {
-    color: "#4b5263",
-    fontSize: 13,
-    fontFamily: "monospace",
-    width: 28,
-    textAlign: "right",
-    marginRight: 12,
-  },
-  codeText: {
-    color: "#abb2bf",
-    fontSize: 13,
-    fontFamily: "monospace",
-    flexShrink: 1,
-  },
-});
-
-// ── 行内元素正则 ──
-const INLINE_RE =
-  /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\$\$[^$]+\$\$|\$[^$]+\$|\\\((?:[^\\]|\\(?!\)))*\\\)|\\\[(?:[^\\]|\\(?!\]))*\\\])/g;
-
-function isMathToken(token: string): boolean {
-  return (
-    (token.startsWith("$$") && token.endsWith("$$")) ||
-    (token.startsWith("$") && token.endsWith("$")) ||
-    (token.startsWith("\\(") && token.endsWith("\\)")) ||
-    (token.startsWith("\\[") && token.endsWith("\\]"))
-  );
-}
-
-function unwrapMathToken(token: string): string {
-  if (token.startsWith("$$") && token.endsWith("$$")) return token.slice(2, -2).trim();
-  if (token.startsWith("$") && token.endsWith("$")) return token.slice(1, -1).trim();
-  if (token.startsWith("\\(") && token.endsWith("\\)")) return token.slice(2, -2).trim();
-  if (token.startsWith("\\[") && token.endsWith("\\]")) return token.slice(2, -2).trim();
-  return token;
-}
-
-function InlineMath({
-  formula,
-  color,
-  blockKey,
-}: {
-  formula: string;
-  color: string;
-  blockKey: string;
-}) {
-  return (
-    <ScrollView
-      key={blockKey}
-      horizontal
-      nestedScrollEnabled
-      showsHorizontalScrollIndicator={false}
-      style={styles.inlineMathScroll}
-      contentContainerStyle={styles.inlineMathContent}
-    >
-      <MathJax
-        style={styles.latexInline as any}
-        fontSize={MATH_FONT_SIZE}
-        color={color}
-      >
-        {formula}
-      </MathJax>
-    </ScrollView>
-  );
-}
-
-/** 行内渲染：粗体、斜体、行内代码、链接、行内 LaTeX */
-function renderInlineNodes(
-  text: string,
-  color: string,
-  keyPrefix: string,
-  textStyle?: StyleProp<TextStyle>,
-  renderMath = true,
-) {
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let idx = 0;
-
-  INLINE_RE.lastIndex = 0;
-  while ((match = INLINE_RE.exec(text)) !== null) {
-    // 匹配前的普通文本
-    if (match.index > lastIndex) {
-      parts.push(
-        <Text key={`${keyPrefix}-t${idx++}`} style={[styles.inlineText, textStyle, { color }]}>
-          {text.slice(lastIndex, match.index)}
-        </Text>,
-      );
-    }
-
-    const token = match[0];
-
-    if (token.startsWith("**") && token.endsWith("**")) {
-      parts.push(
-        <Text
-          key={`${keyPrefix}-b${idx++}`}
-          style={[styles.inlineText, textStyle, { color, fontWeight: "700" }]}
-        >
-          {token.slice(2, -2)}
-        </Text>,
-      );
-    } else if (token.startsWith("*") && token.endsWith("*")) {
-      parts.push(
-        <Text
-          key={`${keyPrefix}-i${idx++}`}
-          style={[styles.inlineText, textStyle, { color, fontStyle: "italic" }]}
-        >
-          {token.slice(1, -1)}
-        </Text>,
-      );
-    } else if (token.startsWith("`") && token.endsWith("`")) {
-      parts.push(
-        <Text
-          key={`${keyPrefix}-c${idx++}`}
-          style={styles.inlineCode}
-        >
-          {token.slice(1, -1)}
-        </Text>,
-      );
-    } else if (token.startsWith("[")) {
-      const m = token.match(/\[([^\]]+)\]\(([^)]+)\)/);
-      if (m) {
-        parts.push(
-          <Text
-            key={`${keyPrefix}-l${idx++}`}
-            style={[styles.link, { color: colors.primary }]}
-            onPress={() => Linking.openURL(m[2]).catch(() => {})}
-          >
-            {m[1]}
-          </Text>,
-        );
-      }
-    } else if (isMathToken(token)) {
-      if (!renderMath) {
-        parts.push(
-          <Text key={`${keyPrefix}-mtext${idx++}`} style={[styles.inlineText, textStyle, { color }]}>
-            {token}
-          </Text>,
-        );
-        lastIndex = match.index + token.length;
-        continue;
-      }
-      parts.push(
-        <InlineMath
-          key={`${keyPrefix}-m${idx}`}
-          blockKey={`${keyPrefix}-m${idx++}`}
-          formula={unwrapMathToken(token)}
-          color={color}
-        />,
-      );
-    }
-
-    lastIndex = match.index + token.length;
-  }
-
-  // 尾部文本
-  if (lastIndex < text.length) {
-    parts.push(
-      <Text key={`${keyPrefix}-t${idx++}`} style={[styles.inlineText, textStyle, { color }]}>
-        {text.slice(lastIndex)}
-      </Text>,
-    );
-  }
-
-  return parts.length > 0
-    ? parts
-    : [
-        <Text key={`${keyPrefix}-0`} style={[styles.inlineText, textStyle, { color }]}>
-          {text}
-        </Text>,
-      ];
-}
-
-function InlineFlow({
-  text,
-  color,
-  blockKey,
-  style,
-  textStyle,
-  renderMath = true,
-}: {
-  text: string;
-  color: string;
-  blockKey: string;
-  style?: StyleProp<ViewStyle>;
-  textStyle?: StyleProp<TextStyle>;
-  renderMath?: boolean;
-}) {
-  return (
-    <View style={[styles.inlineFlow, style]}>
-      {renderInlineNodes(text, color, blockKey, textStyle, renderMath)}
-    </View>
-  );
-}
-
-// ── 教学引用块样式映射 ──
-const TEACHING_BG: Record<string, string> = {
-  hint: "#fff8e1",
-  steps: "#e8f5e9",
-  knowledge: "#e3f2fd",
-  mistake: "#fce4ec",
-  quiz: "#f3e5f5",
-  learning: "#e0f7fa",
-  next: "#fff3e0",
-};
-
-const TEACHING_BORDER: Record<string, string> = {
-  hint: "#ffc107",
-  steps: "#4caf50",
-  knowledge: "#2196f3",
-  mistake: "#e91e63",
-  quiz: "#9c27b0",
-  learning: "#00bcd4",
-  next: "#ff9800",
-};
-
-// ── 单个 Block 渲染 ──
-function BlockRenderer({
-  block,
-  index,
-  color,
-  renderMath,
-}: {
-  block: MarkdownBlock;
-  index: number;
-  color: string;
-  renderMath: boolean;
-}) {
-  const key = `block-${index}`;
-
-  switch (block.type) {
-    case "empty":
-      return <View key={key} style={{ height: 8 }} />;
-
-    case "heading": {
-      const level = block.level || 1;
-      const fontSize = HEADING_SIZES[level] || HEADING_SIZES[4];
-      return (
-        <View key={key} style={styles.heading}>
-          <InlineFlow
-            text={block.content}
-            color={color}
-            blockKey={key}
-            style={{ minHeight: Math.ceil(fontSize * 1.4) }}
-            textStyle={{
-              fontSize,
-              lineHeight: Math.ceil(fontSize * 1.38),
-              fontWeight: "700",
-            }}
-            renderMath={renderMath}
-          />
-        </View>
-      );
-    }
-
-    case "code":
-      return (
-        <FenceBlock
-          key={key}
-          blockKey={key}
-          content={block.content}
-          sourceInfo={block.language}
-        />
-      );
-
-    case "latex_display":
-      if (!renderMath) {
-        return (
-          <ScrollView
-            key={key}
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator={false}
-            style={styles.latexBlock}
-            contentContainerStyle={styles.streamingFormulaContent}
-          >
-            <Text style={[styles.inlineText, styles.streamingFormulaText, { color }]}>
-              {block.content}
-            </Text>
-          </ScrollView>
-        );
-      }
-      return (
-        <View key={key} style={styles.latexBlock}>
-          <ScrollView
-            horizontal
-            nestedScrollEnabled
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.latexBlockContent}
-          >
-            <MathJax
-              style={styles.latexBlockInner as any}
-              color={color}
-              fontSize={MATH_FONT_SIZE}
-            >
-              {block.content}
-            </MathJax>
-          </ScrollView>
-        </View>
-      );
-
-    case "list":
-    case "ordered_list": {
-      const isOrdered = block.type === "ordered_list";
-      const indent = (block.level || 0) * 16;
-      return (
-        <View key={key} style={[styles.listItem, { marginLeft: 12 + indent }]}>
-          <Text style={styles.listMarker}>
-            {isOrdered ? `${block.order ?? 1}.` : "•"}
-          </Text>
-          <View style={styles.listContent}>
-            <InlineFlow
-              text={block.content}
-              color={color}
-              blockKey={key}
-              renderMath={renderMath}
-            />
-          </View>
-        </View>
-      );
-    }
-
-    case "blockquote":
-      return (
-        <View key={key} style={styles.blockquote}>
-          <InlineFlow
-            text={block.content}
-            color={colors.textSecondary}
-            blockKey={key}
-            renderMath={renderMath}
-          />
-        </View>
-      );
-
-    case "teaching": {
-      const kind = block.teachingKind || "hint";
-      return (
-        <View
-          key={key}
-          style={[
-            styles.teaching,
-            {
-              backgroundColor: TEACHING_BG[kind] || TEACHING_BG.hint,
-              borderLeftColor: TEACHING_BORDER[kind] || TEACHING_BORDER.hint,
-            },
-          ]}
-        >
-          {block.title ? (
-            <Text style={[styles.teachingTitle, { color: TEACHING_BORDER[kind] || colors.textPrimary }]}>
-              {block.title}
-            </Text>
-          ) : null}
-          <InlineFlow
-            text={block.content}
-            color={color}
-            blockKey={key}
-            renderMath={renderMath}
-          />
-        </View>
-      );
-    }
-
-    case "hr":
-      return <View key={key} style={styles.hr} />;
-
-    case "table": {
-      const headers = block.headers || [];
-      const rows = block.rows || [];
-      return (
-        <View key={key} style={styles.table}>
-          <View style={styles.tableRow}>
-            {headers.map((h, ci) => (
-              <View key={ci} style={styles.tableCell}>
-                <Text style={{ fontWeight: "600", color }}>
-                  {h.trim()}
-                </Text>
-              </View>
-            ))}
-          </View>
-          {rows.map((row, ri) => (
-            <View
-              key={ri}
-              style={[
-                styles.tableRow,
-                { borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-              ]}
-            >
-              {row.map((cell, ci) => (
-                <View key={ci} style={styles.tableCell}>
-                  <Text style={{ color }}>
-                    {cell.trim()}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ))}
-        </View>
-      );
-    }
-
-    case "paragraph":
-    default:
-      return (
-        <View key={key} style={styles.paragraph}>
-          <InlineFlow
-            text={block.content}
-            color={color}
-            blockKey={key}
-            renderMath={renderMath}
-          />
-        </View>
-      );
-  }
-}
-
-// ── 主组件 Props ──
 interface MarkdownRendererProps {
   content: string;
   color?: string;
   isStreaming?: boolean;
+}
+
+const MIN_HEIGHT = 36;
+const MAX_HEIGHT = 4800;
+const BODY_FONT_SIZE = 15;
+const BODY_LINE_HEIGHT = 22;
+
+function clampHeight(value: number): number {
+  if (!Number.isFinite(value)) return MIN_HEIGHT;
+  return Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(value)));
+}
+
+function normalizeContent(value: string): string {
+  return String(value || "")
+    .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
+    .replace(/<\/?(think|reasoning|analysis)>/gi, "")
+    .trim();
+}
+
+function estimateHeight(markdown: string): number {
+  if (!markdown.trim()) return MIN_HEIGHT;
+  const lines = markdown.split(/\r?\n/);
+  let visualLines = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      visualLines += 0.45;
+    } else if (/^```/.test(trimmed)) {
+      visualLines += 1.2;
+    } else if (/^#{1,6}\s+/.test(trimmed)) {
+      visualLines += 1.65;
+    } else if (/^(\$\$|\\\[)/.test(trimmed)) {
+      visualLines += 1.8;
+    } else {
+      visualLines += Math.max(1, Math.ceil(trimmed.length / 28));
+    }
+  }
+  return clampHeight(visualLines * BODY_LINE_HEIGHT + 22);
+}
+
+function jsonForInlineScript(value: unknown): string {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (char) => {
+    switch (char) {
+      case "<":
+        return "\\u003c";
+      case ">":
+        return "\\u003e";
+      case "&":
+        return "\\u0026";
+      case "\u2028":
+        return "\\u2028";
+      case "\u2029":
+        return "\\u2029";
+      default:
+        return char;
+    }
+  });
+}
+
+function cssColor(value: string): string {
+  if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value;
+  if (/^rgba?\([0-9.,\s%]+\)$/.test(value)) return value;
+  return colors.textPrimary;
+}
+
+function buildMarkdownHtml(markdown: string, color: string): string {
+  const theme = {
+    text: cssColor(color),
+    muted: colors.textMuted,
+    primary: colors.primary,
+    primaryDark: colors.primaryDark,
+    primaryLight: colors.primaryLight,
+    bgInput: colors.bgInput,
+    border: colors.border,
+    quoteBg: colors.quoteBg,
+  };
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    color: ${theme.text};
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: ${BODY_FONT_SIZE}px;
+    line-height: ${BODY_LINE_HEIGHT}px;
+    -webkit-text-size-adjust: 100%;
+  }
+  body { overflow: hidden; }
+  #app { width: 100%; padding: 1px 0 3px; overflow-wrap: anywhere; word-break: break-word; }
+  p { margin: 0 0 9px; }
+  p:last-child { margin-bottom: 0; }
+  h1, h2, h3, h4, h5, h6 {
+    margin: 14px 0 7px;
+    color: ${theme.text};
+    font-weight: 700;
+    line-height: 1.28;
+  }
+  h1 { font-size: 1.38em; }
+  h2 { font-size: 1.24em; }
+  h3 { font-size: 1.13em; }
+  h4, h5, h6 { font-size: 1.04em; }
+  a { color: ${theme.primary}; text-decoration: underline; }
+  ul, ol { margin: 0 0 9px 21px; padding: 0; }
+  li { margin: 4px 0; padding-left: 2px; }
+  blockquote {
+    margin: 8px 0 9px;
+    padding: 8px 10px;
+    border-left: 4px solid ${theme.primary};
+    background: ${theme.quoteBg};
+    border-radius: 6px;
+    color: ${theme.muted};
+  }
+  pre {
+    margin: 8px 0 9px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    border-radius: 8px;
+    background: ${theme.bgInput};
+    color: ${theme.primaryDark};
+    -webkit-overflow-scrolling: touch;
+  }
+  code, .math-inline, .math-display {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  :not(pre) > code {
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: ${theme.bgInput};
+    color: ${theme.primaryDark};
+  }
+  .math-display {
+    margin: 9px 0;
+    padding: 8px 10px;
+    overflow-x: auto;
+    border-radius: 8px;
+    background: ${theme.bgInput};
+    color: ${theme.primaryDark};
+    white-space: pre;
+  }
+  .table-wrap { width: 100%; overflow-x: auto; margin: 8px 0 9px; }
+  table { min-width: 100%; border-collapse: collapse; border: 1px solid ${theme.border}; }
+  th, td { border: 1px solid ${theme.border}; padding: 7px 9px; text-align: left; vertical-align: top; }
+  th { background: ${theme.primaryLight}; font-weight: 700; }
+  hr { height: 1px; border: 0; background: ${theme.border}; margin: 12px 0; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+(function() {
+  var markdown = ${jsonForInlineScript(markdown)};
+  var app = document.getElementById("app");
+
+  function post(payload) {
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function safeHref(value) {
+    var href = String(value || "").trim();
+    return /^(https?:|mailto:|tel:)/i.test(href) ? href : "#";
+  }
+
+  function renderInline(text) {
+    var code = [];
+    var tick = String.fromCharCode(96);
+    var inlineCodePattern = new RegExp(
+      tick + "([^" + tick + "\\\\n]+)" + tick,
+      "g"
+    );
+    var value = String(text || "").replace(inlineCodePattern, function(match, inner) {
+      var token = "\\u0000CODE_" + code.length + "\\u0000";
+      code.push("<code>" + escapeHtml(inner) + "</code>");
+      return token;
+    });
+    var html = escapeHtml(value);
+    html = html.replace(/\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\)/g, function(match, label, href) {
+      var url = safeHref(href.replace(/&amp;/g, "&"));
+      if (url === "#") return match;
+      return '<a href="' + escapeHtml(url) + '">' + label + "</a>";
+    });
+    html = html.replace(/\\$([^$\\n]{1,300})\\$/g, function(match, formula) {
+      return '<span class="math-inline">$' + formula + "$</span>";
+    });
+    html = html.replace(/\\*\\*([^*\\n]+)\\*\\*/g, "<strong>$1</strong>");
+    html = html.replace(/(^|[^*])\\*([^*\\n]+)\\*/g, "$1<em>$2</em>");
+    html = html.replace(/\\u0000CODE_(\\d+)\\u0000/g, function(match, index) {
+      return code[Number(index)] || "";
+    });
+    return html;
+  }
+
+  function splitTableRow(row) {
+    return row.trim().replace(/^\\|/, "").replace(/\\|$/, "").split("|");
+  }
+
+  function isTableSeparator(row) {
+    return /^\\s*\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?\\s*$/.test(row);
+  }
+
+  function renderTable(lines, start) {
+    var headers = splitTableRow(lines[start]);
+    var rows = [];
+    var i = start + 2;
+    while (i < lines.length && lines[i].indexOf("|") !== -1 && lines[i].trim()) {
+      rows.push(splitTableRow(lines[i]));
+      i += 1;
+    }
+    var html = '<div class="table-wrap"><table><thead><tr>';
+    html += headers.map(function(cell) {
+      return "<th>" + renderInline(cell.trim()) + "</th>";
+    }).join("");
+    html += "</tr></thead><tbody>";
+    html += rows.map(function(row) {
+      return "<tr>" + row.map(function(cell) {
+        return "<td>" + renderInline(cell.trim()) + "</td>";
+      }).join("") + "</tr>";
+    }).join("");
+    html += "</tbody></table></div>";
+    return { html: html, next: i };
+  }
+
+  function renderMarkdown(source) {
+    var lines = String(source || "").replace(/\\r\\n/g, "\\n").split("\\n");
+    var html = [];
+    var paragraph = [];
+    var listItems = [];
+    var orderedList = false;
+    var fence = String.fromCharCode(96, 96, 96);
+
+    function flushParagraph() {
+      if (!paragraph.length) return;
+      html.push("<p>" + renderInline(paragraph.join(" ")) + "</p>");
+      paragraph = [];
+    }
+
+    function flushList() {
+      if (!listItems.length) return;
+      var tag = orderedList ? "ol" : "ul";
+      html.push("<" + tag + ">" + listItems.map(function(item) {
+        return "<li>" + renderInline(item) + "</li>";
+      }).join("") + "</" + tag + ">");
+      listItems = [];
+    }
+
+    for (var i = 0; i < lines.length; i += 1) {
+      var raw = lines[i];
+      var trimmed = raw.trim();
+      if (!trimmed) {
+        flushParagraph();
+        flushList();
+        continue;
+      }
+
+      if (trimmed.indexOf(fence) === 0) {
+        flushParagraph();
+        flushList();
+        var lang = trimmed.slice(3).trim();
+        var code = [];
+        i += 1;
+        while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) {
+          code.push(lines[i]);
+          i += 1;
+        }
+        html.push("<pre><code>" + escapeHtml(code.join("\\n")) + "</code></pre>");
+        continue;
+      }
+
+      if ((trimmed === "$$" || trimmed.indexOf("$$") === 0) && trimmed.lastIndexOf("$$") !== 0) {
+        flushParagraph();
+        flushList();
+        html.push('<div class="math-display">' + escapeHtml(trimmed.replace(/^\\$\\$|\\$\\$$/g, "").trim()) + "</div>");
+        continue;
+      }
+
+      if (trimmed === "$$" || trimmed === "\\\\[") {
+        flushParagraph();
+        flushList();
+        var close = trimmed === "$$" ? "$$" : "\\\\]";
+        var formula = [];
+        i += 1;
+        while (i < lines.length && lines[i].trim() !== close) {
+          formula.push(lines[i]);
+          i += 1;
+        }
+        html.push('<div class="math-display">' + escapeHtml(formula.join("\\n").trim()) + "</div>");
+        continue;
+      }
+
+      if (i + 1 < lines.length && trimmed.indexOf("|") !== -1 && isTableSeparator(lines[i + 1])) {
+        flushParagraph();
+        flushList();
+        var table = renderTable(lines, i);
+        html.push(table.html);
+        i = table.next - 1;
+        continue;
+      }
+
+      var heading = trimmed.match(/^(#{1,6})\\s+(.+)$/);
+      if (heading) {
+        flushParagraph();
+        flushList();
+        var level = heading[1].length;
+        html.push("<h" + level + ">" + renderInline(heading[2]) + "</h" + level + ">");
+        continue;
+      }
+
+      if (/^(-{3,}|\\*{3,}|_{3,})$/.test(trimmed)) {
+        flushParagraph();
+        flushList();
+        html.push("<hr>");
+        continue;
+      }
+
+      if (/^>\\s?/.test(trimmed)) {
+        flushParagraph();
+        flushList();
+        var quoteLines = [trimmed.replace(/^>\\s?/, "")];
+        while (i + 1 < lines.length && /^>\\s?/.test(lines[i + 1].trim())) {
+          i += 1;
+          quoteLines.push(lines[i].trim().replace(/^>\\s?/, ""));
+        }
+        html.push("<blockquote>" + renderInline(quoteLines.join("\\n")) + "</blockquote>");
+        continue;
+      }
+
+      var ordered = trimmed.match(/^\\d+[.)]\\s+(.+)$/);
+      var unordered = trimmed.match(/^[-*+]\\s+(.+)$/);
+      if (ordered || unordered) {
+        flushParagraph();
+        var nextOrdered = !!ordered;
+        if (listItems.length && orderedList !== nextOrdered) flushList();
+        orderedList = nextOrdered;
+        listItems.push((ordered ? ordered[1] : unordered && unordered[1]) || "");
+        continue;
+      }
+
+      paragraph.push(trimmed);
+    }
+
+    flushParagraph();
+    flushList();
+    return html.join("\\n");
+  }
+
+  function postHeight() {
+    var height = Math.max(
+      app ? app.scrollHeight : 0,
+      document.body.scrollHeight,
+      document.documentElement.scrollHeight
+    );
+    post({ type: "height", height: height });
+  }
+
+  try {
+    app.innerHTML = renderMarkdown(markdown);
+  } catch (error) {
+    app.textContent = markdown;
+  }
+  document.addEventListener("click", function(event) {
+    var target = event.target;
+    while (target && target !== document && target.tagName !== "A") {
+      target = target.parentNode;
+    }
+    if (!target || target === document) return;
+    event.preventDefault();
+    post({ type: "link", href: target.href });
+  });
+  requestAnimationFrame(postHeight);
+  setTimeout(postHeight, 60);
+})();
+</script>
+</body>
+</html>`;
 }
 
 export const MarkdownRenderer = React.memo(function MarkdownRenderer({
@@ -677,166 +416,110 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   color = colors.textPrimary,
   isStreaming = false,
 }: MarkdownRendererProps) {
-  // 预处理：结构化 tutor 响应 + 教学语义行
-  const normalized = preprocessTeachingLines(
-    normalizeStructuredTutorResponse(content),
+  const normalized = useMemo(() => normalizeContent(content), [content]);
+  const initialHeight = useMemo(() => estimateHeight(normalized), [normalized]);
+  const [height, setHeight] = useState(initialHeight);
+  const [contentScrollEnabled, setContentScrollEnabled] = useState(
+    initialHeight >= MAX_HEIGHT,
   );
+  const [webViewFailed, setWebViewFailed] = useState(false);
 
-  // 解析为 Block 数组（useMemo 稳定引用）
-  const blocks = useMemo(
-    () => parseMarkdown(normalized, isStreaming),
-    [normalized, isStreaming],
+  useEffect(() => {
+    setHeight(initialHeight);
+    setContentScrollEnabled(initialHeight >= MAX_HEIGHT);
+    setWebViewFailed(false);
+  }, [initialHeight, normalized]);
+
+  const html = useMemo(
+    () => buildMarkdownHtml(normalized, color),
+    [color, normalized],
   );
+  const source = useMemo(() => ({ html }), [html]);
 
-  if (!normalized || blocks.length === 0) return null;
-  const renderMath = !isStreaming;
+  const handleMessage = useCallback((event: WebViewMessageEvent) => {
+    try {
+      const payload = JSON.parse(event.nativeEvent.data) as {
+        type?: string;
+        height?: number;
+        href?: string;
+      };
+      if (payload.type === "height" && typeof payload.height === "number") {
+        const measuredHeight = payload.height;
+        setContentScrollEnabled(measuredHeight > MAX_HEIGHT);
+        setHeight((current) => {
+          const next = clampHeight(measuredHeight + 4);
+          return Math.abs(next - current) > 2 ? next : current;
+        });
+      } else if (payload.type === "link" && typeof payload.href === "string") {
+        Linking.openURL(payload.href).catch(() => {});
+      }
+    } catch {
+      // Ignore unrelated WebView messages.
+    }
+  }, []);
+
+  if (!normalized) return null;
+
+  if (isStreaming || webViewFailed) {
+    return (
+      <View style={styles.textFallback}>
+        <Text style={[styles.fallbackText, { color } as StyleProp<TextStyle>]}>
+          {normalized}
+        </Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.root}>
-      {blocks.map((block, i) => (
-        <BlockRenderer
-          key={i}
-          block={block}
-          index={i}
-          color={color}
-          renderMath={renderMath}
+    <RenderDebugBoundary
+      name="MarkdownWebView"
+      meta={{ chars: normalized.length }}
+      fallback={
+        <View style={styles.textFallback}>
+          <Text style={[styles.fallbackText, { color }]}>{normalized}</Text>
+        </View>
+      }
+    >
+      <View style={[styles.webViewFrame, { height } as StyleProp<ViewStyle>]}>
+        <WebView
+          source={source}
+          style={styles.webView}
+          containerStyle={styles.webViewContainer}
+          originWhitelist={["*"]}
+          javaScriptEnabled
+          domStorageEnabled={false}
+          scrollEnabled={contentScrollEnabled}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          setSupportMultipleWindows={false}
+          onMessage={handleMessage}
+          onError={() => setWebViewFailed(true)}
         />
-      ))}
-    </View>
+      </View>
+    </RenderDebugBoundary>
   );
 });
 
-// ── 样式 ──
 const styles = StyleSheet.create({
-  root: {
+  webViewFrame: {
     width: "100%",
-  },
-  heading: {
-    marginTop: 10,
-    marginBottom: 6,
-  },
-  paragraph: {
-    marginVertical: 3,
-  },
-  inlineFlow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    width: "100%",
-    rowGap: 2,
-  },
-  inlineText: {
-    fontSize: BASE_FONT_SIZE,
-    lineHeight: BASE_LINE_HEIGHT,
-    color: colors.textPrimary,
-  },
-  paragraphText: {
-    fontSize: BASE_FONT_SIZE,
-    lineHeight: BASE_LINE_HEIGHT,
-  },
-  inlineCode: {
-    backgroundColor: colors.bgInput,
-    color: colors.error,
-    fontFamily: "monospace",
-    fontSize: SMALL_FONT_SIZE,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
-  },
-  link: {
-    color: colors.primary,
-    textDecorationLine: "underline",
-    fontSize: BASE_FONT_SIZE,
-    lineHeight: BASE_LINE_HEIGHT,
-  },
-  blockquote: {
-    backgroundColor: colors.quoteBg,
-    borderLeftColor: colors.quoteBorder,
-    borderLeftWidth: 3,
-    paddingLeft: 12,
-    paddingVertical: 4,
-    marginVertical: 6,
-    borderRadius: 4,
-  },
-  teaching: {
-    borderLeftWidth: 3,
-    paddingLeft: 12,
-    paddingVertical: 6,
-    marginVertical: 6,
-    borderRadius: 4,
-  },
-  teachingTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    marginBottom: 2,
-  },
-  listItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    marginVertical: 3,
-  },
-  listMarker: {
-    width: 20,
-    color: colors.textSecondary,
-    fontSize: BASE_FONT_SIZE,
-    lineHeight: BASE_LINE_HEIGHT,
-  },
-  listContent: {
-    flex: 1,
-    minWidth: 0,
-  },
-  hr: {
-    backgroundColor: colors.divider,
-    height: 1,
-    marginVertical: 10,
-  },
-  latexBlock: {
-    marginTop: 8,
-    marginBottom: 6,
-    maxWidth: "100%",
-  },
-  latexBlockInner: {
-    color: colors.textPrimary,
-  },
-  latexBlockContent: {
-    minHeight: 34,
-    alignItems: "center",
-    paddingVertical: 4,
-    paddingRight: 8,
-  },
-  streamingFormulaContent: {
-    paddingVertical: 4,
-    paddingRight: 8,
-  },
-  streamingFormulaText: {
-    fontFamily: "monospace",
-  },
-  inlineMathScroll: {
-    maxWidth: "100%",
-    marginHorizontal: 1,
-  },
-  inlineMathContent: {
-    minHeight: BASE_LINE_HEIGHT,
-    alignItems: "center",
-    paddingHorizontal: 1,
-  },
-  latexInline: {
-    color: colors.textPrimary,
-    fontSize: MATH_FONT_SIZE,
-  },
-  table: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 6,
-    marginVertical: 6,
+    minHeight: MIN_HEIGHT,
     overflow: "hidden",
+    backgroundColor: "transparent",
   },
-  tableRow: {
-    flexDirection: "row",
+  webViewContainer: {
+    backgroundColor: "transparent",
   },
-  tableCell: {
+  webView: {
     flex: 1,
-    padding: 8,
+    backgroundColor: "transparent",
+  },
+  textFallback: {
+    width: "100%",
+  },
+  fallbackText: {
+    fontSize: BODY_FONT_SIZE,
+    lineHeight: BODY_LINE_HEIGHT,
   },
 });
 

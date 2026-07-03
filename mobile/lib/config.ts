@@ -1,102 +1,156 @@
-// Gateway 配置
-// 开发时自动从 Expo dev server 获取电脑局域网 IP，无需手动修改
-// 如果自动检测失败，可手动设置下面的 DEV_SERVER_HOST
-
-import Constants from "expo-constants";
-import { Platform, NativeModules } from "react-native";
+// Gateway / Web BFF 配置
+// 开发时优先使用 .env 显式覆盖；未配置时从 Expo dev server 自动推导电脑局域网 IP。
+// 运行时可通过 "我的" → "Gateway 设置" 修改地址，无需重新 build。
 import modelConfig from "../config/models.json";
+import Constants from "expo-constants";
+import { NativeModules } from "react-native";
+import {
+  getGatewayHost,
+  getGatewayPort,
+  getWebPort,
+  getGatewayUrl,
+  getWebUrl,
+  onGatewayConfigChange,
+} from "./runtime-gateway-config";
 
 // ============================================================
-// 手动覆盖：如果自动检测不准，填入电脑 IP（去掉 undefined 改成实际 IP）
-// 在 cmd 中运行 ipconfig 查看 "IPv4 地址"
+// 开发环境配置
 // ============================================================
 const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "");
 
-const DEV_SERVER_HOST: string | undefined =
-  process.env.EXPO_PUBLIC_DEV_SERVER_HOST?.trim() || undefined; // 自动检测，如需手动设置填入电脑 IP
+type ExpoHostConstants = {
+  expoConfig?: { hostUri?: string };
+  expoGoConfig?: { hostUri?: string };
+  manifest?: { debuggerHost?: string };
+  manifest2?: { extra?: { expoGoConfig?: { hostUri?: string } } };
+};
 
-/** 判断是否为有效的局域网 IP（非隧道、非 localhost） */
-function isValidLanIp(ip: string): boolean {
-  if (!ip || ip === "localhost" || ip === "127.0.0.1") return false;
-  // 过滤 Expo 隧道地址
-  if (ip.includes(".exp.direct")) return false;
-  // 过滤 localtunnel / ngrok 等
-  if (ip.includes(".loca.lt") || ip.includes(".ngrok")) return false;
-  // 必须是 IPv4 格式或 .local 主机名
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) return true;
-  if (ip.endsWith(".local")) return true;
-  return false;
+function hostFromUri(uri: unknown): string | null {
+  if (typeof uri !== "string" || !uri.trim()) return null;
+  const withoutScheme = uri.trim().replace(/^[a-z][a-z\d+.-]*:\/\//i, "");
+  const authority = withoutScheme.split(/[/?#]/)[0] || "";
+  if (!authority) return null;
+  if (authority.startsWith("[")) {
+    const end = authority.indexOf("]");
+    return end > 1 ? authority.slice(1, end) : null;
+  }
+  return authority.split(":")[0] || null;
 }
 
-function getDevHostIp(): string {
-  // 1. 手动覆盖优先
-  if (DEV_SERVER_HOST) {
-    console.log("[config] 使用手动配置 IP:", DEV_SERVER_HOST);
-    return DEV_SERVER_HOST;
-  }
+function isLanLikeHost(host: string | null): host is string {
+  if (!host) return false;
+  const value = host.trim().toLowerCase();
+  if (!value || value === "localhost" || value === "0.0.0.0") return false;
+  if (value === "127.0.0.1" || value === "::1") return false;
+  if (value.includes(".exp.direct")) return false;
+  if (value.includes(".loca.lt") || value.includes(".ngrok")) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return true;
+  return value.endsWith(".local");
+}
 
-  // 2. 从 expo-constants 自动检测（Expo Go / dev client）
+function detectExpoDevHost(): string | null {
+  const constants = Constants as unknown as ExpoHostConstants;
+  const candidates: unknown[] = [
+    constants.expoConfig?.hostUri,
+    constants.expoGoConfig?.hostUri,
+    constants.manifest?.debuggerHost,
+    constants.manifest2?.extra?.expoGoConfig?.hostUri,
+  ];
+
   try {
-    const candidates = [
-      (Constants as any).expoConfig?.hostUri,
-      (Constants as any).expoGoConfig?.hostUri,
-      (Constants as any).manifest?.debuggerHost,
-      (Constants as any).manifest2?.extra?.expoGoConfig?.hostUri,
-    ];
-
-    for (const hostUri of candidates) {
-      if (hostUri && typeof hostUri === "string") {
-        const ip = hostUri.split(":")[0];
-        if (isValidLanIp(ip)) {
-          console.log("[config] 自动检测到电脑 IP:", ip);
-          return ip;
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("[config] expo-constants 检测失败:", e);
-  }
-
-  // 3. 从 native module 的 scriptURL 提取（Metro bundler 地址）
-  try {
-    const scriptURL = NativeModules.SourceCode?.scriptURL;
-    if (scriptURL && typeof scriptURL === "string") {
-      const match = scriptURL.match(/^https?:\/\/([^:/]+)/);
-      if (match && isValidLanIp(match[1])) {
-        console.log("[config] 从 scriptURL 检测到电脑 IP:", match[1]);
-        return match[1];
-      }
-    }
+    candidates.push(NativeModules.SourceCode?.scriptURL);
   } catch {
-    // ignore
+    // Ignore missing native module in non-native environments.
   }
 
-  console.warn("[config] 无法自动检测电脑 IP，请手动设置 DEV_SERVER_HOST");
-  return "localhost";
+  for (const candidate of candidates) {
+    const host = hostFromUri(candidate);
+    if (isLanLikeHost(host)) return host;
+  }
+  return null;
 }
 
-const LOCAL_IP = getDevHostIp();
-export const GATEWAY_PORT = process.env.EXPO_PUBLIC_GATEWAY_PORT?.trim() || "8082"; // Gateway 端口（避免与 Expo Metro 8081 冲突）
+// 电脑局域网 IP（.env 中 EXPO_PUBLIC_DEV_SERVER_HOST 优先；USB reverse 可显式设为 127.0.0.1）
+// 运行时可通过 getGatewayHost() 获取用户修改后的值
+export let DEV_SERVER_HOST: string =
+  process.env.EXPO_PUBLIC_DEV_SERVER_HOST?.trim() ||
+  detectExpoDevHost() ||
+  "127.0.0.1";
 
-// Tunnel 模式下，Gateway 也需要通过隧道暴露
-// 启动方式: npx localtunnel --port 8082
-// 把生成的 URL 填到下面（每次重启会变）
-// 同一 WiFi 下设为 undefined，直接用局域网 IP 连接
-// 把 localtunnel 生成的 URL 填到这里（每次重启 tunnel 会变）
-// 启动命令: npx localtunnel --port 8082
-const GATEWAY_TUNNEL_URL: string | undefined =
-  process.env.EXPO_PUBLIC_GATEWAY_URL?.trim() || undefined; // 改成 'https://xxx.loca.lt'
+export let GATEWAY_PORT =
+  process.env.EXPO_PUBLIC_GATEWAY_PORT?.trim() || "8083";
 
-export const GATEWAY_URL = __DEV__
-  ? (GATEWAY_TUNNEL_URL ? normalizeUrl(GATEWAY_TUNNEL_URL) : `http://${LOCAL_IP}:${GATEWAY_PORT}`)
-  : "https://api.anotherme.com";
+// Web 端口（Next.js dev server）
+let WEB_PORT = process.env.EXPO_PUBLIC_WEB_PORT?.trim() || "3000";
 
-// localtunnel 需要 bypass header 才能直接返回 API 响应（否则显示警告页面）
-export const TUNNEL_HEADERS: Record<string, string> = GATEWAY_TUNNEL_URL
-  ? { "bypass-tunnel-reminder": "true" }
-  : {};
+// ============================================================
+// 覆盖 URL（local tunnel / ngrok / 自定义域名）
+// 设置了覆盖 URL 则直接使用，忽略 DEV_SERVER_HOST
+// ============================================================
+
+const GATEWAY_URL_FROM_ENV = process.env.EXPO_PUBLIC_GATEWAY_URL?.trim();
+const GATEWAY_OVERRIDE_URL_FROM_ENV =
+  process.env.EXPO_PUBLIC_GATEWAY_OVERRIDE_URL?.trim();
+const GATEWAY_OVERRIDE_URL: string | undefined =
+  GATEWAY_URL_FROM_ENV || GATEWAY_OVERRIDE_URL_FROM_ENV || undefined;
+
+export let GATEWAY_URL = GATEWAY_OVERRIDE_URL
+  ? normalizeUrl(GATEWAY_OVERRIDE_URL)
+  : `http://${DEV_SERVER_HOST}:${GATEWAY_PORT}`;
+
+// localtunnel 需要 bypass header 才能直接返回 API 响应
+export let TUNNEL_HEADERS: Record<string, string> =
+  GATEWAY_OVERRIDE_URL &&
+  (GATEWAY_OVERRIDE_URL.includes(".loca.lt") ||
+    GATEWAY_OVERRIDE_URL.includes(".ngrok"))
+    ? { "bypass-tunnel-reminder": "true" }
+    : {};
 
 console.log("[config] GATEWAY_URL:", GATEWAY_URL);
+
+const WEB_URL_FROM_ENV = process.env.EXPO_PUBLIC_WEB_URL?.trim();
+const WEB_OVERRIDE_URL_FROM_ENV =
+  process.env.EXPO_PUBLIC_WEB_OVERRIDE_URL?.trim();
+const WEB_OVERRIDE_URL: string | undefined =
+  WEB_URL_FROM_ENV || WEB_OVERRIDE_URL_FROM_ENV || undefined;
+
+export let WEB_URL = WEB_OVERRIDE_URL
+  ? normalizeUrl(WEB_OVERRIDE_URL)
+  : `http://${DEV_SERVER_HOST}:${WEB_PORT}`;
+
+export let WEB_TUNNEL_HEADERS: Record<string, string> =
+  WEB_OVERRIDE_URL &&
+  (WEB_OVERRIDE_URL.includes(".loca.lt") || WEB_OVERRIDE_URL.includes(".ngrok"))
+    ? { "bypass-tunnel-reminder": "true" }
+    : {};
+
+console.log("[config] WEB_URL:", WEB_URL);
+
+// ============================================================
+// 运行时配置同步 —— 将 runtime-gateway-config 持久化值
+// 同步到本模块的 live bindings（ESM import 会实时反映变更）
+// ============================================================
+
+let _runtimeSynced = false;
+
+/** 将运行时配置同步到所有 export let 变量 */
+export function syncRuntimeConfig(): void {
+  DEV_SERVER_HOST = getGatewayHost();
+  GATEWAY_PORT = getGatewayPort();
+  WEB_PORT = getWebPort();
+  GATEWAY_URL = getGatewayUrl();
+  WEB_URL = getWebUrl();
+  _runtimeSynced = true;
+}
+
+/** 确保运行时配置已加载并同步 */
+export function ensureRuntimeConfigSynced(): boolean {
+  return _runtimeSynced;
+}
+
+// ============================================================
+// 连接测试
+// ============================================================
 
 /** 测试 Gateway 连接，返回是否可达 */
 export async function testGatewayConnection(): Promise<{
@@ -120,21 +174,6 @@ export async function testGatewayConnection(): Promise<{
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   }
 }
-
-// Web 端地址（WebView 加载 / BFF 代理）
-const WEB_PORT = process.env.EXPO_PUBLIC_WEB_PORT?.trim() || "3000"; // Next.js dev server 端口
-const WEB_OVERRIDE_URL: string | undefined = process.env.EXPO_PUBLIC_WEB_URL?.trim() || undefined;
-export const WEB_URL = __DEV__
-  ? (WEB_OVERRIDE_URL ? normalizeUrl(WEB_OVERRIDE_URL) : `http://${LOCAL_IP}:${WEB_PORT}`)
-  : "https://app.anotherme.com";
-
-// localtunnel 需要 bypass header 才能直接返回 API 响应（否则显示警告页面）
-export const WEB_TUNNEL_HEADERS: Record<string, string> =
-  WEB_OVERRIDE_URL && (WEB_OVERRIDE_URL.includes(".loca.lt") || WEB_OVERRIDE_URL.includes(".ngrok"))
-    ? { "bypass-tunnel-reminder": "true" }
-    : {};
-
-console.log("[config] WEB_URL:", WEB_URL);
 
 /** 测试 Web/BFF 连接，区分 Web 不可达和 Gateway 不可达 */
 export async function testWebBffConnection(): Promise<{
@@ -169,6 +208,10 @@ export async function testWebBffConnection(): Promise<{
     };
   }
 }
+
+// ============================================================
+// 认证 / 用户
+// ============================================================
 
 // 静态 Bearer Token（用于技术验证阶段）
 // 后续接入 Supabase Auth 后会替换为 JWT
@@ -208,6 +251,8 @@ export const CAPABILITY_IDS = {
   math_animator: "math_animator",
   /** 数据可视化 */
   visualize: "visualize",
+  /** 网关内部拍题快答路由 */
+  visual_solve_fast: "visual_solve_fast",
   /** 协作写作 */
   co_writer: "co_writer",
   /** 题目练习 */
@@ -218,9 +263,19 @@ export const CAPABILITY_IDS = {
 
 export type CapabilityId = (typeof CAPABILITY_IDS)[keyof typeof CAPABILITY_IDS];
 
+const LIVE_ANSWER_STEP_CAPABILITIES = new Set<string>([
+  CAPABILITY_IDS.deep_solve,
+]);
+
 /** 把 capability 归一化到 Gateway 注册 id，空值默认 chat */
 export function normalizeCapability(raw: string | null | undefined): string {
   return raw || CAPABILITY_IDS.ai_tutor_chat;
+}
+
+export function supportsLiveAnswerSteps(
+  capability: string | null | undefined,
+): boolean {
+  return LIVE_ANSWER_STEP_CAPABILITIES.has(normalizeCapability(capability));
 }
 
 // ============================================================
@@ -232,10 +287,67 @@ export interface ModelDef {
   label: string;
   provider: string;
   description: string;
+  supportsVision: boolean;
+  supportsTools: boolean;
+  maxInputTokens: number;
+  defaultFor?: string[];
 }
 
-export const AVAILABLE_MODELS: ModelDef[] = modelConfig.availableModels;
+type ModelCatalog = {
+  defaultModel: string;
+  capabilityDefaults?: Record<string, string>;
+  models: ModelDef[];
+};
+
+const typedModelConfig = modelConfig as ModelCatalog;
+
+export const AVAILABLE_MODELS: ModelDef[] = typedModelConfig.models;
 export const DEFAULT_MODEL = modelConfig.defaultModel;
+export const CAPABILITY_DEFAULT_MODELS =
+  typedModelConfig.capabilityDefaults || {};
+
+export function getDefaultModelForCapability(
+  capability?: string | null,
+): string {
+  if (!capability) return DEFAULT_MODEL;
+  return CAPABILITY_DEFAULT_MODELS[capability] || DEFAULT_MODEL;
+}
+
+export function getMaxOutputTokensForCapability(
+  capability?: string | null,
+): number {
+  switch (normalizeCapability(capability)) {
+    case CAPABILITY_IDS.deep_solve:
+    case CAPABILITY_IDS.visual_solve_fast:
+    case CAPABILITY_IDS.deep_question:
+    case CAPABILITY_IDS.deep_research:
+      return 4096;
+    case CAPABILITY_IDS.math_animator:
+    case CAPABILITY_IDS.visualize:
+      return 3072;
+    default:
+      return 4096;
+  }
+}
+
+export function getModelDefinition(modelId?: string | null): ModelDef | null {
+  if (!modelId) return null;
+  return AVAILABLE_MODELS.find((item) => item.id === modelId) || null;
+}
+
+export function modelSupportsVision(modelId?: string | null): boolean {
+  const model = getModelDefinition(modelId);
+  return Boolean(model?.supportsVision);
+}
+
+export function getDefaultVisionModel(capability?: string | null): string {
+  const capabilityModel = getDefaultModelForCapability(capability);
+  if (modelSupportsVision(capabilityModel)) return capabilityModel;
+  if (modelSupportsVision(DEFAULT_MODEL)) return DEFAULT_MODEL;
+  return (
+    AVAILABLE_MODELS.find((item) => item.supportsVision)?.id || DEFAULT_MODEL
+  );
+}
 
 // ============================================================
 // AI 对话能力定义（与网页端 features/ai-tutor 对齐）
@@ -250,6 +362,7 @@ export interface CapabilityDef {
 
 // capability id 必须与 Gateway 的 capabilityHandlers 一致
 // Gateway 实际接受: chat, deep_solve, deep_question, deep_research, math_animator, visualize
+// 以及内部路由 visual_solve_fast
 export const CHAT_CAPABILITIES: CapabilityDef[] = [
   {
     id: "auto",

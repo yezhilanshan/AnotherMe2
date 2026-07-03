@@ -418,6 +418,7 @@ class BaseAgent(ABC):
 
         # Keep non-streaming calls aligned with stream_llm/chat: when images
         # are attached, convert the final user message to multimodal content.
+        _images_stripped = False
         if attachments:
             if not messages:
                 messages = [
@@ -428,7 +429,8 @@ class BaseAgent(ABC):
                 messages, attachments, binding=self.binding, model=model
             )
             messages = mm_result.messages
-            if mm_result.images_stripped:
+            _images_stripped = mm_result.images_stripped
+            if _images_stripped:
                 self.logger.info(
                     "Images stripped for %s/%s – model does not support vision",
                     self.binding,
@@ -518,6 +520,11 @@ class BaseAgent(ABC):
         if verbose:
             self.logger.debug(f"LLM response: model={model}, duration={call_duration:.2f}s")
 
+        # Prepend warning when images were stripped due to missing vision support
+        if _images_stripped and response:
+            _img_count = sum(1 for a in (attachments or []) if getattr(a, "type", "") == "image")
+            response = f"> ⚠️ 当前模型不支持图片理解，已忽略 {_img_count} 张图片。\n\n{response}"
+
         return response
 
     async def stream_llm(
@@ -532,6 +539,7 @@ class BaseAgent(ABC):
         stage: str | None = None,
         attachments: list[Any] | None = None,
         trace_meta: dict[str, Any] | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Unified interface for streaming LLM responses.
@@ -579,8 +587,11 @@ class BaseAgent(ABC):
                 kwargs["response_format"] = response_format
             else:
                 self.logger.debug(f"response_format not supported for {binding}/{model}, skipping")
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         # Inject image attachments into messages when provided
+        _images_stripped = False
         if attachments:
             if not messages:
                 messages = [
@@ -591,7 +602,8 @@ class BaseAgent(ABC):
                 messages, attachments, binding=self.binding, model=model
             )
             messages = mm_result.messages
-            if mm_result.images_stripped:
+            _images_stripped = mm_result.images_stripped
+            if _images_stripped:
                 self.logger.info(
                     "Images stripped for %s/%s – model does not support vision",
                     self.binding,
@@ -624,6 +636,13 @@ class BaseAgent(ABC):
         # Track start time
         start_time = time.time()
         full_response = ""
+
+        # Warn user when images were stripped due to missing vision support
+        if _images_stripped:
+            _img_count = sum(1 for a in (attachments or []) if getattr(a, "type", "") == "image")
+            _warning = f"> ⚠️ 当前模型不支持图片理解，已忽略 {_img_count} 张图片。\n\n"
+            full_response += _warning
+            yield _warning
 
         try:
             # Stream via factory (routes to cloud or local provider)

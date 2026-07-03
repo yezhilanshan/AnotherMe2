@@ -28,6 +28,14 @@ class Attachment:
     # Populated by ``extract_documents_from_records`` so the frontend can
     # show "what the LLM saw" when previewing office files.
     extracted_text: str = ""
+    # Error message if the attachment failed to hydrate from storage.
+    # Populated by ``_hydrate_attachment_refs`` in the gateway.
+    _hydration_error: str = ""
+    # Storage reference fields — preserved from gateway for downstream use.
+    sha256: str = ""
+    object_key: str = ""
+    size: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

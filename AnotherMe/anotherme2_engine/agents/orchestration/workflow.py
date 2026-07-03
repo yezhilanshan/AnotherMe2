@@ -81,6 +81,7 @@ def _model_supports_vision(model_name: str) -> bool:
         "vl",
         "vision",
         "omni",
+        "ocr",
         "qwen3.7-plus",
         "qwen3.7-max",
         "qwen3.6-plus",

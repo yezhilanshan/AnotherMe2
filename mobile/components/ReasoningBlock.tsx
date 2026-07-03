@@ -5,8 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  Animated,
-  Easing,
 } from 'react-native';
 import Reanimated, { Layout } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,12 +15,7 @@ interface ReasoningBlockProps {
   isStreaming?: boolean;
 }
 
-// ── 动画配置 ──
-const DOT_WAVE_DURATION = 500;
-const DOT_STAGGER = 160;
-const ICON_PULSE_DURATION = 1800;
-const CURSOR_BLINK_DURATION = 1000;
-const ACCENT_PULSE_DURATION = 2200;
+const STREAM_REASONING_VISIBLE_CHARS = 240;
 
 /**
  * 思考过程展示组件（重新设计）
@@ -43,19 +36,7 @@ export const ReasoningBlock = React.memo(function ReasoningBlock({
   const [expanded, setExpanded] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // 核心 Animated 值
-  const dot1Opacity = useRef(new Animated.Value(0.25)).current;
-  const dot1Y = useRef(new Animated.Value(0)).current;
-  const dot2Opacity = useRef(new Animated.Value(0.25)).current;
-  const dot2Y = useRef(new Animated.Value(0)).current;
-  const dot3Opacity = useRef(new Animated.Value(0.25)).current;
-  const dot3Y = useRef(new Animated.Value(0)).current;
-  const iconScale = useRef(new Animated.Value(1)).current;
-  const cursorOpacity = useRef(new Animated.Value(1)).current;
-  const accentGlow = useRef(new Animated.Value(0.45)).current;
 
   // ── 计时 & 状态切换 ──
   useEffect(() => {
@@ -93,136 +74,6 @@ export const ReasoningBlock = React.memo(function ReasoningBlock({
     };
   }, [isStreaming]);
 
-  // ── 流式自动滚动 ──
-  useEffect(() => {
-    if (isStreaming) {
-      requestAnimationFrame(() =>
-        scrollRef.current?.scrollToEnd({ animated: true }),
-      );
-    }
-  }, [reasoning, isStreaming]);
-
-  // ── 三点波浪动画（opacity + translateY，交错启动） ──
-  useEffect(() => {
-    if (!isStreaming) return;
-
-    const wave = (
-      opacityVal: Animated.Value,
-      yVal: Animated.Value,
-      delay: number,
-    ) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.parallel([
-            Animated.timing(opacityVal, {
-              toValue: 1,
-              duration: DOT_WAVE_DURATION,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(yVal, {
-              toValue: -5,
-              duration: DOT_WAVE_DURATION / 2,
-              easing: Easing.out(Easing.ease),
-              useNativeDriver: true,
-            }),
-          ]),
-          Animated.parallel([
-            Animated.timing(opacityVal, {
-              toValue: 0.25,
-              duration: DOT_WAVE_DURATION,
-              easing: Easing.inOut(Easing.ease),
-              useNativeDriver: true,
-            }),
-            Animated.timing(yVal, {
-              toValue: 0,
-              duration: DOT_WAVE_DURATION / 2,
-              easing: Easing.in(Easing.ease),
-              useNativeDriver: true,
-            }),
-          ]),
-        ]),
-      );
-
-    const animations = [
-      wave(dot1Opacity, dot1Y, 0),
-      wave(dot2Opacity, dot2Y, DOT_STAGGER),
-      wave(dot3Opacity, dot3Y, DOT_STAGGER * 2),
-    ];
-    animations.forEach((a) => a.start());
-    return () => animations.forEach((a) => a.stop());
-  }, [isStreaming]);
-
-  // ── 图标呼吸脉冲 ──
-  useEffect(() => {
-    if (!isStreaming) return;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(iconScale, {
-          toValue: 1.25,
-          duration: ICON_PULSE_DURATION / 2,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(iconScale, {
-          toValue: 1,
-          duration: ICON_PULSE_DURATION / 2,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [isStreaming]);
-
-  // ── 光标正弦闪烁 ──
-  useEffect(() => {
-    if (!isStreaming) return;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(cursorOpacity, {
-          toValue: 0.08,
-          duration: CURSOR_BLINK_DURATION / 2,
-          easing: Easing.sin,
-          useNativeDriver: true,
-        }),
-        Animated.timing(cursorOpacity, {
-          toValue: 1,
-          duration: CURSOR_BLINK_DURATION / 2,
-          easing: Easing.sin,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [isStreaming]);
-
-  // ── 左侧竖条呼吸光效 ──
-  useEffect(() => {
-    if (!isStreaming) return;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(accentGlow, {
-          toValue: 1,
-          duration: ACCENT_PULSE_DURATION / 2,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(accentGlow, {
-          toValue: 0.45,
-          duration: ACCENT_PULSE_DURATION / 2,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [isStreaming]);
-
   // ── 格式化耗时 ──
   const durationText = useMemo(() => {
     if (elapsed < 60) return `${elapsed}秒`;
@@ -234,6 +85,10 @@ export const ReasoningBlock = React.memo(function ReasoningBlock({
   if (!reasoning && !isStreaming) return null;
 
   const hasContent = reasoning.length > 0;
+  const visibleReasoning =
+    isStreaming && reasoning.length > STREAM_REASONING_VISIBLE_CHARS
+      ? `…${reasoning.slice(-STREAM_REASONING_VISIBLE_CHARS)}`
+      : reasoning;
 
   // ══════════════════════════════════════════════
   //  流式中：展开的思考面板
@@ -242,44 +97,22 @@ export const ReasoningBlock = React.memo(function ReasoningBlock({
     return (
       <View style={styles.container}>
         {/* 左侧呼吸光条 */}
-        <Animated.View
-          style={[
-            styles.accentBar,
-            { opacity: accentGlow },
-          ]}
-        />
+        <View style={[styles.accentBar, { opacity: 0.45 }]} />
 
         <View style={styles.main}>
           {/* ── 头部 ── */}
           <View style={styles.header}>
-            <Animated.View style={{ transform: [{ scale: iconScale }] }}>
-              <View style={styles.iconCircle}>
-                <Ionicons name="sparkles" size={12} color={colors.warning} />
-              </View>
-            </Animated.View>
+            <View style={styles.iconCircle}>
+              <Ionicons name="sparkles" size={12} color={colors.warning} />
+            </View>
 
             <Text style={styles.headerTitle}>思考中</Text>
 
             {/* 三点波浪 */}
             <View style={styles.dotsRow}>
-              <Animated.View
-                style={[
-                  styles.dot,
-                  { opacity: dot1Opacity, transform: [{ translateY: dot1Y }] },
-                ]}
-              />
-              <Animated.View
-                style={[
-                  styles.dot,
-                  { opacity: dot2Opacity, transform: [{ translateY: dot2Y }] },
-                ]}
-              />
-              <Animated.View
-                style={[
-                  styles.dot,
-                  { opacity: dot3Opacity, transform: [{ translateY: dot3Y }] },
-                ]}
-              />
+              <View style={styles.dot} />
+              <View style={[styles.dot, { opacity: 0.65 }]} />
+              <View style={[styles.dot, { opacity: 0.35 }]} />
             </View>
 
             {/* 实时计时器 */}
@@ -291,21 +124,12 @@ export const ReasoningBlock = React.memo(function ReasoningBlock({
 
           {/* ── 思考内容 ── */}
           {hasContent && (
-            <ScrollView
-              ref={scrollRef}
-              style={styles.streamBody}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-            >
-              <Text style={styles.streamText} selectable>
-                {reasoning}
+            <View style={styles.streamBody}>
+              <Text style={styles.streamText}>
+                {visibleReasoning}
               </Text>
-              <Animated.Text
-                style={[styles.streamCursor, { opacity: cursorOpacity }]}
-              >
-                ▎
-              </Animated.Text>
-            </ScrollView>
+              <Text style={styles.streamCursor}>▎</Text>
+            </View>
           )}
         </View>
       </View>

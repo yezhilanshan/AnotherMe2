@@ -1075,6 +1075,9 @@ def _strip_runtime_keys(config_overrides: dict[str, Any] | None) -> dict[str, An
         return {}
     cleaned = dict(config_overrides)
     cleaned.pop("answer_now_context", None)
+    cleaned.pop("mode", None)
+    cleaned.pop("max_tokens", None)
+    cleaned.pop("model", None)
     return cleaned
 
 

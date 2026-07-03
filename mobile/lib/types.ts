@@ -13,11 +13,40 @@ export interface Session {
 export interface Message {
   id: string;
   role: "user" | "assistant";
+  /** Canonical text when locally available. Remote history may only hydrate a preview. */
   content: string;
+  /** Lightweight text used for history, storage, or live rendering previews. */
+  contentPreview?: string;
   isStreaming?: boolean;
   timestamp: number;
   agentName?: string;
   serverMessageId?: string;
+  /** Server id that can be used to fetch the full message body on demand. */
+  fullContentRef?: string;
+  runtimeSeq?: number;
+  contentLength?: number;
+  /** Legacy aggregate flag. Prefer the explicit flags below for new behavior. */
+  contentTruncated?: boolean;
+  finishReason?:
+    | "stop"
+    | "length"
+    | "duration"
+    | "server_char_limit"
+    | "error"
+    | "cancelled";
+  /** The model/provider stopped before completing the answer. */
+  modelIncomplete?: boolean;
+  /** Gateway/server stopped or clipped the answer before completion. */
+  serverCutoff?: boolean;
+  /** UI is currently rendering a local preview, but full content is still in memory. */
+  clientPreviewOnly?: boolean;
+  /** History API returned only a preview; fetch fullContentRef for the full body. */
+  historyPreviewOnly?: boolean;
+  /** Persisted local storage kept only a preview; fetch fullContentRef for the full body. */
+  storagePreviewOnly?: boolean;
+  partial?: boolean;
+  continuationToken?: string;
+  nextPromptSuggestion?: string;
   feedback?: "like" | "dislike";
   /** 推理链内容（thinking 事件累积） */
   reasoning?: string;
@@ -49,8 +78,11 @@ export interface Message {
       preview: string;
     }>;
   };
+  /** 运行时警告（附件加载失败等） */
+  warnings?: Array<{ type: string; message: string }>;
   /** 能力结构化结果（math_animator 等） */
   capabilityResult?: {
+    content?: string;
     output_mode?: string;
     render_type?: string;
     artifacts?: Array<{
@@ -64,6 +96,15 @@ export interface Message {
     review?: Record<string, unknown>;
     summary?: Record<string, unknown>;
   };
+  /** Cached problem context returned by structured SSE events */
+  problemContext?: {
+    problem_context_id: string;
+    sha256?: string;
+    object_key?: string;
+    cache_hit?: boolean;
+  };
+  /** Backend/frontend render and latency metrics */
+  renderMetrics?: Record<string, unknown>;
 }
 
 /** 消息附件 */
@@ -72,6 +113,10 @@ export interface MessageAttachment {
   type: "image" | "file";
   /** 本地 URI（仅采集/发送前需要；持久化历史可能只有 objectKey/url） */
   uri?: string;
+  /** Local low-memory preview URI for mobile rendering */
+  previewUri?: string;
+  /** Persisted/local low-memory preview URI */
+  preview_uri?: string;
   /** 文件名 */
   name?: string;
   /** Persisted/gateway filename field */
@@ -94,10 +139,14 @@ export interface MessageAttachment {
   size?: number;
   /** Persisted/gateway file size */
   file_size?: number;
+  /** SHA-256 content hash returned by Gateway upload */
+  sha256?: string;
   /** 附件采集/坐标元数据 */
   metadata?: {
     width?: number;
     height?: number;
+    sourceWidth?: number;
+    sourceHeight?: number;
     pixelCoordSpace?: "source" | "crop";
     preservesOriginalImage?: boolean;
     cropRect?: { x: number; y: number; width: number; height: number };

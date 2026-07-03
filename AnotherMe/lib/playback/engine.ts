@@ -509,7 +509,7 @@ export class PlaybackEngine {
 
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl)
-          .then((audioStarted) => {
+          .then(async (audioStarted) => {
             if (!audioStarted) {
               // No pre-generated audio — try browser-native TTS if selected
               const settings = useSettingsStore.getState();
@@ -521,7 +521,15 @@ export class PlaybackEngine {
               ) {
                 this.playBrowserTTS(speechAction);
               } else {
-                scheduleReadingTimer();
+                const serverAudioStarted = await this.playServerTTSFallback(speechAction).catch(
+                  (error) => {
+                    log.warn('Server TTS fallback failed:', error);
+                    return false;
+                  },
+                );
+                if (!serverAudioStarted) {
+                  scheduleReadingTimer();
+                }
               }
             }
           })
@@ -622,6 +630,39 @@ export class PlaybackEngine {
   }
 
   // ==================== Browser Native TTS ====================
+
+  private async playServerTTSFallback(speechAction: SpeechAction): Promise<boolean> {
+    if (this.mode !== 'playing') return false;
+
+    const settings = useSettingsStore.getState();
+    if (!settings.ttsEnabled || settings.ttsMuted || settings.ttsProviderId === 'browser-native-tts') {
+      return false;
+    }
+
+    const providerConfig = settings.ttsProvidersConfig[settings.ttsProviderId];
+    const res = await fetch('/api/generate/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: speechAction.text,
+        audioId: `lecture-fallback-${speechAction.id}`,
+        ttsProviderId: settings.ttsProviderId,
+        ttsModelId: providerConfig?.modelId,
+        ttsVoice: settings.ttsVoice,
+        ttsSpeed: settings.ttsSpeed,
+        ttsApiKey: providerConfig?.apiKey,
+        ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+      }),
+    });
+
+    if (!res.ok || this.mode !== 'playing') return false;
+
+    const data = await res.json();
+    if (!data.base64) return false;
+
+    const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
+    return this.audioPlayer.play(`lecture-fallback-${speechAction.id}`, audioUrl);
+  }
 
   /**
    * Split text into sentence-level chunks for sequential playback.

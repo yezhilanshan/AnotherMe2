@@ -11,6 +11,10 @@ import {
   parseMarkdown,
   normalizeStructuredTutorResponse,
   normalizeStructuredContent,
+  normalizeMarkdownForDisplay,
+  hasVisibleMarkdownContent,
+  sanitizeResponseContent,
+  normalizeHtmlLineBreaks,
 } from "./latex-utils";
 
 let passed = 0;
@@ -128,6 +132,7 @@ eq(simplifyLatex("\\leftarrow"), "←", "leftarrow");
 eq(simplifyLatex("\\Leftarrow"), "⇐", "Leftarrow");
 eq(simplifyLatex("\\leftrightarrow"), "↔", "leftrightarrow");
 eq(simplifyLatex("\\mapsto"), "↦", "mapsto");
+eq(simplifyLatex("\\implies"), "⇒", "implies");
 
 // ============================================================
 // 5. simplifyLatex — 大型运算符 / 集合
@@ -150,6 +155,8 @@ eq(simplifyLatex("\\subseteq"), "⊆", "subseteq");
 eq(simplifyLatex("\\cup"), "∪", "cup");
 eq(simplifyLatex("\\cap"), "∩", "cap");
 eq(simplifyLatex("\\emptyset"), "∅", "emptyset");
+eq(simplifyLatex("\\perp"), "⊥", "perp");
+eq(simplifyLatex("\\parallel"), "∥", "parallel");
 
 // ============================================================
 // 6. simplifyLatex — 分数
@@ -199,6 +206,8 @@ eq(simplifyLatex("\\mathcal{L}"), "L", "mathcal L");
 eq(simplifyLatex("\\mathbf{x}"), "x", "mathbf x");
 eq(simplifyLatex("\\mathit{abc}"), "abc", "mathit abc");
 eq(simplifyLatex("\\mathrm{d}"), "d", "mathrm d");
+eq(simplifyLatex("\\vec{ED}"), "→ED", "vec ED");
+eq(simplifyLatex("\\overrightarrow{AB}"), "→AB", "overrightarrow AB");
 eq(simplifyLatex("\\text{hello}"), "hello", "text hello");
 eq(simplifyLatex("\\textrm{world}"), "world", "textrm world");
 
@@ -375,6 +384,16 @@ deepEq(
   "bold + latex",
 );
 
+deepEq(
+  tokenizeInline("**$\\tan B = 2$：** 这意味着 $\\sin B = \\frac{2}{\\sqrt{5}}$"),
+  [
+    { type: "bold", content: "$\\tan B = 2$：" },
+    { type: "text", content: " 这意味着 " },
+    { type: "latex", content: "sin B = (2)/(√(5))" },
+  ],
+  "bold wrapper preserves nested inline math payload",
+);
+
 // ============================================================
 // 17. tokenizeInline — 多个 $...$ 不互相吞噬
 // ============================================================
@@ -426,6 +445,12 @@ deepEq(
   parseMarkdown("```js\nconst x = 1;\n```"),
   [{ type: "code", content: "const x = 1;", language: "js" }],
   "code block",
+);
+
+deepEq(
+  parseMarkdown("~~~ts\nconst y = 2;\n~~~"),
+  [{ type: "code", content: "const y = 2;", language: "ts" }],
+  "tilde code block",
 );
 
 deepEq(
@@ -516,6 +541,236 @@ deepEq(
     },
   ],
   "typical math response",
+);
+
+deepEq(
+  parseMarkdown(
+    "- **$\\tan B = 2$：** 这意味着 $\\sin B = \\frac{2}{\\sqrt{5}}$。\n- **$\\angle BEB' = 90^\\circ$：** 这是关键。",
+  ),
+  [
+    {
+      type: "list",
+      content:
+        "**$\\tan B = 2$：** 这意味着 $\\sin B = \\frac{2}{\\sqrt{5}}$。",
+      level: 0,
+    },
+    {
+      type: "list",
+      content: "**$\\angle BEB' = 90^\\circ$：** 这是关键。",
+      level: 0,
+    },
+  ],
+  "list items keep bold-wrapped inline math intact",
+);
+
+// ============================================================
+// 22. parseMarkdown — GFM blocks via remark
+// ============================================================
+section("parseMarkdown — GFM blocks");
+
+deepEq(
+  parseMarkdown("- [x] done\n- [ ] todo"),
+  [
+    { type: "list", content: "done", level: 0, checked: true },
+    { type: "list", content: "todo", level: 0, checked: false },
+  ],
+  "task list checked state",
+);
+
+deepEq(
+  parseMarkdown("- parent\n  - child"),
+  [
+    { type: "list", content: "parent", level: 0 },
+    { type: "list", content: "child", level: 1 },
+  ],
+  "nested unordered list levels",
+);
+
+deepEq(
+  parseMarkdown("Use this[^1].\n\n[^1]: footnote text"),
+  [
+    { type: "paragraph", content: "Use this[^1]." },
+    { type: "empty", content: "" },
+    { type: "paragraph", content: "[^1]: footnote text" },
+  ],
+  "footnote definitions remain visible",
+);
+
+// ============================================================
+// 23. parseMarkdown — HTML line breaks normalization
+// ============================================================
+section("parseMarkdown — HTML line breaks normalization");
+
+const htmlContent = "Hello<br>world<br/>test<br />end";
+const htmlBlocks = parseMarkdown(htmlContent);
+assert(
+  htmlBlocks.length === 1 &&
+    htmlBlocks[0].type === "paragraph" &&
+    htmlBlocks[0].content === "Hello world test end",
+  "single <br> becomes soft line break within one paragraph",
+);
+
+const htmlParagraphBreak = "Line one<br><br>Line two";
+const paragraphBreakBlocks = parseMarkdown(htmlParagraphBreak);
+deepEq(
+  paragraphBreakBlocks,
+  [
+    { type: "paragraph", content: "Line one" },
+    { type: "empty", content: "" },
+    { type: "paragraph", content: "Line two" },
+  ],
+  "<br><br> becomes paragraph break",
+);
+
+const pythagoreanWithBr =
+  "### 1. 核心定义与公式<br><br>**勾股定理**描述的是**直角三角形**三条边之间的长度关系。<br><br>$$a^2 + b^2 = c^2$$";
+const brBlocks = parseMarkdown(pythagoreanWithBr);
+assert(
+  brBlocks.some(
+    (b) => b.type === "heading" && b.content === "1. 核心定义与公式",
+  ),
+  "<br><br> before heading is normalized so heading is parsed",
+);
+assert(
+  brBlocks.some(
+    (b) => b.type === "latex_display" && b.content === "a^2 + b^2 = c^2",
+  ),
+  "display math on its own line after <br><br> is still parsed",
+);
+
+// ============================================================
+// 24. normalizeMarkdownForDisplay — 借鉴 DeepTutor 的预处理
+// ============================================================
+section("normalizeMarkdownForDisplay — display normalization");
+
+eq(
+  normalizeMarkdownForDisplay("Hello\u200Bworld"),
+  "Helloworld",
+  "strips zero-width characters",
+);
+eq(
+  normalizeMarkdownForDisplay("Line one\r\nLine two"),
+  "Line one\nLine two",
+  "normalizes CRLF to LF",
+);
+eq(
+  normalizeMarkdownForDisplay("A<br>B"),
+  "A\nB",
+  "converts <br> to newline",
+);
+eq(
+  normalizeMarkdownForDisplay("<think>inner thought</think>"),
+  "`<think>`inner thought`</think>`",
+  "escapes unknown pseudo HTML tags to inline code",
+);
+eq(
+  normalizeMarkdownForDisplay("<p></p><div>  </div>"),
+  "",
+  "removes empty block-level HTML tags",
+);
+eq(
+  normalizeMarkdownForDisplay("A\n\n\n\nB"),
+  "A\n\nB",
+  "collapses excessive blank lines",
+);
+
+// ============================================================
+// 25. hasVisibleMarkdownContent — 可见性判断
+// ============================================================
+section("hasVisibleMarkdownContent — visible content detection");
+
+assert(hasVisibleMarkdownContent("Hello world"), "plain text is visible");
+assert(
+  hasVisibleMarkdownContent("# Heading\n\nSome text"),
+  "markdown with heading and paragraph is visible",
+);
+assert(
+  !hasVisibleMarkdownContent("<think></think>"),
+  "empty pseudo HTML tag is not visible",
+);
+assert(
+  !hasVisibleMarkdownContent("   \n\n   "),
+  "only whitespace is not visible",
+);
+assert(
+  !hasVisibleMarkdownContent("```\n\n```"),
+  "empty fenced code block is not visible",
+);
+assert(
+  hasVisibleMarkdownContent("[link](https://example.com)"),
+  "link text is visible",
+);
+
+// ============================================================
+// 26. sanitizeResponseContent — 模型特殊 token 过滤
+// ============================================================
+section("sanitizeResponseContent — special token filtering");
+
+eq(
+  sanitizeResponseContent("hello<|endoftext|>world"),
+  "hello world",
+  "移除 <|endoftext|>",
+);
+eq(
+  sanitizeResponseContent("<|im_start|>system<|im_end|>"),
+  "system",
+  "移除 <|im_start|> 和 <|im_end|>",
+);
+eq(
+  sanitizeResponseContent("<s>content</s>"),
+  "content",
+  "移除 <s> 和 </s>",
+);
+eq(
+  sanitizeResponseContent("prefix<|unclosed"),
+  "prefix",
+  "移除末尾未闭合的 <| 片段",
+);
+eq(
+  sanitizeResponseContent("完整<|end▁of▁sentence|> token"),
+  "完整  token",
+  "移除带下划线的特殊 token，保留单个空格",
+);
+eq(
+  sanitizeResponseContent("  <|endoftext|>   "),
+  "",
+  "只剩 token 时 trim 后为空",
+);
+eq(
+  sanitizeResponseContent("没有 token 的文本"),
+  "没有 token 的文本",
+  "普通文本不受影响",
+);
+
+// ============================================================
+// 27. normalizeHtmlLineBreaks — HTML 换行归一化
+// ============================================================
+section("normalizeHtmlLineBreaks — HTML line break normalization");
+
+eq(
+  normalizeHtmlLineBreaks("A<br>B"),
+  "A\nB",
+  "<br> 转 newline",
+);
+eq(
+  normalizeHtmlLineBreaks("A<br/>B"),
+  "A\nB",
+  "<br/> 转 newline",
+);
+eq(
+  normalizeHtmlLineBreaks("A<br />B"),
+  "A\nB",
+  "<br /> 转 newline",
+);
+eq(
+  normalizeHtmlLineBreaks("A<p>B</p>C"),
+  "A\nB\nC",
+  "<p> 与 </p> 均转 newline",
+);
+eq(
+  normalizeHtmlLineBreaks("no html"),
+  "no html",
+  "无 HTML 标签保持不变",
 );
 
 // ============================================================

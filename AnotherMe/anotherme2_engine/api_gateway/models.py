@@ -271,6 +271,30 @@ class AIChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class ProblemContext(Base):
+    __tablename__ = "problem_contexts"
+    __table_args__ = (UniqueConstraint("user_id", "sha256", name="uq_problem_context_user_sha256"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ocr_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    vision_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    geometry_context_json: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    problem_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
 class AIMessageFeedback(Base):
     __tablename__ = "ai_message_feedback"
     __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_ai_feedback_message_user"),)

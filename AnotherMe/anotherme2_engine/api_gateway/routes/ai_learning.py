@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ..chat_service import (
     create_ai_message,
     create_ai_session,
     create_learning_event,
+    get_ai_message,
     get_learning_event_stats,
     get_student_profile_snapshot,
     list_ai_messages,
@@ -133,12 +137,38 @@ def create_ai_learning_router(settings: Settings) -> APIRouter:
     def get_ai_messages(
         session_id: str,
         limit: int = Query(200, ge=1, le=500),
+        before_seq: int | None = Query(default=None, ge=1),
+        max_content_chars: int | None = Query(default=6000, ge=500, le=20000),
         db: Session = Depends(get_db),
         authorization: str | None = Header(default=None),
     ):
         require_token(settings, authorization)
-        rows = list_ai_messages(db, session_id=session_id, limit=limit)
+        rows = list_ai_messages(
+            db,
+            session_id=session_id,
+            limit=limit,
+            before_seq=before_seq,
+            max_content_chars=max_content_chars,
+        )
         return [AIChatMessageOutput(**row) for row in rows]
+
+    @router.get("/v1/ai/messages/{message_id}", response_model=AIChatMessageOutput)
+    def get_ai_message_api(
+        message_id: str,
+        db: Session = Depends(get_db),
+        authorization: str | None = Header(default=None),
+    ):
+        require_token(settings, authorization)
+        row = get_ai_message(db, message_id)
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error_code": "AI_MESSAGE_NOT_FOUND",
+                    "message": "AI message not found",
+                },
+            )
+        return AIChatMessageOutput(**row)
 
     @router.get("/v1/ai/sessions/{session_id}/learning-records", response_model=list[LearningRecordOutput])
     def get_ai_learning_records(
@@ -165,25 +195,36 @@ def create_ai_learning_router(settings: Settings) -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         require_token(settings, authorization)
-        row = create_ai_message(
-            db,
-            session_id=session_id,
-            role=request.role,
-            content=request.content,
-            user_id=request.user_id,
-            content_type=request.content_type,
-            capability=request.capability,
-            events=request.events,
-            attachments=request.attachments,
-            model_name=request.model_name,
-            prompt_tokens=request.prompt_tokens,
-            completion_tokens=request.completion_tokens,
-            total_tokens=request.total_tokens,
-            latency_ms=request.latency_ms,
-            request_id=request.request_id,
-            parent_message_id=request.parent_message_id,
-        )
-        db.commit()
+        row = None
+        for attempt in range(4):
+            try:
+                row = create_ai_message(
+                    db,
+                    session_id=session_id,
+                    role=request.role,
+                    content=request.content,
+                    user_id=request.user_id,
+                    content_type=request.content_type,
+                    capability=request.capability,
+                    events=request.events,
+                    attachments=request.attachments,
+                    model_name=request.model_name,
+                    prompt_tokens=request.prompt_tokens,
+                    completion_tokens=request.completion_tokens,
+                    total_tokens=request.total_tokens,
+                    latency_ms=request.latency_ms,
+                    request_id=request.request_id,
+                    parent_message_id=request.parent_message_id,
+                )
+                db.commit()
+                break
+            except OperationalError as exc:
+                db.rollback()
+                if "database is locked" not in str(exc).lower() or attempt >= 3:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+        if row is None:
+            raise HTTPException(status_code=500, detail="AI message persistence failed")
         return AIChatMessageOutput(**serialize_ai_message(row))
 
     @router.get("/v1/students/{user_id}/profile", response_model=StudentProfileOutput)

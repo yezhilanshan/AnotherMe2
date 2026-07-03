@@ -44,7 +44,7 @@ class Settings:
     app_name: str = os.getenv("GATEWAY_APP_NAME", "anotherme2-gateway")
     app_env: str = os.getenv("GATEWAY_ENV", "dev")
     app_host: str = os.getenv("GATEWAY_HOST", "0.0.0.0")
-    app_port: int = int(os.getenv("GATEWAY_PORT", "8082"))
+    app_port: int = int(os.getenv("GATEWAY_PORT", "8083"))
 
     database_url: str = os.getenv(
         "GATEWAY_DATABASE_URL",
@@ -59,6 +59,7 @@ class Settings:
     queue_problem_video: str = os.getenv(
         "GATEWAY_QUEUE_PROBLEM_VIDEO", "q.problem_video"
     )
+    queue_photo_manim: str = os.getenv("GATEWAY_QUEUE_PHOTO_MANIM", "q.photo_manim")
     queue_package: str = os.getenv("GATEWAY_QUEUE_PACKAGE", "q.package")
     queue_learning_record: str = os.getenv(
         "GATEWAY_QUEUE_LEARNING_RECORD", "q.learning_record"
@@ -146,6 +147,7 @@ class Settings:
         return {
             "course_generate": self.queue_course,
             "problem_video_generate": self.queue_problem_video,
+            "photo_manim_direct": self.queue_photo_manim,
             "study_package_generate": self.queue_package,
             "learning_record_extract": self.queue_learning_record,
         }
@@ -157,6 +159,7 @@ class Settings:
             for queue in [
                 self.queue_course,
                 self.queue_problem_video,
+                self.queue_photo_manim,
                 self.queue_package,
                 self.queue_learning_record,
             ]

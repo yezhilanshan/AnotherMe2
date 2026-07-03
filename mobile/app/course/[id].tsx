@@ -27,6 +27,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { WEB_URL } from "../../lib/config";
+import { useVoiceInput } from "../../hooks/useVoiceInput";
 
 // ── Screen ──
 
@@ -36,19 +37,79 @@ export default function CourseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const webViewRef = useRef<WebView>(null);
+  const activeVoiceRequestIdRef = useRef<string | null>(null);
+  const voiceResultSentRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [webError, setWebError] = useState(false);
   const webViewVersion = useMemo(() => Date.now().toString(), [id]);
 
   const webUrl = `${WEB_URL}/classroom/${id}?mobile=1&v=${webViewVersion}`;
 
+  const emitNativeVoiceEvent = useCallback(
+    (payload: {
+      id: string;
+      type: "result" | "error" | "end";
+      text?: string;
+      error?: string;
+    }) => {
+      const detail = JSON.stringify(payload);
+      webViewRef.current?.injectJavaScript(
+        `window.dispatchEvent(new CustomEvent('anotherme:native-voice',{detail:${detail}}));true;`,
+      );
+    },
+    [],
+  );
+
+  const sendNativeVoiceResult = useCallback(
+    (text: string) => {
+      const requestId = activeVoiceRequestIdRef.current;
+      if (!requestId || voiceResultSentRef.current) return;
+
+      voiceResultSentRef.current = true;
+      activeVoiceRequestIdRef.current = null;
+      emitNativeVoiceEvent({
+        id: requestId,
+        type: "result",
+        text,
+      });
+    },
+    [emitNativeVoiceEvent],
+  );
+
+  const sendNativeVoiceError = useCallback(
+    (error: string) => {
+      const requestId = activeVoiceRequestIdRef.current;
+      if (!requestId || voiceResultSentRef.current) return;
+
+      voiceResultSentRef.current = true;
+      activeVoiceRequestIdRef.current = null;
+      emitNativeVoiceEvent({
+        id: requestId,
+        type: "error",
+        error,
+      });
+    },
+    [emitNativeVoiceEvent],
+  );
+
+  const { startListening, stopListening, abortListening } = useVoiceInput({
+    lang: "zh-CN",
+    onTranscript: (text, isFinal) => {
+      if (isFinal) {
+        sendNativeVoiceResult(text);
+      }
+    },
+    onError: sendNativeVoiceError,
+  });
+
   // Lock to landscape for immersive classroom experience
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
     return () => {
+      abortListening();
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.DEFAULT);
     };
-  }, []);
+  }, [abortListening]);
 
   // ── WebView event handlers ──
 
@@ -62,16 +123,74 @@ export default function CourseDetailScreen() {
     setWebError(true);
   }, []);
 
-  // Listen for messages from the web classroom (currently unused but kept for future use)
+  const handleVoiceBridgeMessage = useCallback(
+    async (message: {
+      source?: string;
+      type?: string;
+      id?: string;
+    }) => {
+      if (message.source !== "anotherme-classroom" || !message.id) return false;
+
+      if (message.type === "voice:start") {
+        if (
+          activeVoiceRequestIdRef.current &&
+          activeVoiceRequestIdRef.current !== message.id
+        ) {
+          await abortListening();
+        }
+
+        activeVoiceRequestIdRef.current = message.id;
+        voiceResultSentRef.current = false;
+        const started = await startListening();
+        if (!started) {
+          sendNativeVoiceError("语音识别启动失败，请稍后再试");
+        }
+        return true;
+      }
+
+      if (
+        message.type === "voice:stop" &&
+        activeVoiceRequestIdRef.current === message.id
+      ) {
+        const text = await stopListening();
+        sendNativeVoiceResult(text);
+        return true;
+      }
+
+      if (
+        message.type === "voice:cancel" &&
+        activeVoiceRequestIdRef.current === message.id
+      ) {
+        await abortListening();
+        activeVoiceRequestIdRef.current = null;
+        voiceResultSentRef.current = true;
+        emitNativeVoiceEvent({ id: message.id, type: "end" });
+        return true;
+      }
+
+      return false;
+    },
+    [
+      abortListening,
+      emitNativeVoiceEvent,
+      sendNativeVoiceError,
+      sendNativeVoiceResult,
+      startListening,
+      stopListening,
+    ],
+  );
+
+  // Listen for messages from the web classroom, including native voice bridge requests.
   const handleMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
       try {
-        JSON.parse(event.nativeEvent.data);
+        const message = JSON.parse(event.nativeEvent.data);
+        void handleVoiceBridgeMessage(message);
       } catch {
         // Non-JSON messages ignored
       }
     },
-    [],
+    [handleVoiceBridgeMessage],
   );
 
   const handleGoBack = useCallback(() => router.back(), [router]);
@@ -101,6 +220,7 @@ export default function CourseDetailScreen() {
         overScrollMode="never"
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
+        mediaCapturePermissionGrantType="grant"
         allowsAirPlayForMediaPlayback
       />
 

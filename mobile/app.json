@@ -4,6 +4,7 @@
     "slug": "anotherme-mobile",
     "scheme": "anotherme",
     "version": "1.0.0",
+    "jsEngine": "hermes",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -32,6 +33,13 @@
         {
           "photosPermission": "允许访问相册以选择题目图片",
           "cameraPermission": "允许使用相机拍摄题目"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "允许镜我使用麦克风进行语音输入",
+          "speechRecognitionPermission": "允许镜我使用语音识别功能"
         }
       ]
     ]

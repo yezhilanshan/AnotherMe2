@@ -1,4 +1,6 @@
 import type { NextConfig } from 'next';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
 import bundleAnalyzer from '@next/bundle-analyzer';
 
 const GATEWAY = process.env.ANOTHERME2_GATEWAY_BASE_URL || 'http://127.0.0.1:8080';
@@ -13,7 +15,13 @@ const LAN_ALLOWED_DEV_ORIGINS = [
 ];
 
 const nextConfig: NextConfig = {
+  turbopack: {
+    root: dirname(fileURLToPath(import.meta.url)),
+  },
   allowedDevOrigins: [
+    'localhost',
+    '127.0.0.1',
+    '0.0.0.0',
     '10.51.37.135',
     ...LAN_ALLOWED_DEV_ORIGINS,
     ...(EXTRA_ALLOWED_DEV_ORIGINS ?? []),
@@ -38,10 +46,6 @@ const nextConfig: NextConfig = {
       {
         source: '/api/co-writer/:path*',
         destination: `${GATEWAY}/co-writer/:path*`,
-      },
-      {
-        source: '/api/messages/ws-proxy/:conversation_id',
-        destination: `${GATEWAY}/ws/messages/:conversation_id`,
       },
     ];
   },

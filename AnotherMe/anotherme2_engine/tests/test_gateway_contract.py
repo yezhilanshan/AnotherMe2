@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,6 +34,12 @@ from api_gateway.course_generation_provider import (
     create_course_generation_provider,
 )
 from api_gateway.classroom_store import list_classrooms, load_classroom, save_classroom_payload
+from api_gateway.routes.ai_chat import (
+    _extract_answer_blocks,
+    _extract_math_blocks,
+    _normalize_html_line_breaks,
+    _stream_engine_events_with_heartbeat,
+)
 from api_gateway.models import (
     AIChatMessage,
     AIChatSession,
@@ -39,6 +48,7 @@ from api_gateway.models import (
     Job,
     JobArtifact,
     LearningEvent,
+    ProblemContext,
     StudentProfile,
 )
 from api_gateway.queueing import QueueMessage
@@ -479,6 +489,45 @@ def test_idempotent_job_creation(tmp_path: Path):
         assert job1.id == job2.id
 
 
+def test_course_generate_request_id_creates_distinct_jobs(tmp_path: Path):
+    db_path = tmp_path / "jobs-request-id.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(tmp_path / "obj"),
+    )
+
+    with session_scope() as session:
+        first_job, first_created = create_or_get_job(
+            session,
+            CreateJobRequest(
+                job_type=JobType.COURSE_GENERATE,
+                payload={"requirement": "勾股定理", "request_id": "mobile-course-1"},
+                user_id="mobile-user",
+            ),
+            settings,
+        )
+        session.flush()
+
+        second_job, second_created = create_or_get_job(
+            session,
+            CreateJobRequest(
+                job_type=JobType.COURSE_GENERATE,
+                payload={"requirement": "勾股定理", "request_id": "mobile-course-2"},
+                user_id="mobile-user",
+            ),
+            settings,
+        )
+        session.flush()
+
+        assert first_created is True
+        assert second_created is True
+        assert first_job.id != second_job.id
+
+
 def test_failed_idempotent_job_can_be_recreated(tmp_path: Path):
     db_path = tmp_path / "jobs-retry.db"
     reconfigure_db(f"sqlite:///{db_path}")
@@ -621,7 +670,7 @@ def test_ai_chat_non_streaming_persists_to_unified_database(tmp_path: Path):
             "/v1/ai/chat/non-streaming",
             json={
                 "messages": [{"role": "user", "content": "解释二次函数"}],
-                "model": "test-model",
+                "model": "qwen3.7-plus",
                 "api_key": "test-key",
                 "capability": "chat",
                 "user_id": "stu-unified",
@@ -706,7 +755,7 @@ def test_ai_chat_image_auto_routes_to_visual_solve_fast(tmp_path: Path):
             "/v1/ai/chat/non-streaming",
             json={
                 "messages": [{"role": "user", "content": "这道题怎么做？"}],
-                "model": "test-model",
+                "model": "qwen3.7-plus",
                 "api_key": "test-key",
                 "capability": "auto",
                 "mode": "auto",
@@ -726,7 +775,11 @@ def test_ai_chat_image_auto_routes_to_visual_solve_fast(tmp_path: Path):
     assert response.status_code == 200
     assert response.json()["assistant_text"] == "图片快答回复"
     assert captured["capability"] == "visual_solve_fast"
-    assert captured["config_overrides"] == {"mode": "fast"}
+    assert captured["config_overrides"] == {
+        "model": "qwen3.7-plus",
+        "mode": "fast",
+        "max_tokens": 4096,
+    }
     assert captured["attachments"][0]["type"] == "image"
     assert captured["attachments"][0]["base64"]
 
@@ -766,7 +819,7 @@ def test_ai_chat_image_chat_routes_to_visual_solve_fast(tmp_path: Path):
             "/v1/ai/chat/non-streaming",
             json={
                 "messages": [{"role": "user", "content": "看图讲一下"}],
-                "model": "test-model",
+                "model": "qwen3.7-plus",
                 "api_key": "test-key",
                 "capability": "chat",
                 "mode": "auto",
@@ -785,7 +838,982 @@ def test_ai_chat_image_chat_routes_to_visual_solve_fast(tmp_path: Path):
 
     assert response.status_code == 200
     assert captured["capability"] == "visual_solve_fast"
-    assert captured["config_overrides"] == {"mode": "fast"}
+    assert captured["config_overrides"] == {
+        "model": "qwen3.7-plus",
+        "mode": "fast",
+        "max_tokens": 4096,
+    }
+
+
+def test_ai_chat_visual_timeout_defaults_allow_slow_first_token():
+    from api_gateway.routes import ai_chat
+
+    assert (
+        ai_chat._stream_no_content_limit_for_capability("visual_solve_fast") >= 300
+    )
+    assert (
+        ai_chat._stream_duration_limit_for_capability("visual_solve_fast") >= 420
+    )
+    assert ai_chat._stream_no_content_limit_for_capability("deep_solve") >= 240
+    assert ai_chat._stream_duration_limit_for_capability("deep_solve") >= 420
+    assert ai_chat._stream_no_content_limit_for_capability("chat") == 60
+
+
+def test_upload_returns_sha256(tmp_path: Path):
+    db_path = tmp_path / "upload-sha.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    payload = b"fakepng"
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", payload, "image/png")},
+    )
+
+    assert upload.status_code == 200
+    assert upload.json()["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+def test_server_model_catalog_exposes_shared_defaults(tmp_path: Path):
+    db_path = tmp_path / "server-models.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    response = client.get("/v1/server/models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["defaultModel"] == "qwen3.7-plus"
+    assert payload["capabilityDefaults"]["visual_solve_fast"] == "qwen3.7-plus"
+    assert any(model["id"] == "qwen3.7-plus" and model["supportsVision"] for model in payload["models"])
+
+
+def test_ai_chat_rejects_unknown_model(tmp_path: Path):
+    db_path = tmp_path / "invalid-model.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ai/chat/non-streaming",
+        json={
+            "messages": [{"role": "user", "content": "解释一下二次函数"}],
+            "model": "missing-model",
+            "api_key": "test-key",
+            "capability": "chat",
+            "user_id": "stu-invalid-model",
+            "request_id": "req-invalid-model",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "INVALID_MODEL"
+
+
+def test_ai_chat_rejects_non_vision_model_for_image_input(tmp_path: Path):
+    db_path = tmp_path / "vision-mismatch.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", b"fakepng", "image/png")},
+    )
+    assert upload.status_code == 200
+
+    response = client.post(
+        "/v1/ai/chat/non-streaming",
+        json={
+            "messages": [{"role": "user", "content": "看图讲一下"}],
+            "model": "qwen3.6-max-preview",
+            "api_key": "test-key",
+            "capability": "chat",
+            "mode": "auto",
+            "user_id": "stu-vision-mismatch",
+            "request_id": "req-vision-mismatch",
+            "attachments": [
+                {
+                    "type": "image",
+                    "object_key": upload.json()["object_key"],
+                    "filename": "problem.png",
+                    "mime_type": "image/png",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "MODEL_CAPABILITY_MISMATCH"
+
+
+def test_ai_chat_reuses_problem_context_for_same_image(tmp_path: Path):
+    db_path = tmp_path / "problem-context-cache.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_stream(**kwargs):
+        calls.append(kwargs)
+        yield {"type": "stream", "content": f"回复{len(calls)}"}
+        yield {"type": "done"}
+
+    upload = client.post(
+        "/v1/uploads",
+        files={"file": ("problem.png", b"fakepng", "image/png")},
+    )
+    assert upload.status_code == 200
+    object_key = upload.json()["object_key"]
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        first = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "这道题怎么做？"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "auto",
+                "user_id": "stu-problem-context",
+                "request_id": "req-problem-context-1",
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": object_key,
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+        )
+        second = client.post(
+            "/v1/ai/chat/non-streaming",
+            json={
+                "messages": [{"role": "user", "content": "再换一种方法讲"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "auto",
+                "user_id": "stu-problem-context",
+                "request_id": "req-problem-context-2",
+                "attachments": [
+                    {
+                        "type": "image",
+                        "object_key": object_key,
+                        "filename": "problem.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            },
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["problem_context_cache_hit"] is False
+    assert second.json()["problem_context_cache_hit"] is True
+    assert first.json()["problem_context"]["problem_context_id"]
+    assert second.json()["problem_context"]["problem_context_id"] == first.json()["problem_context"]["problem_context_id"]
+    assert calls[0]["attachments"][0]["base64"]
+    assert calls[1].get("attachments") is None
+    assert "已缓存的题目视觉上下文" in calls[1]["file_context"]
+
+    with session_scope() as session:
+        rows = session.query(ProblemContext).all()
+        assert len(rows) == 1
+        assert rows[0].sha256 == upload.json()["sha256"]
+
+
+def test_ai_chat_stream_emits_structured_sse_before_done(tmp_path: Path):
+    db_path = tmp_path / "structured-sse.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        yield {"type": "stream", "content": "公式如下：$$a^2+b^2=c^2$$"}
+        yield {"type": "done"}
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "解释勾股定理"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-sse",
+                "request_id": "req-sse-structured",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+    event_types = [event["type"] for event in events]
+    assert "text_delta" in event_types
+    assert "final_markdown" in event_types
+    assert "render_metrics" in event_types
+    assert "math_block" not in event_types
+    assert "answer_block" not in event_types
+    assert "answer_component" not in event_types
+    assert event_types.index("final_markdown") < event_types.index("done")
+    assert event_types.index("render_metrics") < event_types.index("done")
+    render_metrics = next(event["data"] for event in events if event["type"] == "render_metrics")
+    assert render_metrics["model"] == "qwen3.7-plus"
+    assert render_metrics["capability"] == "chat"
+    assert "answer_block_count" not in render_metrics
+    assert "answer_component_count" not in render_metrics
+
+
+def test_stream_engine_events_with_heartbeat_emits_keepalive_during_stall():
+    async def _slow_stream():
+        yield {"type": "stream", "content": "first"}
+        await asyncio.sleep(0.03)
+        yield {"type": "done"}
+
+    async def _collect():
+        events = []
+        async for event in _stream_engine_events_with_heartbeat(
+            _slow_stream(),
+            heartbeat_interval=0.01,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_collect())
+
+    assert events[0] == {"type": "stream", "content": "first"}
+    assert None in events[1:-1]
+    assert events[-1] == {"type": "done"}
+
+
+def test_stream_engine_events_with_heartbeat_closes_underlying_stream_on_break():
+    closed = False
+
+    async def _slow_stream():
+        nonlocal closed
+        try:
+            yield {"type": "stream", "content": "first"}
+            await asyncio.sleep(60)
+            yield {"type": "stream", "content": "late"}
+        finally:
+            closed = True
+
+    async def _collect_one():
+        wrapper = _stream_engine_events_with_heartbeat(
+            _slow_stream(),
+            heartbeat_interval=0.01,
+        )
+        first = await anext(wrapper)
+        await wrapper.aclose()
+        await asyncio.sleep(0)
+        return first
+
+    first = asyncio.run(_collect_one())
+
+    assert first == {"type": "stream", "content": "first"}
+    assert closed is True
+
+
+def test_ai_chat_deep_solve_emits_step_events_alongside_text_delta(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-step-events.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        yield {"type": "stream", "content": "## 步骤一\n先建立方程。"}
+        yield {"type": "stream", "content": "\n\n## 步骤二\n再代入求解。"}
+        yield {"type": "done"}
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "解一道数学题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "deep_solve",
+                "mode": "auto",
+                "user_id": "stu-steps",
+                "request_id": "req-steps",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+    event_types = [event["type"] for event in events]
+    assert "text_delta" in event_types
+    assert "final_markdown" in event_types
+    assert "step_start" not in event_types
+    assert "step_delta" not in event_types
+    assert "step_done" not in event_types
+
+
+def test_ai_chat_prefers_native_step_metadata_over_text_projection(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-native-step-events.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        yield {
+            "type": "stream",
+            "content": "先建立方程。",
+            "metadata": {
+                "step_event": "start_delta",
+                "step_id": "writer-step-0",
+                "step_index": 0,
+                "step_title": "建立方程",
+            },
+        }
+        yield {
+            "type": "stream",
+            "content": "再求出未知量。",
+            "metadata": {
+                "step_event": "start_delta",
+                "step_id": "writer-step-1",
+                "step_index": 1,
+                "step_title": "求解未知量",
+            },
+        }
+        yield {"type": "done"}
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "解一道数学题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "deep_solve",
+                "mode": "auto",
+                "user_id": "stu-native-steps",
+                "request_id": "req-native-steps",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+    event_types = [event["type"] for event in events]
+    assert "text_delta" in event_types
+    assert "final_markdown" in event_types
+    assert "step_start" not in event_types
+    assert "step_delta" not in event_types
+
+
+def test_ai_chat_stream_emits_heartbeat_event_before_first_engine_chunk(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-heartbeat.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        yield {"type": "stream", "content": "late-answer"}
+        yield {"type": "done"}
+
+    async def _fake_heartbeat_wrapper(engine_stream, *, heartbeat_interval):
+        yield None
+        async for event in engine_stream:
+            yield event
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch(
+            "api_gateway.routes.ai_chat._stream_engine_events_with_heartbeat",
+            _fake_heartbeat_wrapper,
+        ),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请解答这道题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-heartbeat",
+                "request_id": "req-heartbeat",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["cache-control"] == "no-cache, no-transform"
+
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    event_types = [event["type"] for event in events]
+    assert "heartbeat" in event_types
+    assert "text_delta" in event_types
+    assert event_types.index("heartbeat") < event_types.index("text_delta")
+    heartbeat = next(event["data"] for event in events if event["type"] == "heartbeat")
+    assert heartbeat["request_id"] == "req-heartbeat"
+
+
+def test_ai_chat_stream_heartbeat_only_stops_on_duration(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-heartbeat-duration.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        if False:
+            yield {"type": "stream", "content": "unreachable"}
+
+    async def _fake_heartbeat_wrapper(engine_stream, *, heartbeat_interval):
+        yield None
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch(
+            "api_gateway.routes.ai_chat._stream_engine_events_with_heartbeat",
+            _fake_heartbeat_wrapper,
+        ),
+        patch("api_gateway.routes.ai_chat.MAX_STREAM_DURATION_SECONDS", 0.0),
+        patch("api_gateway.routes.ai_chat.MAX_AUTO_CONTINUATIONS", 0),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请解答这道题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-heartbeat-duration",
+                "request_id": "req-heartbeat-duration",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    event_types = [event["type"] for event in events]
+    assert "heartbeat" in event_types
+    assert "final_markdown" in event_types
+    assert "done" in event_types
+    final_markdown = next(event["data"] for event in events if event["type"] == "final_markdown")
+    assert final_markdown["finish_reason"] == "duration"
+    assert final_markdown["partial"] is True
+    done = next(event["data"] for event in events if event["type"] == "done")
+    assert done["finish_reason"] == "duration"
+    assert done["partial"] is True
+
+
+def test_ai_chat_stream_thinking_only_stops_without_auto_continue(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-thinking-duration.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    calls = 0
+
+    async def _fake_stream(**kwargs):
+        nonlocal calls
+        calls += 1
+        yield {"type": "status", "message": "仍在分析题目"}
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch("api_gateway.routes.ai_chat.MAX_STREAM_NO_CONTENT_SECONDS", 0.0),
+        patch.dict(
+            "api_gateway.routes.ai_chat.CAPABILITY_STREAM_NO_CONTENT_SECONDS",
+            {"deep_solve": 0.0},
+        ),
+        patch("api_gateway.routes.ai_chat.MAX_AUTO_CONTINUATIONS", 2),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请解答这道题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "deep_solve",
+                "mode": "auto",
+                "user_id": "stu-thinking-duration",
+                "request_id": "req-thinking-duration",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    event_types = [event["type"] for event in events]
+    assert calls == 1
+    assert "thinking" in event_types
+    assert "text_delta" not in event_types
+    assert "final_markdown" in event_types
+    assert "done" in event_types
+    final_markdown = next(event["data"] for event in events if event["type"] == "final_markdown")
+    assert final_markdown["finish_reason"] == "duration"
+    assert final_markdown["partial"] is True
+    assert final_markdown["auto_continuations"] == 0
+    assert "耗时过长" in final_markdown["content"]
+    done = next(event["data"] for event in events if event["type"] == "done")
+    assert done["finish_reason"] == "duration"
+    assert done["partial"] is True
+
+
+def test_ai_chat_stream_long_math_chat_does_not_inject_visible_prelude_by_default(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-long-math-prelude.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    async def _fake_stream(**kwargs):
+        yield {"type": "status", "message": "模型正在推理"}
+        yield {"type": "stream", "content": "正式解答"}
+        yield {"type": "done"}
+
+    long_prompt = (
+        "Please solve this difficult geometry problem with detailed steps. "
+        "In triangle ABC, AB=13, AC=14, BC=15. Point D lies on BC. "
+        "Circle omega passes through A and D and is tangent to AB at A. "
+        "Another circle gamma passes through A and D and is tangent to AC at A. "
+        "The two circles meet again at E. Find the maximum possible area."
+    )
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": long_prompt}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-long-math-prelude",
+                "request_id": "req-long-math-prelude",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    text_events = [event["data"]["content"] for event in events if event["type"] == "text_delta"]
+    assert text_events == ["正式解答"]
+    final_markdown = next(event["data"] for event in events if event["type"] == "final_markdown")
+    assert final_markdown["content"] == "正式解答"
+    assert final_markdown["finish_reason"] == "stop"
+
+
+def test_ai_chat_stream_long_math_auto_stays_auto_by_default(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-long-math-auto-route.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_stream(**kwargs):
+        calls.append(kwargs)
+        yield {"type": "stream", "content": "可见解题框架"}
+        yield {"type": "done"}
+
+    long_prompt = (
+        "Please solve this difficult geometry problem with detailed steps. "
+        "In triangle ABC, AB=13, AC=14, BC=15. Point D lies on BC. "
+        "Circle omega passes through A and D and is tangent to AB at A. "
+        "Another circle gamma passes through A and D and is tangent to AC at A. "
+        "The two circles meet again at E. Find the maximum possible area."
+    )
+
+    with patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": long_prompt}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "auto",
+                "mode": "fast",
+                "user_id": "stu-long-math-auto-route",
+                "request_id": "req-long-math-auto-route",
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls[0]["capability"] == "auto"
+    assert calls[0]["config_overrides"]["mode"] == "fast"
+    assert calls[0]["config_overrides"]["model"] == "qwen3.7-plus"
+
+
+def test_ai_chat_stream_chat_does_not_auto_continue_runaway_output(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-truncate.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            yield {"type": "stream", "content": "A" * 24}
+            yield {"type": "stream", "content": "B" * 24}
+            yield {"type": "stream", "content": "unconsumed"}
+        else:
+            yield {"type": "stream", "content": "C" * 12}
+            yield {"type": "done"}
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch("api_gateway.routes.ai_chat.CAPABILITY_STREAM_OUTPUT_CHARS", {"chat": 40}),
+        patch("api_gateway.routes.ai_chat.MAX_AUTO_CONTINUATIONS", 2),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请持续输出"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-truncate",
+                "request_id": "req-truncate",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    final_markdown = next(
+        event["data"] for event in events if event["type"] == "final_markdown"
+    )
+    assert final_markdown["content"] == (
+        ("A" * 24) + ("B" * 16) + "\n\n[回答超过服务端单次输出保护限制，已暂停。]"
+    )
+    assert final_markdown["finish_reason"] == "server_char_limit"
+    assert final_markdown["partial"] is True
+    assert final_markdown["continuation_token"] == "req-truncate:server_char_limit"
+    assert final_markdown["auto_continuations"] == 0
+    assert final_markdown["auto_continuation_reasons"] == ["server_char_limit"]
+    render_metrics = next(
+        event["data"] for event in events if event["type"] == "render_metrics"
+    )
+    assert render_metrics["truncated"] is True
+    assert render_metrics["truncated_reason"] == "server_char_limit"
+    assert render_metrics["finish_reason"] == "server_char_limit"
+    assert render_metrics["auto_continuations"] == 0
+    done = next(event["data"] for event in events if event["type"] == "done")
+    assert done["partial"] is True
+    assert done["continuation_token"] == "req-truncate:server_char_limit"
+    assert done["auto_continuations"] == 0
+    assert len(calls) == 1
+
+
+def test_ai_chat_stream_chat_does_not_auto_continue_model_length_finish(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-model-length.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_stream(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            yield {"type": "stream", "content": "第一段"}
+            yield {"type": "done", "metadata": {"finish_reason": "length"}}
+        else:
+            yield {"type": "stream", "content": "第二段"}
+            yield {"type": "done", "metadata": {"finish_reason": "stop"}}
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch("api_gateway.routes.ai_chat.MAX_AUTO_CONTINUATIONS", 2),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请详细回答"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "chat",
+                "mode": "fast",
+                "user_id": "stu-model-length",
+                "request_id": "req-model-length",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    final_markdown = next(
+        event["data"] for event in events if event["type"] == "final_markdown"
+    )
+    assert final_markdown["content"] == "第一段"
+    assert final_markdown["finish_reason"] == "length"
+    assert final_markdown["partial"] is True
+    assert final_markdown["auto_continuations"] == 0
+    assert final_markdown["auto_continuation_reasons"] == ["length"]
+    assert len(calls) == 1
+
+
+def test_ai_chat_stream_deep_solve_does_not_auto_continue_after_limit(tmp_path: Path):
+    db_path = tmp_path / "ai-chat-deep-solve-no-auto-continue.db"
+    storage_root = tmp_path / "objects"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+        local_storage_root=str(storage_root),
+    )
+    app = create_app(
+        settings_override=settings,
+        queue_client_override=FakeQueueClient(),
+        storage_override=LocalObjectStorage(storage_root),
+    )
+    client = TestClient(app)
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_stream(**kwargs):
+        calls.append(kwargs)
+        yield {"type": "stream", "content": "A" * 48}
+        yield {"type": "stream", "content": "unconsumed"}
+
+    with (
+        patch("api_gateway.routes.ai_chat.stream_capability_via_orchestrator", _fake_stream),
+        patch("api_gateway.routes.ai_chat.CAPABILITY_STREAM_OUTPUT_CHARS", {"deep_solve": 40}),
+        patch("api_gateway.routes.ai_chat.MAX_AUTO_CONTINUATIONS", 2),
+    ):
+        response = client.post(
+            "/v1/ai/chat",
+            json={
+                "messages": [{"role": "user", "content": "请详细解题"}],
+                "model": "qwen3.7-plus",
+                "api_key": "test-key",
+                "capability": "deep_solve",
+                "mode": "auto",
+                "user_id": "stu-deep-no-continue",
+                "request_id": "req-deep-no-continue",
+            },
+        )
+
+    assert response.status_code == 200
+    events = []
+    for line in response.text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[len("data: ") :]))
+
+    final_markdown = next(event["data"] for event in events if event["type"] == "final_markdown")
+    assert final_markdown["finish_reason"] == "server_char_limit"
+    assert final_markdown["partial"] is True
+    assert final_markdown["auto_continuations"] == 0
+    assert final_markdown["continuation_token"] == "req-deep-no-continue:server_char_limit"
+    done = next(event["data"] for event in events if event["type"] == "done")
+    assert done["finish_reason"] == "server_char_limit"
+    assert len(calls) == 1
 
 
 def test_ai_chat_image_deep_solve_stays_deep_solve(tmp_path: Path):
@@ -823,7 +1851,7 @@ def test_ai_chat_image_deep_solve_stays_deep_solve(tmp_path: Path):
             "/v1/ai/chat/non-streaming",
             json={
                 "messages": [{"role": "user", "content": "请严格推导"}],
-                "model": "test-model",
+                "model": "qwen3.7-plus",
                 "api_key": "test-key",
                 "capability": "deep_solve",
                 "mode": "auto",
@@ -842,7 +1870,10 @@ def test_ai_chat_image_deep_solve_stays_deep_solve(tmp_path: Path):
 
     assert response.status_code == 200
     assert captured["capability"] == "deep_solve"
-    assert captured.get("config_overrides") is None
+    assert captured.get("config_overrides") == {
+        "model": "qwen3.7-plus",
+        "max_tokens": 4096,
+    }
 
 
 def test_ai_learning_message_sanitizes_attachment_refs(tmp_path: Path):
@@ -901,6 +1932,154 @@ def test_ai_learning_message_sanitizes_attachment_refs(tmp_path: Path):
     }
     assert "base64" not in attachment
     assert "uri" not in attachment
+
+
+def test_ai_learning_create_message_retries_sqlite_lock(tmp_path: Path):
+    db_path = tmp_path / "ai-learning-message-lock-retry.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+    )
+    app = create_app(settings_override=settings, queue_client_override=FakeQueueClient())
+    client = TestClient(app)
+
+    session_response = client.post(
+        "/v1/ai/sessions",
+        json={"user_id": "stu-lock-retry", "title": "锁重试"},
+    )
+    assert session_response.status_code == 200
+    session_id = session_response.json()["session_id"]
+
+    from api_gateway.chat_service import create_ai_message as real_create_ai_message
+
+    calls = 0
+
+    def _flaky_create_ai_message(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OperationalError(
+                "INSERT INTO ai_chat_messages",
+                {},
+                Exception("database is locked"),
+            )
+        return real_create_ai_message(*args, **kwargs)
+
+    with patch(
+        "api_gateway.routes.ai_learning.create_ai_message",
+        _flaky_create_ai_message,
+    ):
+        response = client.post(
+            f"/v1/ai/sessions/{session_id}/messages",
+            json={
+                "role": "assistant",
+                "content": "lock retry ok",
+                "user_id": "stu-lock-retry",
+            },
+        )
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert response.json()["content"] == "lock retry ok"
+
+
+def test_ai_learning_messages_page_latest_and_before_seq(tmp_path: Path):
+    db_path = tmp_path / "ai-learning-pagination.db"
+    reconfigure_db(f"sqlite:///{db_path}")
+    init_db()
+
+    settings = Settings(
+        database_url=f"sqlite:///{db_path}",
+        redis_url="redis://unused",
+    )
+    app = create_app(settings_override=settings, queue_client_override=FakeQueueClient())
+    client = TestClient(app)
+
+    session_response = client.post(
+        "/v1/ai/sessions",
+        json={"user_id": "stu-page", "title": "分页测试"},
+    )
+    assert session_response.status_code == 200
+    session_id = session_response.json()["session_id"]
+
+    for idx in range(5):
+        message_response = client.post(
+            f"/v1/ai/sessions/{session_id}/messages",
+            json={
+                "role": "user" if idx % 2 == 0 else "assistant",
+                "content": f"message-{idx + 1}",
+                "user_id": "stu-page",
+            },
+        )
+        assert message_response.status_code == 200
+
+    latest_response = client.get(
+        f"/v1/ai/sessions/{session_id}/messages?limit=2",
+    )
+    assert latest_response.status_code == 200
+    latest_messages = latest_response.json()
+    assert [message["content"] for message in latest_messages] == [
+        "message-4",
+        "message-5",
+    ]
+
+    before_seq = latest_messages[0]["runtime_seq"]
+    older_response = client.get(
+        f"/v1/ai/sessions/{session_id}/messages?limit=2&before_seq={before_seq}",
+    )
+    assert older_response.status_code == 200
+    older_messages = older_response.json()
+    assert [message["content"] for message in older_messages] == [
+        "message-2",
+        "message-3",
+    ]
+    assert older_messages[0]["content_truncated"] is False
+
+    long_message_response = client.post(
+        f"/v1/ai/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "content": "x" * 1200,
+            "user_id": "stu-page",
+        },
+    )
+    assert long_message_response.status_code == 200
+
+    truncated_response = client.get(
+        f"/v1/ai/sessions/{session_id}/messages?limit=1&max_content_chars=500",
+    )
+    assert truncated_response.status_code == 200
+    truncated_message = truncated_response.json()[0]
+    assert truncated_message["content_length"] == 1200
+    assert truncated_message["content_truncated"] is True
+    assert truncated_message["history_preview_only"] is True
+    assert truncated_message["full_content_ref"] == long_message_response.json()["message_id"]
+    assert len(truncated_message["content"]) < 700
+
+    full_response = client.get(
+        f"/v1/ai/messages/{truncated_message['message_id']}",
+    )
+    assert full_response.status_code == 200
+    full_message = full_response.json()
+    assert full_message["content"] == "x" * 1200
+    assert full_message["content_truncated"] is False
+    assert full_message["history_preview_only"] is False
+
+    stored_long_response = client.post(
+        f"/v1/ai/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "content": "y" * 7000,
+            "user_id": "stu-page",
+        },
+    )
+    assert stored_long_response.status_code == 200
+    stored_long_message = stored_long_response.json()
+    assert stored_long_message["content"] == "y" * 7000
+    assert stored_long_message["storage_preview_only"] is False
 
 
 def test_api_contract_uploads_and_jobs(tmp_path: Path):
@@ -1172,10 +2351,10 @@ def test_problem_video_server_defaults_use_env_when_mobile_omits_llm_config(monk
     assert llm_config["model"] == "qwen3.6-max-preview"
     assert vision_config["api_key"] == "server-qwen-key"
     assert vision_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    assert vision_config["model"] == "qwen3-vl-plus"
+    assert vision_config["model"] == "qwen3.6-plus-2026-04-02"
     assert ocr_config["api_key"] == "server-qwen-key"
     assert ocr_config["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    assert ocr_config["model"] == "qwen-vl-ocr-latest"
+    assert ocr_config["model"] == "qwen3.5-ocr"
 
 
 def test_problem_video_role_model_env_overrides_are_server_side(monkeypatch):
@@ -1809,3 +2988,52 @@ def test_api_learning_records_rejects_unowned_session_access(tmp_path: Path):
     assert denied_resp.status_code == 400
     denied_payload = denied_resp.json()
     assert denied_payload["error_code"] == "INVALID_REQUEST"
+
+
+def test_normalize_html_line_breaks_converts_br_and_p_tags():
+    assert _normalize_html_line_breaks("a<br>b") == "a\nb"
+    assert _normalize_html_line_breaks("a<br/>b") == "a\nb"
+    assert _normalize_html_line_breaks("a<br />b") == "a\nb"
+    assert _normalize_html_line_breaks("<p>a</p>b") == "\na\nb"
+    assert _normalize_html_line_breaks("no tags") == "no tags"
+
+
+def test_extract_answer_blocks_splits_html_br_content_same_as_markdown():
+    markdown = (
+        "### 1. 核心定义\n"
+        "**勾股定理**描述的是直角三角形。\n\n"
+        "* **文字表述**：两条直角边平方和等于斜边平方。\n"
+        "* **数学公式**：$$a^2 + b^2 = c^2$$\n\n"
+        "### 2. 例子\n"
+        "假设直角边为 3 和 4。\n"
+    )
+    html_version = (
+        markdown.replace("\n\n", "<br><br>")
+        .replace("\n", "<br>")
+        .replace("<br><br>", "<br><br>")
+    )
+
+    md_blocks = _extract_answer_blocks(markdown, request_id="req-md")
+    html_blocks = _extract_answer_blocks(html_version, request_id="req-html")
+
+    assert len(md_blocks) > 1
+    assert len(html_blocks) == len(md_blocks)
+    for md_block, html_block in zip(md_blocks, html_blocks):
+        assert md_block["data"]["type"] == html_block["data"]["type"]
+        assert md_block["data"]["content"] == html_block["data"]["content"]
+
+
+def test_extract_answer_blocks_html_br_produces_multiple_blocks():
+    html = "Line one<br><br>Line two<br>Line three"
+    blocks = _extract_answer_blocks(html, request_id="req-br")
+    assert len(blocks) >= 2
+    contents = [b["data"]["content"] for b in blocks]
+    assert "Line one" in contents
+    assert "Line two" in contents or "Line two\nLine three" in contents
+
+
+def test_extract_math_blocks_extracts_formula_surrounded_by_html_br():
+    html = "前置说明<br>$$a^2 + b^2 = c^2$$<br>后续内容"
+    blocks = _extract_math_blocks(html, request_id="req-math-br")
+    assert len(blocks) == 1
+    assert blocks[0]["data"]["content"] == "a^2 + b^2 = c^2"

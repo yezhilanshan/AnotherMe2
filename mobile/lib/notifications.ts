@@ -16,13 +16,20 @@ let notificationsPromise: Promise<ExpoNotifications | null> | null = null;
 let handlerConfigured = false;
 
 async function loadNotifications(): Promise<ExpoNotifications | null> {
-  if (IS_EXPO_GO) {
+  if (IS_EXPO_GO || Platform.OS === "web") {
     return null;
   }
   if (!notificationsPromise) {
-    notificationsPromise = import("expo-notifications").catch((err) => {
-      console.warn("[notifications] expo-notifications unavailable:", err);
-      return null;
+    notificationsPromise = new Promise<ExpoNotifications | null>((resolve) => {
+      try {
+        // Use require() instead of dynamic import() — Metro/Hermes may not
+        // reliably return a thenable from import() when the module's top-level
+        // initialisation fails (e.g. expo-notifications calling isRunningInExpoGo).
+        resolve(require("expo-notifications") as ExpoNotifications);
+      } catch (err) {
+        console.warn("[notifications] expo-notifications unavailable:", err);
+        resolve(null);
+      }
     });
   }
   return notificationsPromise;

@@ -293,7 +293,9 @@ def serialize_job(job: Job) -> Dict[str, Any]:
     else:
         engine_state = job.engine_state or {}
         partial_result = (
-            engine_state.get("partial_result") if isinstance(engine_state, dict) else None
+            engine_state.get("partial_result")
+            if isinstance(engine_state, dict)
+            else None
         )
         result = job.result_payload or (
             partial_result if isinstance(partial_result, dict) else None
@@ -483,7 +485,9 @@ def fail_jobs_with_missing_input_objects(
     candidates = (
         session.query(Job)
         .filter(
-            Job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value,
+            Job.job_type.in_(
+                [JobType.PROBLEM_VIDEO_GENERATE.value, JobType.PHOTO_MANIM_DIRECT.value]
+            ),
             Job.queue_name.in_(queue_name_list),
             Job.status == JobStatus.QUEUED.value,
         )
@@ -571,7 +575,8 @@ def fail_jobs_with_missing_input_objects(
 
 def _reconcile_running_problem_video_job(session: Session, job: Job) -> bool:
     if (
-        job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value
+        job.job_type
+        not in (JobType.PROBLEM_VIDEO_GENERATE.value, JobType.PHOTO_MANIM_DIRECT.value)
         or job.status != JobStatus.RUNNING.value
     ):
         return False
@@ -670,7 +675,9 @@ def reconcile_running_problem_video_jobs_with_artifacts(
     candidates = (
         session.query(Job)
         .filter(
-            Job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value,
+            Job.job_type.in_(
+                [JobType.PROBLEM_VIDEO_GENERATE.value, JobType.PHOTO_MANIM_DIRECT.value]
+            ),
             Job.status == JobStatus.RUNNING.value,
             Job.queue_name.in_(queue_name_list),
         )
@@ -757,6 +764,16 @@ def mark_job_enqueue_failed(session: Session, job: Job, message: str) -> None:
     _mark_failed(session, job, "JOB_ENQUEUE_FAILED", message)
 
 
+def cancel_job(session: Session, job: Job) -> None:
+    """Cancel a non-terminal job by marking it as failed with a user-cancelled code.
+
+    Only affects jobs that haven't reached a terminal state (succeeded / failed).
+    """
+    if job.status in (JobStatus.SUCCEEDED.value, JobStatus.FAILED.value):
+        return  # already terminal, nothing to cancel
+    _mark_failed(session, job, "JOB_CANCELLED", "Job cancelled by user")
+
+
 def _mark_succeeded(session: Session, job: Job, result_payload: Dict[str, Any]) -> None:
     _clear_retry_schedule(job)
     job.status = JobStatus.SUCCEEDED.value
@@ -771,7 +788,10 @@ def _mark_succeeded(session: Session, job: Job, result_payload: Dict[str, Any]) 
 
 
 def _is_non_retriable_execution_error(job: Job, exc: Exception) -> bool:
-    if job.job_type != JobType.PROBLEM_VIDEO_GENERATE.value:
+    if job.job_type not in (
+        JobType.PROBLEM_VIDEO_GENERATE.value,
+        JobType.PHOTO_MANIM_DIRECT.value,
+    ):
         return False
     return isinstance(exc, MissingInputObjectError)
 
@@ -1415,6 +1435,126 @@ def _run_problem_video_generate(
                 pass
 
 
+def _run_photo_manim_direct(
+    session: Session,
+    job: Job,
+    payload: Dict[str, Any],
+    settings: Settings,
+    storage: ObjectStorage,
+) -> Dict[str, Any]:
+    """
+    Run the photo-manim-direct pipeline.
+
+    Simplified single-step pipeline that calls a vision LLM to solve the
+    problem and generate Manim code, then renders it to video.
+    """
+    from .anotherme_executor import run_photo_manim_direct_job
+
+    trace = TraceEventEmitter(job_id=job.id)
+    trace.emit_workflow_started(
+        total_steps=2, message="Photo-manim-direct pipeline started"
+    )
+
+    _mark_running(
+        session, job, "calling_vision_llm", "Calling vision LLM to solve problem", 10
+    )
+    session.commit()
+
+    stop_polling = threading.Event()
+    poll_thread: threading.Thread | None = None
+
+    def _start_polling(output_dir: str) -> None:
+        nonlocal poll_thread
+        steps_file = Path(output_dir) / "intermediate" / "script_steps.json"
+
+        def _poll():
+            while not stop_polling.wait(3):
+                try:
+                    if steps_file.exists():
+                        data = json.loads(steps_file.read_text(encoding="utf-8"))
+                        if data.get("steps"):
+                            job.engine_state = {
+                                **(job.engine_state or {}),
+                                "partial_result": data,
+                            }
+                            session.merge(job)
+                            session.commit()
+                except Exception:
+                    pass
+
+        poll_thread = threading.Thread(target=_poll, daemon=True)
+        poll_thread.start()
+
+    try:
+        exec_result = run_photo_manim_direct_job(
+            payload,
+            storage=storage,
+            temp_root=settings.worker_temp_root,
+            output_root=settings.worker_output_root,
+            keep_run_output=settings.keep_run_output,
+            on_output_dir_ready=_start_polling,
+        )
+    finally:
+        stop_polling.set()
+        if poll_thread:
+            poll_thread.join(timeout=5)
+
+    run_output_dir = _resolve_problem_video_run_output_dir(exec_result.video_path)
+
+    trace.complete_step(
+        "video_generation", payload={"duration_sec": exec_result.duration_sec}
+    )
+
+    _mark_running(session, job, "uploading_artifacts", "Uploading rendered video", 80)
+    session.commit()
+
+    try:
+        video_url, debug_url, scene_package_url = _upload_problem_video_artifacts(
+            session, job, storage, trace, exec_result, render_mode="video"
+        )
+
+        trace.emit_workflow_completed(
+            message="Photo-manim-direct pipeline completed successfully"
+        )
+
+        job.engine_state = {
+            **(job.engine_state or {}),
+            "duration_sec": exec_result.duration_sec,
+            "script_steps_count": exec_result.script_steps_count,
+            "debug_bundle_url": debug_url,
+            "scene_package_url": scene_package_url,
+            "run_output_dir": str(run_output_dir) if run_output_dir else None,
+            "pipeline": "photo_manim_direct",
+            "trace_events": trace.to_event_list(),
+        }
+        _persist_trace_events(session, job.id, trace)
+        session.commit()
+
+        result = {
+            "video_url": video_url,
+            "duration_sec": exec_result.duration_sec,
+            "script_steps_count": exec_result.script_steps_count,
+            "debug_bundle_url": debug_url,
+            "scene_package_url": scene_package_url,
+            "pipeline": "photo_manim_direct",
+            "trace_events": trace.to_event_list(),
+        }
+        return result
+    finally:
+        if (
+            (not settings.keep_run_output)
+            and run_output_dir
+            and run_output_dir.exists()
+        ):
+            run_root = run_output_dir.parent
+            shutil.rmtree(run_output_dir, ignore_errors=True)
+            try:
+                if run_root.exists() and not any(run_root.iterdir()):
+                    run_root.rmdir()
+            except OSError:
+                pass
+
+
 def _create_inline_child_job(
     session: Session,
     parent: Job,
@@ -1656,6 +1796,8 @@ def execute_job(
         return _run_course_generate(session, job, payload, settings, storage)
     if job.job_type == JobType.PROBLEM_VIDEO_GENERATE.value:
         return _run_problem_video_generate(session, job, payload, settings, storage)
+    if job.job_type == JobType.PHOTO_MANIM_DIRECT.value:
+        return _run_photo_manim_direct(session, job, payload, settings, storage)
     if job.job_type == JobType.STUDY_PACKAGE_GENERATE.value:
         return _run_study_package(session, job, payload, settings, storage)
     if job.job_type == JobType.LEARNING_RECORD_EXTRACT.value:

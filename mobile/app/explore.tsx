@@ -128,7 +128,7 @@ export default function ApiTestScreen() {
   const showNetworkHelp = () => {
     Alert.alert(
       '网络连接帮助',
-      `当前 Gateway 地址：\n${GATEWAY_URL}\n\n如果连接失败，请检查：\n\n1. Python Gateway 是否已启动\n   运行：python run_gateway.py\n\n2. 手机和电脑是否在同一 WiFi 网络\n\n3. Windows 防火墙是否允许 ${GATEWAY_PORT} 端口\n   控制面板 → 防火墙 → 允许应用\n\n4. 如果端口被占用，可以修改端口：\n   设置环境变量 GATEWAY_PORT=${GATEWAY_PORT}`,
+      `当前 Gateway 地址：\n${GATEWAY_URL}\n\n如果连接失败，请检查：\n\n1. Python Gateway 是否已启动\n   运行：python run_gateway.py\n\n2. 手机和电脑是否在同一 WiFi 网络\n\n3. Windows 防火墙是否允许 ${GATEWAY_PORT} 端口\n   控制面板 → 防火墙 → 允许应用\n\n4. 如果端口被占用，Gateway 设置 GATEWAY_PORT，移动端同步设置 EXPO_PUBLIC_GATEWAY_PORT 或 EXPO_PUBLIC_GATEWAY_URL`,
       [{ text: '知道了' }]
     );
   };
@@ -219,10 +219,10 @@ export default function ApiTestScreen() {
             1. 打开终端，进入目录：{'\n'}
             <Text style={styles.code}>cd D:\AnotherMe-main\AnotherMe\anotherme2_engine</Text>{'\n\n'}
             2. 运行 Gateway：{'\n'}
-            <Text style={styles.code}>D:\AnotherMe-main\.venv\Scripts\python.exe run_gateway.py</Text>{'\n\n'}
+            <Text style={styles.code}>conda run -n AnotherMe-V2 python run_gateway.py</Text>{'\n\n'}
             3. 看到 "Uvicorn running on http://0.0.0.0:{GATEWAY_PORT}" 表示启动成功{'\n\n'}
             4. 如果端口被占用，设置环境变量：{'\n'}
-            <Text style={styles.code}>set GATEWAY_PORT=8082</Text>
+            <Text style={styles.code}>set GATEWAY_PORT=8083</Text>
           </Text>
         </View>
       </ScrollView>

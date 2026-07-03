@@ -10,6 +10,7 @@
 const CAPABILITY_IDS = {
   ai_tutor_chat: 'chat',
   deep_solve: 'deep_solve',
+  visual_solve_fast: 'visual_solve_fast',
   deep_question: 'deep_question',
   deep_research: 'deep_research',
   course_generate: 'course_generate',
@@ -23,6 +24,14 @@ const CAPABILITY_IDS = {
 
 function normalizeCapability(raw) {
   return raw || CAPABILITY_IDS.ai_tutor_chat;
+}
+
+const LIVE_ANSWER_STEP_CAPABILITIES = new Set([
+  CAPABILITY_IDS.deep_solve,
+]);
+
+function supportsLiveAnswerSteps(capability) {
+  return LIVE_ANSWER_STEP_CAPABILITIES.has(normalizeCapability(capability));
 }
 
 // === 极简断言 ===
@@ -66,6 +75,14 @@ test('6 个 UI 功能 id 直接透传', () => {
 
 test('未知字符串原样透传（让 Gateway 决定）', () => {
   assertEq(normalizeCapability('totally-unknown-cap'), 'totally-unknown-cap');
+});
+
+test('只有解题类 capability 消费 step_* 事件', () => {
+  assertEq(supportsLiveAnswerSteps('deep_solve'), true);
+  assertEq(supportsLiveAnswerSteps('visual_solve_fast'), false);
+  assertEq(supportsLiveAnswerSteps('chat'), false);
+  assertEq(supportsLiveAnswerSteps('auto'), false);
+  assertEq(supportsLiveAnswerSteps(''), false);
 });
 
 console.log(`\n通过 ${passed} / 失败 ${failed}`);

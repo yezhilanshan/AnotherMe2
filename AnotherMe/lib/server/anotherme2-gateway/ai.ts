@@ -7,6 +7,9 @@ import type {
   GatewayLearningRecord,
   LearningRecordExtractResult,
 } from './types';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('GatewayAI');
 
 export async function listGatewayAISessions(params: {
   userId: string;
@@ -174,7 +177,7 @@ export async function listGatewayAILearningRecords(params: {
  * 通过 AnotherMe2 Python 网关调用 DeepTutor engine 的 agentic chat capability。
  * 返回一个 ReadableStream，直接透传网关的 SSE 事件流。
  */
-export function streamGatewayChat(params: {
+export async function streamGatewayChat(params: {
   messages: Array<{ role: string; content: string }>;
   model: string;
   apiKey: string;
@@ -189,8 +192,12 @@ export function streamGatewayChat(params: {
   signal?: AbortSignal;
 }): Promise<Response> {
   const url = `${getGatewayBaseUrl()}/v1/ai/chat`;
+  const t_start = Date.now();
+  log.info(
+    `Gateway chat request -> url=${url} capability=${params.capability || 'chat'} model=${params.model} msgs=${params.messages.length}`,
+  );
 
-  return fetch(url, {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       ...buildGatewayHeaders(),
@@ -214,4 +221,7 @@ export function streamGatewayChat(params: {
     signal: params.signal,
     cache: 'no-store',
   });
+
+  log.info(`Gateway chat response status=${response.status} ms=${Date.now() - t_start}`);
+  return response;
 }

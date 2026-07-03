@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
 from ..config import Settings
+from ..model_catalog import load_model_catalog
 from .auth import require_token
 
 
@@ -111,5 +112,12 @@ def create_server_config_router(settings: Settings) -> APIRouter:
             "video": build_providers(VIDEO_PROVIDERS),
             "webSearch": build_providers(WEB_SEARCH_PROVIDERS),
         }
+
+    @router.get("/v1/server/models")
+    def list_models(
+        authorization: str | None = Header(default=None),
+    ) -> dict:
+        require_token(settings, authorization)
+        return load_model_catalog().to_dict()
 
     return router

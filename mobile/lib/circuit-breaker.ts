@@ -127,9 +127,10 @@ export class CircuitBreaker {
 
 /**
  * Global circuit breaker for streaming chat requests.
- * Threshold: 3 failures → open for 30 seconds.
+ * Threshold: 5 failures → open for 15 seconds.
+ * More lenient for mobile network instability.
  */
 export const streamingCircuitBreaker = new CircuitBreaker({
-  failureThreshold: 3,
-  recoveryTimeout: 30,
+  failureThreshold: 5,
+  recoveryTimeout: 15,
 });

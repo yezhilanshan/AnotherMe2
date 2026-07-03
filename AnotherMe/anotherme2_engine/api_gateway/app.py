@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from agents.foundation.capability_registry import (
+    CapabilityRegistry,
+    create_default_registry,
+)
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,25 +21,24 @@ from . import db as db_module
 from .config import Settings, get_settings
 from .db import get_db, init_db, reconfigure_db
 from .job_service import purge_prestart_nonterminal_jobs
-from agents.foundation.capability_registry import CapabilityRegistry, create_default_registry
 from .models import Job
 from .queueing import build_queue_client
-from .routes.auth import require_token
+from .routes.admin import create_admin_router
 from .routes.ai_chat import create_ai_chat_router
 from .routes.ai_learning import create_ai_learning_router
+from .routes.auth import require_token
+from .routes.classroom import create_classroom_router
+from .routes.co_writer import router as co_writer_router
 from .routes.core import create_core_router
+from .routes.documents import create_documents_router
 from .routes.jobs import create_jobs_router
 from .routes.knowledge import create_knowledge_router
 from .routes.live_book import create_live_book_router
-from .routes.co_writer import router as co_writer_router
-from .routes.messages import create_messages_router
-from .routes.uploads import create_uploads_router
 from .routes.media import create_media_router
-from .routes.documents import create_documents_router
-from .routes.tools import create_tools_router
+from .routes.messages import create_messages_router
 from .routes.server_config import create_server_config_router
-from .routes.classroom import create_classroom_router
-from .routes.admin import create_admin_router
+from .routes.tools import create_tools_router
+from .routes.uploads import create_uploads_router
 from .storage import ObjectStorage, build_storage
 
 
@@ -52,13 +55,17 @@ class ConversationSocketHub:
         self._connections: dict[str, dict[str, set[WebSocket]]] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, conversation_id: str, user_id: str, websocket: WebSocket) -> None:
+    async def connect(
+        self, conversation_id: str, user_id: str, websocket: WebSocket
+    ) -> None:
         await websocket.accept()
         async with self._lock:
             by_user = self._connections.setdefault(conversation_id, {})
             by_user.setdefault(user_id, set()).add(websocket)
 
-    async def disconnect(self, conversation_id: str, user_id: str, websocket: WebSocket) -> None:
+    async def disconnect(
+        self, conversation_id: str, user_id: str, websocket: WebSocket
+    ) -> None:
         async with self._lock:
             by_user = self._connections.get(conversation_id)
             if not by_user:
@@ -110,7 +117,9 @@ class ConversationSocketHub:
                 if not by_user:
                     self._connections.pop(conversation_id, None)
 
-    async def disconnect_user(self, conversation_id: str, user_id: str, code: int = 4403) -> None:
+    async def disconnect_user(
+        self, conversation_id: str, user_id: str, code: int = 4403
+    ) -> None:
         sockets: list[WebSocket] = []
         async with self._lock:
             by_user = self._connections.get(conversation_id)
@@ -165,7 +174,9 @@ class ConversationEventBus:
             )
             self._pubsub = self._sub_client.pubsub()
             await self._pubsub.subscribe(self._CHANNEL)
-            self._task = asyncio.create_task(self._listen(), name="conversation-event-bus")
+            self._task = asyncio.create_task(
+                self._listen(), name="conversation-event-bus"
+            )
             self._enabled = True
         except Exception:
             await self.stop()
@@ -213,7 +224,9 @@ class ConversationEventBus:
             "payload": payload,
         }
         try:
-            await self._pub_client.publish(self._CHANNEL, json.dumps(envelope, ensure_ascii=False))
+            await self._pub_client.publish(
+                self._CHANNEL, json.dumps(envelope, ensure_ascii=False)
+            )
         except Exception:
             pass
 
@@ -222,7 +235,9 @@ class ConversationEventBus:
             return
         while True:
             try:
-                message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                message = await self._pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -269,6 +284,9 @@ def create_app(
     storage_override: ObjectStorage | None = None,
 ) -> FastAPI:
     settings = settings_override or get_settings()
+    if settings_override is not None:
+        reconfigure_db(settings.database_url)
+        init_db()
     app = FastAPI(title=settings.app_name)
 
     app.add_middleware(
@@ -276,8 +294,8 @@ def create_app(
         allow_origins=[
             "http://localhost:3000",
             "http://127.0.0.1:3000",
-            "http://localhost:8080",
-            "http://127.0.0.1:8080",
+            "http://localhost:8083",
+            "http://127.0.0.1:8083",
             "*",
         ],
         allow_credentials=True,
@@ -305,7 +323,8 @@ def create_app(
             missing_tools = [
                 tool_id
                 for tool_id in (capability.required_tools if capability else [])
-                if not capability_registry.get_tool(tool_id) or not capability_registry.get_tool(tool_id).available
+                if not capability_registry.get_tool(tool_id)
+                or not capability_registry.get_tool(tool_id).available
             ]
             raise HTTPException(
                 status_code=503,
@@ -329,6 +348,7 @@ def create_app(
         # Run backend data migrations
         try:
             from tutor_engine.services.migration_registry import run_all_migrations
+
             migration_result = run_all_migrations()
             if migration_result["ran"] > 0 or migration_result["errors"]:
                 print(
@@ -348,7 +368,9 @@ def create_app(
                 )
                 startup_db.commit()
                 if purged:
-                    print(f"[gateway-app] purged {purged} pre-restart queued/running job(s) on startup")
+                    print(
+                        f"[gateway-app] purged {purged} pre-restart queued/running job(s) on startup"
+                    )
             except Exception:
                 startup_db.rollback()
                 raise
@@ -361,13 +383,18 @@ def create_app(
                     queue_targets = [
                         settings.queue_course,
                         settings.queue_problem_video,
+                        settings.queue_photo_manim,
                         settings.queue_package,
                         settings.queue_learning_record,
                     ]
                     purged_messages = int(purge_method(queue_targets) or 0)
                     if purged_messages:
-                        print(f"[gateway-app] purged {purged_messages} queued message(s) on startup")
-        elif settings.purge_prestart_jobs_on_startup and not settings.startup_purge_armed:
+                        print(
+                            f"[gateway-app] purged {purged_messages} queued message(s) on startup"
+                        )
+        elif (
+            settings.purge_prestart_jobs_on_startup and not settings.startup_purge_armed
+        ):
             print(
                 "[gateway-app] startup purge is requested but skipped because "
                 "GATEWAY_STARTUP_PURGE_ARMED is not enabled"
@@ -390,6 +417,7 @@ def create_app(
 
     # 静态文件服务：让 /api/outputs/ 可以访问 math_animator 等生成的视频/图片
     from tutor_engine.services.path_service import get_path_service
+
     outputs_dir = str(get_path_service().user_data_dir)
     app.mount("/api/outputs", StaticFiles(directory=outputs_dir), name="outputs")
     app.include_router(create_live_book_router(settings))
@@ -427,7 +455,13 @@ def create_app(
         _require_token(settings, authorization)
         capability = capability_registry.get_capability(capability_id)
         if not capability:
-            raise HTTPException(status_code=404, detail={"error_code": "CAPABILITY_NOT_FOUND", "message": f"Capability '{capability_id}' not found"})
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error_code": "CAPABILITY_NOT_FOUND",
+                    "message": f"Capability '{capability_id}' not found",
+                },
+            )
         available = capability_registry.is_capability_available(capability_id)
         return {
             **capability.to_dict(),
@@ -461,7 +495,10 @@ def create_app(
         _require_token(settings, authorization)
         job = db.get(Job, job_id)
         if not job:
-            raise HTTPException(status_code=404, detail={"error_code": "JOB_NOT_FOUND", "message": "Job not found"})
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "JOB_NOT_FOUND", "message": "Job not found"},
+            )
 
         capability_map = {
             "course_generate": "course_generate",
@@ -471,14 +508,19 @@ def create_app(
         }
         capability_id = capability_map.get(job.job_type)
         if not capability_id:
-            return {"job_id": job_id, "job_type": job.job_type, "guard_result": "unknown_job_type"}
+            return {
+                "job_id": job_id,
+                "job_type": job.job_type,
+                "guard_result": "unknown_job_type",
+            }
 
         available = capability_registry.is_capability_available(capability_id)
         capability = capability_registry.get_capability(capability_id)
         missing_tools = [
             tool_id
             for tool_id in (capability.required_tools if capability else [])
-            if not capability_registry.get_tool(tool_id) or not capability_registry.get_tool(tool_id).available
+            if not capability_registry.get_tool(tool_id)
+            or not capability_registry.get_tool(tool_id).available
         ]
 
         if not available:
@@ -508,20 +550,35 @@ def create_app(
             return JSONResponse(status_code=exc.status_code, content=body)
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error_code": "HTTP_ERROR", "message": str(exc.detail), "request_id": request_id},
+            content={
+                "error_code": "HTTP_ERROR",
+                "message": str(exc.detail),
+                "request_id": request_id,
+            },
         )
 
     @app.exception_handler(ValueError)
     async def value_error_handler(request, exc: ValueError):
         request_id = getattr(request.state, "request_id", None)
-        return JSONResponse(status_code=400, content={"error_code": "INVALID_REQUEST", "message": str(exc), "request_id": request_id})
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error_code": "INVALID_REQUEST",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        )
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request, exc: Exception):
         request_id = getattr(request.state, "request_id", None)
         return JSONResponse(
             status_code=500,
-            content={"error_code": "INTERNAL_ERROR", "message": "An unexpected error occurred", "request_id": request_id},
+            content={
+                "error_code": "INTERNAL_ERROR",
+                "message": "An unexpected error occurred",
+                "request_id": request_id,
+            },
         )
 
     @app.middleware("http")

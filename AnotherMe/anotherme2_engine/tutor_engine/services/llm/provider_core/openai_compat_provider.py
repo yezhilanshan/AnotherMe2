@@ -304,7 +304,7 @@ class OpenAICompatProvider(LLMProvider):
 
         wire_effort = reasoning_effort
         if spec and spec.name == "dashscope" and semantic_effort == "minimal":
-            wire_effort = "minimum"
+            wire_effort = None
 
         if wire_effort:
             kwargs["reasoning_effort"] = wire_effort

@@ -36,7 +36,6 @@ export function LoginForm() {
 
       await refresh();
       router.replace('/');
-      router.refresh();
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : '登录失败');
     } finally {
@@ -45,7 +44,10 @@ export function LoginForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-5">
+    <form
+      onSubmit={handleSubmit}
+      className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-5"
+    >
       <div>
         <h1 className="text-2xl font-semibold text-gray-900">欢迎回来</h1>
         <p className="text-sm text-gray-500 mt-2">登录后继续使用课堂与互动功能。</p>

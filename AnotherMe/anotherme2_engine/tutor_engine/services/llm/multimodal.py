@@ -21,6 +21,9 @@ from .capabilities import supports_vision
 logger = logging.getLogger(__name__)
 
 MIME_FALLBACK = "image/png"
+# 图片注入总量上限（base64 字符数）— 防止单请求消耗过多内存/token
+# 20MB 解码 ≈ 27MB base64 字符
+MAX_INJECT_IMAGE_BASE64_CHARS = 20 * 1024 * 1024 * 4 // 3
 
 
 @dataclass
@@ -50,10 +53,10 @@ def _build_openai_image_part(
     mime_type: str,
     url: str = "",
 ) -> dict[str, Any]:
-    if url:
-        image_url = url
-    else:
+    if base64_data:
         image_url = f"data:{mime_type};base64,{base64_data}"
+    else:
+        image_url = url
     return {"type": "image_url", "image_url": {"url": image_url}}
 
 
@@ -142,17 +145,43 @@ def prepare_multimodal_messages(
         )
 
     is_anthropic = (binding or "").lower() in ("anthropic", "claude")
+
+    # 总量检查：累计 base64 大小，超限时跳过末尾图片
+    total_b64_chars = 0
+    injectable: list[Any] = []
+    for att in image_attachments:
+        b64 = getattr(att, "base64", "") or ""
+        url = getattr(att, "url", "") or ""
+        size = len(b64) + len(url)
+        if total_b64_chars + size > MAX_INJECT_IMAGE_BASE64_CHARS and injectable:
+            logger.warning(
+                "Skipping image '%s': total base64 would exceed %d MB limit",
+                getattr(att, "filename", "unknown"),
+                MAX_INJECT_IMAGE_BASE64_CHARS * 3 // 4 // (1024 * 1024),
+            )
+            continue
+        total_b64_chars += size
+        injectable.append(att)
+
+    any_skipped = len(injectable) < len(image_attachments)
+    if any_skipped:
+        logger.warning(
+            "Injected %d/%d images (total size limit reached)",
+            len(injectable),
+            len(image_attachments),
+        )
+
     _inject_images(
         messages,
         last_user_idx,
-        image_attachments,
+        injectable,
         anthropic=is_anthropic,
     )
 
     return MultimodalResult(
         messages=messages,
         vision_supported=True,
-        images_stripped=False,
+        images_stripped=any_skipped,
     )
 
 
@@ -188,6 +217,19 @@ def _inject_images(
         url = getattr(att, "url", "") or ""
 
         if not b64 and not url:
+            filename = getattr(att, "filename", "") or "unknown"
+            hydration_err = getattr(att, "_hydration_error", "")
+            if hydration_err:
+                logger.warning(
+                    "Skipping image attachment '%s' due to hydration error: %s",
+                    filename,
+                    hydration_err,
+                )
+            else:
+                logger.warning(
+                    "Skipping image attachment '%s': no base64 data and no URL",
+                    filename,
+                )
             continue
 
         if anthropic:

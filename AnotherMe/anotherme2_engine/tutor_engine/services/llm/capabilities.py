@@ -203,44 +203,64 @@ def _as_bool(value: object) -> bool | None:
 def _model_catalog_capability(model: str | None, capability: str) -> bool | None:
     if not model:
         return None
+    model_key = model.strip().lower()
 
     try:
         from tutor_engine.services.config.model_catalog import get_model_catalog_service
 
         service = get_model_catalog_service()
         catalog = service.load()
+
+        models: list[dict] = []
+        active = service.get_active_model(catalog, "llm")
+        if isinstance(active, dict):
+            models.append(active)
+        for profile in catalog.get("services", {}).get("llm", {}).get("profiles", []):
+            for item in profile.get("models", []):
+                if isinstance(item, dict):
+                    models.append(item)
+        for item in models:
+            configured = str(item.get("model") or item.get("id") or "").strip().lower()
+            if configured != model_key:
+                continue
+            direct_value = _as_bool(item.get(capability))
+            if direct_value is not None:
+                return direct_value
+            capabilities = item.get("capabilities")
+            if isinstance(capabilities, dict):
+                nested_value = _as_bool(capabilities.get(capability))
+                if nested_value is not None:
+                    return nested_value
+                if capability == "supports_vision":
+                    vision_value = _as_bool(capabilities.get("vision"))
+                    if vision_value is not None:
+                        return vision_value
     except Exception:
-        return None
+        pass
 
-    models: list[dict] = []
-    active = service.get_active_model(catalog, "llm")
-    if isinstance(active, dict):
-        models.append(active)
+    # 第二优先级（fallback）：网关的 mobile/config/models.json
+    # 确保 LLM 层与网关使用同一份权威模型能力目录。
+    try:
+        import json
+        from pathlib import Path
 
-    for profile in catalog.get("services", {}).get("llm", {}).get("profiles", []):
-        for item in profile.get("models", []):
-            if isinstance(item, dict):
-                models.append(item)
-
-    model_key = model.strip().lower()
-    for item in models:
-        configured = str(item.get("model") or item.get("id") or "").strip().lower()
-        if configured != model_key:
-            continue
-
-        direct_value = _as_bool(item.get(capability))
-        if direct_value is not None:
-            return direct_value
-
-        capabilities = item.get("capabilities")
-        if isinstance(capabilities, dict):
-            nested_value = _as_bool(capabilities.get(capability))
-            if nested_value is not None:
-                return nested_value
-            if capability == "supports_vision":
-                vision_value = _as_bool(capabilities.get("vision"))
-                if vision_value is not None:
-                    return vision_value
+        current = Path(__file__).resolve()
+        for parent in current.parents:
+            candidate = parent / "mobile" / "config" / "models.json"
+            if candidate.exists():
+                mobile_config = json.loads(candidate.read_text(encoding="utf-8"))
+                mobile_models = mobile_config.get("models", [])
+                for item in mobile_models:
+                    item_id = str(item.get("id", "")).strip().lower()
+                    if item_id != model_key:
+                        continue
+                    if capability == "supports_vision":
+                        return bool(item.get("supportsVision"))
+                    if capability == "supports_tools":
+                        return bool(item.get("supportsTools"))
+                break
+    except Exception:
+        pass
 
     return None
 
@@ -279,7 +299,9 @@ def get_capability(
     if model:
         model_lower = model.lower()
         # Sort by pattern length descending to match most specific first
-        for pattern, overrides in sorted(MODEL_OVERRIDES.items(), key=lambda x: -len(x[0])):
+        for pattern, overrides in sorted(
+            MODEL_OVERRIDES.items(), key=lambda x: -len(x[0])
+        ):
             if model_lower.startswith(pattern):
                 if capability in overrides:
                     return overrides[capability]
@@ -320,7 +342,9 @@ def disable_response_format_at_runtime(binding: str | None, model: str | None) -
     _RUNTIME_DISABLED_RESPONSE_FORMAT.add((binding.lower(), model.lower()))
 
 
-def is_response_format_disabled_at_runtime(binding: str | None, model: str | None) -> bool:
+def is_response_format_disabled_at_runtime(
+    binding: str | None, model: str | None
+) -> bool:
     """Return True if (binding, model) was disabled via :func:`disable_response_format_at_runtime`."""
     if not binding or not model:
         return False

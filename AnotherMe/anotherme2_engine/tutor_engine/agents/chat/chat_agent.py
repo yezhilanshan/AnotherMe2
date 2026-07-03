@@ -267,6 +267,9 @@ class ChatAgent(BaseAgent):
         self,
         messages: list[dict[str, Any]],
         attachments: list[Any] | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Generate streaming response from LLM.
@@ -300,6 +303,9 @@ class ChatAgent(BaseAgent):
             messages=messages,
             stage="chat_stream",
             attachments=attachments,
+            model=model,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         ):
             yield chunk
 

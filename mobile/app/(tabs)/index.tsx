@@ -1,556 +1,709 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
+  Image,
   RefreshControl,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useChatStore } from '../../lib/store';
-import { api } from '../../lib/api';
-import { USER_ID, GATEWAY_URL, testGatewayConnection } from '../../lib/config';
-import { colors } from '../../lib/theme';
-import type { ReviewPlanItem, Session, LearningEventStats } from '../../lib/types';
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useChatStore } from "../../lib/store";
+import { api } from "../../lib/api";
+import { USER_ID, GATEWAY_URL, testGatewayConnection } from "../../lib/config";
+import { colors } from "../../lib/theme";
+import { BackgroundImage } from "../../components/ui/BackgroundImage";
+import type { LearningEventStats, ReviewPlanItem } from "../../lib/types";
+
+interface ClassroomSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  scenes_count: number;
+  scene_types?: string[];
+}
+
+// 参考图片风格：桃色背景 + 紫/橙强调色
+const PEACH_OVERLAY = "rgba(255, 245, 240, 0.78)";
+const PURPLE = "#6B5CE7";
+const PURPLE_LIGHT = "#EDE9FF";
+const ORANGE = "#FF8C61";
+const ORANGE_LIGHT = "#FFE8E0";
+const GLASS_BG = "rgba(255, 252, 249, 0.88)";
+const GLASS_BORDER = "rgba(255, 255, 255, 0.6)";
+const CARD_SHADOW = {
+  shadowColor: "#5A3E36",
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.08,
+  shadowRadius: 14,
+  elevation: 4,
+};
+
+const WEEK_LABELS = ["一", "二", "三", "四", "五", "六", "日"];
+
+function shortDate(value?: string): string {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleDateString("zh-CN", {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function textField(profile: Record<string, unknown> | null, keys: string[]): string {
+  if (!profile) return "";
+  for (const key of keys) {
+    const value = profile[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value) && value.length) return value.map(String).join("、");
+  }
+  return "";
+}
+
+function estimateMinutes(classroom: ClassroomSummary): number {
+  return Math.max(15, Math.round((classroom.scenes_count || 1) * 18));
+}
+
+function buildWeekStudyBuckets(classrooms: ClassroomSummary[]) {
+  const buckets = WEEK_LABELS.map((name) => ({ name, minutes: 0 }));
+  const now = Date.now();
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  classrooms.forEach((classroom) => {
+    const created = new Date(classroom.created_at).getTime();
+    if (!Number.isFinite(created) || now - created > sevenDays) return;
+    const day = new Date(created).getDay();
+    const index = day === 0 ? 6 : day - 1;
+    buckets[index].minutes += estimateMinutes(classroom);
+  });
+  return buckets;
+}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { sessions, loadSessions, createSession, switchSession, sessionsLoaded } = useChatStore();
-  const reviewPlan = useChatStore(s => s.learningContext.reviewPlan || []);
-  const refreshLearningContext = useChatStore(s => s.refreshLearningContext);
+  const reviewPlan = useChatStore((s) => s.learningContext.reviewPlan || []);
+  const refreshLearningContext = useChatStore((s) => s.refreshLearningContext);
   const [stats, setStats] = useState<LearningEventStats | null>(null);
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [classrooms, setClassrooms] = useState<ClassroomSummary[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'checking' | 'ok' | 'fail' | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState<
+    "checking" | "ok" | "fail" | null
+  >(null);
+
+  const loadDashboard = useCallback(async () => {
+    try {
+      const [statsData, profileData, classroomData] = await Promise.all([
+        api.learningEvents.getStats(USER_ID).catch(() => null),
+        api.students.getProfile(USER_ID).catch(() => null),
+        api.classroom.list(80).catch(() => ({ classrooms: [] })),
+      ]);
+      setStats(statsData as unknown as LearningEventStats | null);
+      setProfile(profileData as Record<string, unknown> | null);
+      setClassrooms(
+        ((classroomData as { classrooms?: ClassroomSummary[] }).classrooms || [])
+          .slice()
+          .sort(
+            (a, b) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          ),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const checkConnection = useCallback(async () => {
+    setConnectionStatus("checking");
+    const result = await testGatewayConnection();
+    setConnectionStatus(result.ok ? "ok" : "fail");
+    if (!result.ok) {
+      console.warn("[home] Gateway 连接失败:", result.message);
+    }
+  }, []);
 
   useEffect(() => {
-    loadSessions();
-    loadStats();
     refreshLearningContext();
+    loadDashboard();
     checkConnection();
-  }, []);
+  }, [checkConnection, loadDashboard, refreshLearningContext]);
 
   useFocusEffect(
     useCallback(() => {
       refreshLearningContext();
-      loadStats();
-    }, [refreshLearningContext]),
+      loadDashboard();
+    }, [loadDashboard, refreshLearningContext]),
   );
-
-  const checkConnection = async () => {
-    setConnectionStatus('checking');
-    const result = await testGatewayConnection();
-    setConnectionStatus(result.ok ? 'ok' : 'fail');
-    if (!result.ok) {
-      console.warn('[home] Gateway 连接失败:', result.message);
-    }
-  };
-
-  const loadStats = async () => {
-    try {
-      const result = await api.learningEvents.getStats(USER_ID);
-      setStats(result as unknown as LearningEventStats);
-    } catch {}
-  };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadSessions(), loadStats(), refreshLearningContext(), checkConnection()]);
+    await Promise.all([
+      refreshLearningContext(),
+      loadDashboard(),
+      checkConnection(),
+    ]);
     setRefreshing(false);
-  }, [loadSessions, refreshLearningContext]);
+  }, [checkConnection, loadDashboard, refreshLearningContext]);
 
-  const handleNewChat = async () => {
-    const id = await createSession('新对话');
-    switchSession(id);
-    router.push('/chat');
-  };
-
-  const handleOpenSession = async (sessionId: string) => {
-    await switchSession(sessionId);
-    router.push('/chat');
-  };
-
-  const handleOpenReview = (item: ReviewPlanItem) => {
-    router.push({
-      pathname: '/chat',
-      params: {
-        reviewKnowledgePointId: item.knowledgePointId,
-        reviewTitle: item.name,
-        reviewMastery: String(item.mastery),
-        reviewReason: item.reason,
-        reviewMaterial: item.material,
-        reviewCheckQuestion: item.checkQuestion,
-        reviewIntervalDays: String(item.intervalDays),
-        reviewNextReviewAt: item.nextReviewAt,
-      },
-    });
-  };
-
-  const formatDate = (dateStr: string) => {
-    try {
-      return new Date(dateStr).toLocaleDateString('zh-CN', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
+  const handleOpenReview = useCallback(
+    (item: ReviewPlanItem) => {
+      router.push({
+        pathname: "/chat",
+        params: {
+          reviewKnowledgePointId: item.knowledgePointId,
+          reviewTitle: item.name,
+          reviewMastery: String(item.mastery),
+          reviewReason: item.reason,
+          reviewMaterial: item.material,
+          reviewCheckQuestion: item.checkQuestion,
+          reviewIntervalDays: String(item.intervalDays),
+          reviewNextReviewAt: item.nextReviewAt,
+        },
       });
-    } catch {
-      return '';
-    }
-  };
-
-  const renderSession = ({ item }: { item: Session }) => (
-    <TouchableOpacity style={styles.sessionCard} onPress={() => handleOpenSession(item.id)}>
-      <View style={styles.sessionIcon}>
-        <Ionicons name="chatbubble" size={20} color={colors.primary} />
-      </View>
-      <View style={styles.sessionInfo}>
-        <Text style={styles.sessionTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.sessionMeta}>
-          {item.subject ? `${item.subject} · ` : ''}{formatDate(item.updated_at)}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-    </TouchableOpacity>
+    },
+    [router],
   );
 
-  const renderReviewCard = (item: ReviewPlanItem) => (
-    <TouchableOpacity
-      key={item.knowledgePointId}
-      style={styles.reviewCard}
-      onPress={() => handleOpenReview(item)}
-      activeOpacity={0.86}
-    >
-      <View style={styles.reviewTopRow}>
-        <View style={styles.reviewIcon}>
-          <Ionicons name="alarm" size={18} color={colors.warning} />
-        </View>
-        <View style={styles.reviewTitleWrap}>
-          <Text style={styles.reviewName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.reviewReason} numberOfLines={1}>{item.reason}</Text>
-        </View>
-        <Text style={styles.reviewMastery}>{Math.round(item.mastery * 100)}%</Text>
-      </View>
-      <Text style={styles.reviewMaterial} numberOfLines={2}>{item.material}</Text>
-      <View style={styles.reviewQuestionRow}>
-        <Ionicons name="help-circle-outline" size={15} color={colors.primary} />
-        <Text style={styles.reviewQuestion} numberOfLines={2}>{item.checkQuestion}</Text>
-      </View>
-      <View style={styles.reviewActionRow}>
-        <Text style={styles.reviewDue}>
-          {item.dueToday ? '今日应复习' : `下次 ${new Date(item.nextReviewAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}`}
-        </Text>
-        <View style={styles.reviewAction}>
-          <Text style={styles.reviewActionText}>问 AI 导师</Text>
-          <Ionicons name="chevron-forward" size={14} color={colors.textInverse} />
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-
-  const renderReviewEmpty = () => (
-    <View style={styles.reviewEmptyCard}>
-      <View style={styles.reviewEmptyIcon}>
-        <Ionicons name="sparkles-outline" size={18} color={colors.primary} />
-      </View>
-      <View style={styles.reviewEmptyBody}>
-        <Text style={styles.reviewEmptyTitle}>还没有可复习的知识点</Text>
-        <Text style={styles.reviewEmptyText}>
-          先拍一道题或完成一次练习，系统会按掌握度生成复习卡。
-        </Text>
-        <View style={styles.reviewEmptyActions}>
-          <TouchableOpacity
-            style={styles.reviewEmptyPrimary}
-            onPress={() => router.push('/camera')}
-            activeOpacity={0.86}
-          >
-            <Ionicons name="camera" size={14} color={colors.textInverse} />
-            <Text style={styles.reviewEmptyPrimaryText}>去拍题</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.reviewEmptySecondary}
-            onPress={refreshLearningContext}
-            activeOpacity={0.86}
-          >
-            <Ionicons name="refresh" size={14} color={colors.primary} />
-            <Text style={styles.reviewEmptySecondaryText}>刷新</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
+  const profileTitle = textField(profile, ["nickname", "name", "display_name"]) || USER_ID;
+  const profileBio =
+    textField(profile, ["bio", "learning_goal", "goal"]) ||
+    "把课堂、拍题和 AI 对话沉淀成可复习的学习节奏。";
+  const weakSubjects = textField(profile, ["weak_subjects", "weakSubjects"]);
+  const weekBuckets = useMemo(() => buildWeekStudyBuckets(classrooms), [classrooms]);
+  const maxWeekMinutes = Math.max(30, ...weekBuckets.map((item) => item.minutes));
+  const dueReviews = reviewPlan.filter((item) => item.dueToday).length;
+  const avgMastery =
+    reviewPlan.length > 0
+      ? Math.round(
+          (reviewPlan.reduce((sum, item) => sum + (item.mastery || 0), 0) /
+            reviewPlan.length) *
+            100,
+        )
+      : 0;
+  const totalStudyMinutes = classrooms
+    .slice(0, 12)
+    .reduce((sum, classroom) => sum + estimateMinutes(classroom), 0);
+  const primaryClassroom = classrooms[0];
+  const eventTypeCount = Object.keys(stats?.event_types || {}).length;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>镜我</Text>
-          <Text style={styles.subtitle}>AI 教育平台</Text>
-        </View>
-      </View>
-
-      {/* Connection status */}
-      {connectionStatus === 'fail' && (
-        <TouchableOpacity style={styles.connectionBanner} onPress={checkConnection}>
-          <Ionicons name="warning" size={16} color="#FFF" />
-          <Text style={styles.connectionText}>
-            无法连接 Gateway ({GATEWAY_URL}){'\n'}
-            点击重试 · 确保手机和电脑在同一 WiFi
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Quick Actions */}
-      <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.actionCard} onPress={handleNewChat}>
-          <View style={[styles.actionIcon, { backgroundColor: colors.primary }]}>
-            <Ionicons name="add" size={24} color={colors.textInverse} />
+      <BackgroundImage
+        source={require("../../assets/backgrounds/home_bg.png")}
+        overlayColor={PEACH_OVERLAY}
+      />
+      <ScrollView
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: insets.bottom + 28 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>Hi, {profileTitle}</Text>
+            <Text style={styles.greetingSub}>今天想学点什么？</Text>
           </View>
-          <Text style={styles.actionLabel}>新对话</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/diagnostic')}>
-          <View style={[styles.actionIcon, { backgroundColor: colors.warning }]}>
-            <Ionicons name="medkit" size={24} color={colors.textInverse} />
-          </View>
-          <Text style={styles.actionLabel}>诊断练习</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/knowledge')}>
-          <View style={[styles.actionIcon, { backgroundColor: colors.success }]}>
-            <Ionicons name="stats-chart" size={24} color={colors.textInverse} />
-          </View>
-          <Text style={styles.actionLabel}>知识追踪</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/notes')}>
-          <View style={[styles.actionIcon, { backgroundColor: colors.lavender }]}>
-            <Ionicons name="document-text" size={24} color={colors.textInverse} />
-          </View>
-          <Text style={styles.actionLabel}>笔记整理</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.reviewSection}>
-        <View style={styles.reviewHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>今日复习</Text>
-            <Text style={styles.reviewSubtitle}>按遗忘曲线和掌握度生成</Text>
-          </View>
-          <TouchableOpacity onPress={() => router.push('/knowledge')}>
-            <Text style={styles.seeAll}>知识追踪</Text>
+          <TouchableOpacity
+            style={styles.avatarBtn}
+            onPress={() => router.push("/profile")}
+            activeOpacity={0.85}
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>
+                {profileTitle.slice(0, 2).toUpperCase()}
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.statusDot,
+                connectionStatus === "fail" && styles.statusDotFail,
+                connectionStatus === "checking" && styles.statusDotChecking,
+              ]}
+            />
           </TouchableOpacity>
         </View>
-        {reviewPlan.length > 0 ? reviewPlan.slice(0, 3).map(renderReviewCard) : renderReviewEmpty()}
-      </View>
 
-      {/* Stats */}
-      {stats && (
-        <View style={styles.statsRow}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{stats.total_events || 0}</Text>
-            <Text style={styles.statLabel}>学习事件</Text>
+        {connectionStatus === "fail" && (
+          <TouchableOpacity style={styles.connectionBanner} onPress={checkConnection}>
+            <Ionicons name="warning" size={16} color={colors.textInverse} />
+            <Text style={styles.connectionText} numberOfLines={2}>
+              无法连接 Gateway ({GATEWAY_URL})，点击重试。
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Hero card */}
+        <View style={styles.heroCard}>
+          <View style={styles.heroBody}>
+            <Text style={styles.heroTitle}>继续今日学习节奏</Text>
+            <Text style={styles.heroSub} numberOfLines={2}>
+              {profileBio}
+            </Text>
+            <TouchableOpacity
+              style={styles.heroButton}
+              onPress={() => router.push("/chat")}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.heroButtonText}>开始 AI 对话</Text>
+              <Ionicons name="arrow-forward" size={16} color="#fff" />
+            </TouchableOpacity>
           </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{Object.keys(stats.event_types || {}).length}</Text>
-            <Text style={styles.statLabel}>事件类型</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>{sessions.length}</Text>
-            <Text style={styles.statLabel}>对话数</Text>
-          </View>
+          <Image
+            source={require("../../assets/illustrations/home_hero.png")}
+            style={styles.heroImage}
+            resizeMode="contain"
+          />
         </View>
-      )}
 
-      {/* Recent Sessions */}
-      <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>最近对话</Text>
-        <TouchableOpacity onPress={handleNewChat}>
-          <Text style={styles.seeAll}>新建</Text>
-        </TouchableOpacity>
-      </View>
+        {/* Stats grid */}
+        <View style={styles.metricGrid}>
+          <MetricTile
+            label="今日待复习"
+            value={dueReviews}
+            icon="alarm-outline"
+            color={colors.warning}
+          />
+          <MetricTile
+            label="平均掌握"
+            value={`${avgMastery}%`}
+            icon="pulse-outline"
+            color={colors.primary}
+          />
+          <MetricTile
+            label="课堂资料"
+            value={classrooms.length}
+            icon="library-outline"
+            color={colors.success}
+          />
+          <MetricTile
+            label="学习事件"
+            value={stats?.total_events || 0}
+            icon="layers-outline"
+            color={colors.lavender}
+          />
+        </View>
 
-      <FlatList
-        data={sessions.slice(0, 20)}
-        renderItem={renderSession}
-        keyExtractor={item => item.id}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-        }
-        ListEmptyComponent={
-          !sessionsLoaded ? (
-            <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
-          ) : (
-            <View style={styles.empty}>
-              <Ionicons name="chatbubbles-outline" size={48} color={colors.textMuted} />
-              <Text style={styles.emptyText}>暂无对话</Text>
-              <Text style={styles.emptyHint}>点击「新对话」开始</Text>
+        {/* Study rhythm */}
+        <View style={styles.panel}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={styles.panelTitle}>学习节奏</Text>
+              <Text style={styles.panelSub}>
+                近 7 天约 {totalStudyMinutes} 分钟 · {eventTypeCount} 类事件
+              </Text>
             </View>
-          )
-        }
-        contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
-      />
+            {loading && <ActivityIndicator size="small" color={colors.primary} />}
+          </View>
+          <View style={styles.weekBars}>
+            {weekBuckets.map((item) => (
+              <View key={item.name} style={styles.weekBarItem}>
+                <View style={styles.weekBarTrack}>
+                  <View
+                    style={[
+                      styles.weekBarFill,
+                      {
+                        height: `${Math.max(
+                          item.minutes ? 16 : 5,
+                          (item.minutes / maxWeekMinutes) * 100,
+                        )}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.weekBarLabel}>{item.name}</Text>
+              </View>
+            ))}
+          </View>
+          {weakSubjects ? (
+            <View style={styles.focusStrip}>
+              <Ionicons name="compass-outline" size={16} color={colors.warning} />
+              <Text style={styles.focusStripText} numberOfLines={2}>
+                当前更需要关注：{weakSubjects}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Today's suggestions */}
+        <View style={styles.panel}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={styles.panelTitle}>今日建议</Text>
+              <Text style={styles.panelSub}>优先处理掌握度较低的内容</Text>
+            </View>
+          </View>
+          {reviewPlan.length > 0 ? (
+            reviewPlan.slice(0, 3).map((item) => (
+              <TouchableOpacity
+                key={item.knowledgePointId}
+                style={styles.reviewRow}
+                onPress={() => handleOpenReview(item)}
+                activeOpacity={0.84}
+              >
+                <View style={styles.reviewMain}>
+                  <Text style={styles.reviewTitle} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.reviewSub} numberOfLines={2}>
+                    {item.reason || item.material}
+                  </Text>
+                  <View style={styles.masteryTrack}>
+                    <View
+                      style={[
+                        styles.masteryFill,
+                        { width: `${Math.round((item.mastery || 0) * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                </View>
+                <View style={styles.reviewSide}>
+                  <Text style={styles.reviewPercent}>
+                    {Math.round((item.mastery || 0) * 100)}%
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={colors.textMuted}
+                  />
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyInline}>
+              <Ionicons name="sparkles-outline" size={22} color={colors.primary} />
+              <Text style={styles.emptyInlineText}>
+                暂无待复习建议，完成课堂或拍题后会自动更新。
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Classroom updates */}
+        <View style={styles.panel}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={styles.panelTitle}>课堂动态</Text>
+              <Text style={styles.panelSub}>继续最近生成的学习内容</Text>
+            </View>
+          </View>
+          {primaryClassroom ? (
+            <TouchableOpacity
+              style={styles.classroomRow}
+              onPress={() =>
+                router.push({
+                  pathname: "/course/[id]",
+                  params: { id: primaryClassroom.id },
+                })
+              }
+              activeOpacity={0.84}
+            >
+              <View style={styles.classroomIcon}>
+                <Ionicons name="school-outline" size={22} color={colors.success} />
+              </View>
+              <View style={styles.classroomBody}>
+                <Text style={styles.classroomTitle} numberOfLines={2}>
+                  {primaryClassroom.title}
+                </Text>
+                <Text style={styles.classroomMeta}>
+                  {primaryClassroom.scenes_count} 个场景 · {shortDate(primaryClassroom.created_at)}
+                </Text>
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={colors.textMuted}
+              />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.emptyInline}>
+              <Ionicons name="library-outline" size={22} color={colors.success} />
+              <Text style={styles.emptyInlineText}>
+                课堂列表为空，可从底部“课堂”开始创建。
+              </Text>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  icon,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+}) {
+  return (
+    <View style={styles.metricTile}>
+      <View style={[styles.metricIcon, { backgroundColor: `${color}20` }]}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgPage },
+  container: { flex: 1, backgroundColor: "rgba(0,0,0,0)" },
+  scrollContent: { padding: 16, gap: 14 },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: colors.bgCard,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 4,
+    paddingBottom: 2,
   },
-  greeting: { fontSize: 24, fontWeight: '700', color: colors.textPrimary },
-  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  connectionBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.error,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 8,
-  },
-  connectionText: { color: colors.textInverse, fontSize: 12, flex: 1 },
-  actionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    backgroundColor: colors.bgCard,
-    marginBottom: 8,
-  },
-  actionCard: { alignItems: 'center', gap: 6 },
-  actionIcon: {
+  greeting: { fontSize: 24, fontWeight: "800", color: colors.textPrimary },
+  greetingSub: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
+  avatarBtn: { position: "relative", padding: 4 },
+  avatar: {
     width: 48,
     height: 48,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.8)",
   },
-  actionLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
-  reviewSection: {
-    backgroundColor: colors.bgCard,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 10,
-    marginBottom: 8,
+  avatarText: { color: colors.textInverse, fontSize: 16, fontWeight: "800" },
+  statusDot: {
+    position: "absolute",
+    right: 2,
+    bottom: 2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.success,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
-  reviewHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
+  statusDotFail: { backgroundColor: colors.error },
+  statusDotChecking: { backgroundColor: colors.warning },
+  connectionBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.error,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  reviewSubtitle: {
+  connectionText: { flex: 1, color: colors.textInverse, fontSize: 12, lineHeight: 17 },
+  heroCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 20,
+    borderRadius: 28,
+    backgroundColor: PURPLE,
+    ...CARD_SHADOW,
+  },
+  heroBody: { flex: 1, minWidth: 0 },
+  heroTitle: { fontSize: 19, fontWeight: "800", color: "#FFF" },
+  heroSub: {
     fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  reviewCard: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 8,
-  },
-  reviewTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  reviewIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.warningLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  reviewTitleWrap: { flex: 1, minWidth: 0 },
-  reviewName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  reviewReason: {
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  reviewMastery: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.warning,
-    marginLeft: 8,
-  },
-  reviewMaterial: {
-    fontSize: 13,
     lineHeight: 18,
-    color: colors.textSecondary,
+    color: "rgba(255,255,255,0.78)",
+    marginTop: 6,
+  },
+  heroButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: "#FFF",
+  },
+  heroButtonText: { color: PURPLE, fontSize: 13, fontWeight: "800" },
+  heroImage: { width: 110, height: 110, marginLeft: 12 },
+  metricGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  metricTile: {
+    width: "48%",
+    minHeight: 96,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: GLASS_BG,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
+  },
+  metricIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  metricValue: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.textPrimary,
     marginTop: 10,
   },
-  reviewQuestionRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    marginTop: 8,
-    paddingTop: 8,
+  metricLabel: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  panel: {
+    borderRadius: 22,
+    padding: 16,
+    backgroundColor: GLASS_BG,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
+  },
+  panelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  panelTitle: { fontSize: 16, fontWeight: "800", color: colors.textPrimary },
+  panelSub: { fontSize: 12, color: colors.textMuted, marginTop: 3 },
+  weekBars: {
+    height: 118,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    paddingTop: 18,
+  },
+  weekBarItem: { flex: 1, alignItems: "center", gap: 7 },
+  weekBarTrack: {
+    width: 20,
+    height: 82,
+    borderRadius: 10,
+    justifyContent: "flex-end",
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.6)",
+  },
+  weekBarFill: {
+    width: "100%",
+    borderRadius: 10,
+    backgroundColor: PURPLE,
+  },
+  weekBarLabel: { fontSize: 11, color: colors.textMuted, fontWeight: "700" },
+  focusStrip: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: ORANGE_LIGHT,
+  },
+  focusStripText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: ORANGE,
+  },
+  reviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 13,
     borderTopWidth: 1,
     borderTopColor: colors.borderLight,
   },
-  reviewQuestion: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 18,
-    color: colors.textPrimary,
-  },
-  reviewActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  reviewDue: {
+  reviewMain: { flex: 1, minWidth: 0 },
+  reviewTitle: { fontSize: 15, fontWeight: "800", color: colors.textPrimary },
+  reviewSub: {
     fontSize: 12,
-    color: colors.textMuted,
-  },
-  reviewAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  reviewActionText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textInverse,
-  },
-  reviewEmptyCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgElevated,
-    borderRadius: 8,
-    padding: 12,
-  },
-  reviewEmptyIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  reviewEmptyBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  reviewEmptyTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  reviewEmptyText: {
-    fontSize: 13,
-    lineHeight: 18,
+    lineHeight: 17,
     color: colors.textSecondary,
     marginTop: 4,
   },
-  reviewEmptyActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 10,
+  masteryTrack: {
+    height: 5,
+    borderRadius: 3,
+    overflow: "hidden",
+    marginTop: 9,
+    backgroundColor: colors.bgInput,
   },
-  reviewEmptyPrimary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 6,
+  masteryFill: {
+    height: "100%",
+    borderRadius: 3,
+    backgroundColor: ORANGE,
   },
-  reviewEmptyPrimaryText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.textInverse,
+  reviewSide: {
+    minWidth: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 3,
   },
-  reviewEmptySecondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.bgCard,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 6,
+  reviewPercent: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.warning,
   },
-  reviewEmptySecondaryText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primary,
+  classroomRow: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.6)",
   },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 14,
-    backgroundColor: colors.bgCard,
-    marginBottom: 8,
+  classroomIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E2F0E7",
   },
-  statItem: { alignItems: 'center' },
-  statValue: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
-  statLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: colors.divider },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  classroomBody: { flex: 1, minWidth: 0 },
+  classroomTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    lineHeight: 19,
+    color: colors.textPrimary,
   },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: colors.textPrimary },
-  seeAll: { fontSize: 14, color: colors.primary },
-  sessionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.bgCard,
-    marginHorizontal: 16,
-    marginBottom: 1,
-    padding: 14,
-    borderRadius: 10,
+  classroomMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
+  emptyInline: {
+    minHeight: 72,
+    marginTop: 12,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(255,255,255,0.55)",
   },
-  sessionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  emptyInlineText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSecondary,
   },
-  sessionInfo: { flex: 1 },
-  sessionTitle: { fontSize: 15, fontWeight: '500', color: colors.textPrimary },
-  sessionMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 16, color: colors.textMuted, marginTop: 12 },
-  emptyHint: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
 });

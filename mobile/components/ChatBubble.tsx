@@ -1,13 +1,11 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  Image,
   ScrollView,
   TouchableOpacity,
   Share,
-  Alert,
   Modal,
   TextInput,
 } from "react-native";
@@ -16,31 +14,14 @@ import type { Message } from "../lib/types";
 import type { MessageAttachment } from "../lib/types";
 import { GATEWAY_URL } from "../lib/config";
 import { colors } from "../lib/theme";
-import { FeedbackButtons } from "./FeedbackButtons";
-import { MarkdownRenderer } from "./MarkdownRenderer";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { SourcesBlock } from "./SourcesBlock";
 import { ToolCallBlock } from "./ToolCallBlock";
 import { MathAnimatorPreview } from "./MathAnimatorPreview";
 import { VisualizePreview } from "./VisualizePreview";
-
-/**
- * 当存在可视化结果时，从消息文本中剥离所有代码和无关内容，
- * 只保留文字说明部分，避免代码与渲染结果重复显示
- */
-function stripCodeBlocksFromContent(text: string): string {
-  let result = text
-    // 移除围栏代码块 ```lang\n...\n```
-    .replace(/```[\s\S]*?```/g, "")
-    // 移除缩进代码块（连续 4 空格或 tab 开头的行）
-    .replace(/(?:^|\n)( {4}|\t)[^\n]*(?:\n( {4}|\t)[^\n]*)*/g, "")
-    // 移除行内代码 `code`（但保留反引号内的普通文本）
-    .replace(/`[^`]+`/g, "")
-    // 合并多余空行（最多保留 1 个空行）
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return result;
-}
+import { SafeImage } from "./SafeImage";
+import { MessageBubbleShell } from "./message-renderers/MessageBubbleShell";
+import { MessageContentRenderer } from "./message-renderers/MessageContentRenderer";
 
 function resolveAttachmentUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
@@ -50,7 +31,7 @@ function resolveAttachmentUrl(url: string | undefined): string | undefined {
 
 function attachmentImageUri(attachment: MessageAttachment): string | undefined {
   return resolveAttachmentUrl(
-    attachment.uri || attachment.url || attachment.file_url,
+    attachment.previewUri || attachment.preview_uri || attachment.uri,
   );
 }
 
@@ -58,20 +39,61 @@ function attachmentName(attachment: MessageAttachment): string {
   return attachment.name || attachment.file_name || "文件";
 }
 
-/**
- * 从消息文本中移除裸 URL（单独占一行的网址），
- * 避免在消息下方显示网址链接
- */
-function stripBareUrls(text: string): string {
-  // 移除独立行中的裸 URL（不以 ]( 开头的，即非 markdown 链接）
-  return text
+function normalizedText(text: string | undefined): string {
+  return String(text || "").trim();
+}
+
+function isCodeOnlyCapabilityText(
+  content: string | undefined,
+  codeContent: string | undefined,
+): boolean {
+  const text = normalizedText(content);
+  if (!text) return false;
+
+  const code = normalizedText(codeContent);
+  if (code && (text === code || text.includes(code))) return true;
+  if (/^```[\s\S]*```$/.test(text)) return true;
+  if (/^<(!doctype|html|svg|canvas|script|style)\b/i.test(text)) return true;
+  if (/\bfrom\s+manim\s+import\b/i.test(text)) return true;
+  if (/\bclass\s+\w+\s*\(\s*Scene\s*\)\s*:/i.test(text)) return true;
+  if (/\bnew\s+Chart\s*\(/i.test(text)) return true;
+  return false;
+}
+
+function stripGeneratedCodeFromCapabilityText(
+  content: string | undefined,
+  codeContent: string | undefined,
+): string {
+  let text = String(content || "");
+  const code = normalizedText(codeContent);
+  if (code) {
+    text = text.split(code).join("");
+  }
+  text = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/~~~[\s\S]*?~~~/g, "");
+
+  const filtered = text
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
-      return !/^https?:\/\/[^\s<>)\]]+$/.test(trimmed);
+      if (!trimmed) return true;
+      if (/^(下面|以下|这里)?是?(生成|渲染)?(的)?代码(如下)?[:：]?$/i.test(trimmed)) {
+        return false;
+      }
+      if (/^<(!doctype|html|svg|canvas|script|style)\b/i.test(trimmed)) {
+        return false;
+      }
+      if (/\bfrom\s+manim\s+import\b/i.test(trimmed)) return false;
+      if (/\bclass\s+\w+\s*\(\s*Scene\s*\)\s*:/i.test(trimmed)) {
+        return false;
+      }
+      if (/\bnew\s+Chart\s*\(/i.test(trimmed)) return false;
+      return true;
     })
-    .join("\n")
-    .trim();
+    .join("\n");
+
+  return filtered.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 interface ChatBubbleProps {
@@ -79,6 +101,11 @@ interface ChatBubbleProps {
   onFeedback?: (messageId: string, rating: "like" | "dislike") => void;
   onRetry?: () => void;
   onEdit?: (messageId: string, newText: string) => void;
+  onContinue?: (message: Message) => void;
+  onLoadFullContent?: (message: Message) => void;
+  onSpeak?: (message: Message) => void;
+  isSpeaking?: boolean;
+  preferWebViewMarkdown?: boolean;
 }
 
 // ── 操作按钮组件 ──
@@ -87,14 +114,27 @@ function ActionButtons({
   onShare,
   onRetry,
   onMore,
+  onSpeak,
+  isSpeaking,
 }: {
   onCopy?: () => void;
   onShare?: () => void;
   onRetry?: () => void;
   onMore?: () => void;
+  onSpeak?: () => void;
+  isSpeaking?: boolean;
 }) {
   return (
     <View style={styles.actionRow}>
+      {onSpeak && (
+        <TouchableOpacity style={styles.actionBtn} onPress={onSpeak}>
+          <Ionicons
+            name={isSpeaking ? "volume-high" : "volume-medium-outline"}
+            size={18}
+            color={isSpeaking ? colors.mint : colors.textMuted}
+          />
+        </TouchableOpacity>
+      )}
       {onCopy && (
         <TouchableOpacity style={styles.actionBtn} onPress={onCopy}>
           <Ionicons name="copy-outline" size={18} color={colors.textMuted} />
@@ -112,7 +152,11 @@ function ActionButtons({
       )}
       {onMore && (
         <TouchableOpacity style={styles.actionBtn} onPress={onMore}>
-          <Ionicons name="ellipsis-horizontal" size={18} color={colors.textMuted} />
+          <Ionicons
+            name="ellipsis-horizontal"
+            size={18}
+            color={colors.textMuted}
+          />
         </TouchableOpacity>
       )}
     </View>
@@ -148,11 +192,17 @@ export const ChatBubble = React.memo(function ChatBubble({
   onFeedback,
   onRetry,
   onEdit,
+  onContinue,
+  onLoadFullContent,
+  onSpeak,
+  isSpeaking,
+  preferWebViewMarkdown,
 }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editText, setEditText] = useState(message.content);
   const [toastVisible, setToastVisible] = useState(false);
+  const [showFullText, setShowFullText] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 清理 toast 定时器
@@ -161,6 +211,10 @@ export const ChatBubble = React.memo(function ChatBubble({
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    setShowFullText(false);
+  }, [message.id]);
 
   const handleCopy = async () => {
     let copied = false;
@@ -217,13 +271,34 @@ export const ChatBubble = React.memo(function ChatBubble({
                 .attachments!.filter((a) => a.type === "image")
                 .map((att, i) => {
                   const uri = attachmentImageUri(att);
-                  if (!uri) return null;
+                  if (!uri) {
+                    return (
+                      <View
+                        key={`img-${i}`}
+                        style={styles.userImagePlaceholder}
+                      >
+                        <Ionicons
+                          name="image-outline"
+                          size={28}
+                          color={colors.textSecondary}
+                        />
+                        <Text
+                          style={styles.userImagePlaceholderText}
+                          numberOfLines={1}
+                        >
+                          {attachmentName(att)}
+                        </Text>
+                      </View>
+                    );
+                  }
                   return (
-                    <Image
+                    <SafeImage
                       key={`img-${i}`}
-                      source={{ uri }}
+                      uri={uri}
+                      alt={attachmentName(att)}
                       style={styles.userImage}
                       resizeMode="cover"
+                      defaultAspectRatio={1}
                     />
                   );
                 })}
@@ -242,9 +317,9 @@ export const ChatBubble = React.memo(function ChatBubble({
               ))}
           {/* 文字气泡 */}
           {message.content ? (
-            <View style={styles.userBubble}>
+            <MessageBubbleShell variant="user">
               <Text style={styles.userText}>{message.content}</Text>
-            </View>
+            </MessageBubbleShell>
           ) : null}
           {/* 用户消息操作按钮 */}
           <UserActionButtons
@@ -303,21 +378,75 @@ export const ChatBubble = React.memo(function ChatBubble({
   }
 
   // ── 助手消息 ──
+  const showReasoningBlock =
+    message.reasoning !== undefined && message.reasoning !== "";
+  const handleToggleFullText = useCallback(() => {
+    setShowFullText((v) => !v);
+  }, []);
+  const capabilityResult = message.capabilityResult;
+  const capabilityArtifacts = capabilityResult?.artifacts || [];
+  const hasCapabilityArtifacts = capabilityArtifacts.length > 0;
+  const isVisualizeResult =
+    message.capability === "visualize" || Boolean(capabilityResult?.render_type);
+  const showVisualizePreview =
+    Boolean(capabilityResult) &&
+    isVisualizeResult &&
+    (hasCapabilityArtifacts ||
+      Boolean(capabilityResult?.code?.content) ||
+      Boolean(capabilityResult?.render_type));
+  const showMathAnimatorPreview =
+    Boolean(capabilityResult) &&
+    hasCapabilityArtifacts &&
+    !isVisualizeResult;
+  const sanitizedCapabilityContent =
+    capabilityResult && (showVisualizePreview || showMathAnimatorPreview)
+      ? stripGeneratedCodeFromCapabilityText(
+          message.content || capabilityResult.content,
+          capabilityResult.code?.content,
+        )
+      : message.content;
+  const hideCodeOnlyCapabilityText =
+    Boolean(capabilityResult) &&
+    (showVisualizePreview || showMathAnimatorPreview) &&
+    normalizedText(sanitizedCapabilityContent).length === 0 &&
+    isCodeOnlyCapabilityText(
+      message.content || capabilityResult?.content,
+      capabilityResult?.code?.content,
+    );
+  const displayMessage =
+    sanitizedCapabilityContent !== message.content
+      ? {
+          ...message,
+          content: sanitizedCapabilityContent,
+          contentPreview: undefined,
+        }
+      : message;
+  const hasVisibleMessageText =
+    normalizedText(displayMessage.content).length > 0;
+  const shouldRenderMessageContent =
+    !hideCodeOnlyCapabilityText &&
+    (hasVisibleMessageText || Boolean(message.isStreaming) || !capabilityResult);
+  const shouldShowToolCalls =
+    message.toolCalls &&
+    message.toolCalls.length > 0 &&
+    !(capabilityResult && (showVisualizePreview || showMathAnimatorPreview));
+  const visibleToolCalls = shouldShowToolCalls ? message.toolCalls || [] : [];
+
   return (
     <View style={styles.assistantRow}>
       <View style={styles.assistantContent}>
-        {/* 思考框 — 在气泡内部，不在外部 */}
-        {message.reasoning !== undefined && message.reasoning !== "" && (
+        {/* 思考框 — 位于消息气泡上方 */}
+        {showReasoningBlock && (
           <ReasoningBlock
-            reasoning={message.reasoning}
+            reasoning={message.reasoning || ""}
             isStreaming={!!message.isStreaming}
           />
         )}
 
         {/* 工具调用 */}
-        {message.toolCalls && message.toolCalls.length > 0 && (
+        {shouldShowToolCalls && (
           <View style={styles.extraSection}>
-            {message.toolCalls.map((tc, i) => (
+            {visibleToolCalls.map((tc, i) => (
               <ToolCallBlock
                 key={i}
                 toolName={tc.name}
@@ -331,56 +460,66 @@ export const ChatBubble = React.memo(function ChatBubble({
         )}
 
         {/* 消息气泡 */}
-        <View style={styles.assistantBubble}>
-          {message.content ? (
-            <MarkdownRenderer
-              content={
-                // 存在可视化/动画结果时，只展示文字说明，剥离代码块和裸 URL
-                message.capabilityResult?.render_type ||
-                message.capabilityResult?.artifacts?.length
-                  ? stripBareUrls(stripCodeBlocksFromContent(message.content))
-                  : stripBareUrls(message.content)
-              }
-              color={colors.textPrimary}
-              isStreaming={message.isStreaming}
-            />
-          ) : message.isStreaming && !message.reasoning ? (
-            <View style={styles.thinkingRow}>
-              <Ionicons name="sparkles" size={14} color={colors.warning} />
-              <Text style={styles.thinkingText}>正在思考</Text>
-              <View style={styles.thinkingDots}>
-                <Text style={styles.thinkingDot}>·</Text>
-                <Text style={[styles.thinkingDot, { opacity: 0.6 }]}>·</Text>
-                <Text style={[styles.thinkingDot, { opacity: 0.3 }]}>·</Text>
-              </View>
+        {shouldRenderMessageContent ? (
+          <MessageContentRenderer
+            message={displayMessage}
+            showFullText={showFullText}
+            onToggleFullText={handleToggleFullText}
+            onLoadFullContent={onLoadFullContent}
+            preferWebViewMarkdown={preferWebViewMarkdown}
+          />
+        ) : null}
+
+        {!message.isStreaming &&
+        (message.modelIncomplete || message.serverCutoff) ? (
+          <View style={styles.partialNotice}>
+            <View style={styles.partialNoticeTextWrap}>
+              <Text style={styles.partialNoticeTitle}>
+                {message.modelIncomplete
+                  ? "模型输出达到上限，已暂停"
+                  : "服务端保护限制触发，已暂停"}
+              </Text>
+              <Text style={styles.partialNoticeSub}>
+                已保留当前推导内容，可以继续生成剩余步骤。
+              </Text>
             </View>
-          ) : null}
-          {message.isStreaming && message.content ? (
-            <Text style={styles.cursor}>▊</Text>
-          ) : null}
-        </View>
+            {onContinue ? (
+              <TouchableOpacity
+                style={styles.continueButton}
+                onPress={() => onContinue(message)}
+              >
+                <Ionicons
+                  name="play-forward"
+                  size={14}
+                  color={colors.textInverse}
+                />
+                <Text style={styles.continueButtonText}>继续</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* 结构化结果：数学动画 */}
-        {message.capabilityResult?.artifacts &&
-          message.capabilityResult.artifacts.length > 0 && (
-            <View style={styles.extraSection}>
-              <MathAnimatorPreview
-                output_mode={message.capabilityResult.output_mode}
-                artifacts={message.capabilityResult.artifacts}
-                code={message.capabilityResult.code}
-              />
-            </View>
-          )}
-
-        {/* 结构化结果：可视化 */}
-        {message.capabilityResult?.render_type && (
+        {showMathAnimatorPreview ? (
           <View style={styles.extraSection}>
-            <VisualizePreview
-              render_type={message.capabilityResult.render_type}
-              code={message.capabilityResult.code}
+            <MathAnimatorPreview
+              output_mode={capabilityResult?.output_mode}
+              artifacts={capabilityArtifacts}
+              code={capabilityResult?.code}
             />
           </View>
-        )}
+        ) : null}
+
+        {/* 结构化结果：可视化 */}
+        {showVisualizePreview ? (
+          <View style={styles.extraSection}>
+            <VisualizePreview
+              render_type={capabilityResult?.render_type}
+              artifacts={capabilityArtifacts}
+              code={capabilityResult?.code}
+            />
+          </View>
+        ) : null}
 
         {/* 检索引用来源 */}
         {message.retrievalResults?.chunks &&
@@ -405,9 +544,22 @@ export const ChatBubble = React.memo(function ChatBubble({
           </View>
         )}
 
-        {/* AI 消息操作按钮：复制、分享、重试 */}
+        {/* 附件警告 */}
+        {message.warnings && message.warnings.length > 0 && (
+          <View style={styles.warningSection}>
+            {message.warnings.map((w: any, i: number) => (
+              <Text key={i} style={styles.warningText}>
+                ⚠️ {w.message}
+              </Text>
+            ))}
+          </View>
+        )}
+
+        {/* AI 消息操作按钮：朗读、复制、分享、重试 */}
         {!message.isStreaming && message.content && (
           <ActionButtons
+            onSpeak={onSpeak ? () => onSpeak(message) : undefined}
+            isSpeaking={isSpeaking}
             onCopy={handleCopy}
             onShare={handleShare}
             onRetry={onRetry}
@@ -432,14 +584,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     alignItems: "flex-end",
   },
-  userBubble: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 18,
-    borderBottomRightRadius: 4,
-    maxWidth: "82%",
-  },
   userText: {
     color: colors.textInverse,
     fontSize: 15,
@@ -461,6 +605,22 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginRight: 6,
     backgroundColor: colors.bgInput,
+  },
+  userImagePlaceholder: {
+    width: 180,
+    height: 180,
+    borderRadius: 12,
+    marginRight: 6,
+    backgroundColor: colors.bgInput,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  userImagePlaceholderText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 6,
+    maxWidth: "100%",
   },
   userFileRow: {
     backgroundColor: "rgba(255,255,255,0.2)",
@@ -498,41 +658,45 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
     minWidth: 0,
   },
-  assistantBubble: {
-    backgroundColor: colors.bgCard,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    borderRadius: 14,
-    borderBottomLeftRadius: 5,
+  partialNotice: {
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-  },
-  thinkingRow: {
+    borderColor: colors.warning,
+    backgroundColor: colors.warningLight,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 2,
+    gap: 8,
   },
-  thinkingText: {
-    color: colors.reasoningText,
-    fontSize: 14,
-    fontWeight: "500",
+  partialNoticeTextWrap: {
+    flex: 1,
+    minWidth: 0,
   },
-  thinkingDots: {
-    flexDirection: "row",
-    gap: 1,
-  },
-  thinkingDot: {
-    color: colors.warning,
-    fontSize: 20,
+  partialNoticeTitle: {
+    color: colors.textPrimary,
+    fontSize: 13,
     fontWeight: "700",
-    lineHeight: 18,
   },
-  cursor: {
-    color: colors.lavender,
-    fontWeight: "bold",
-    fontSize: 14,
+  partialNoticeSub: {
+    color: colors.textSecondary,
+    fontSize: 12,
     marginTop: 2,
+  },
+  continueButton: {
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  continueButtonText: {
+    color: colors.textInverse,
+    fontSize: 13,
+    fontWeight: "700",
   },
   metaRow: {
     flexDirection: "row",
@@ -546,6 +710,8 @@ const styles = StyleSheet.create({
   },
   extraSection: {
     marginTop: 4,
+    maxWidth: "100%",
+    overflow: "hidden",
   },
   sourceLabel: {
     fontSize: 12,
@@ -556,6 +722,18 @@ const styles = StyleSheet.create({
   sourceItem: {
     fontSize: 11,
     color: colors.textMuted,
+    lineHeight: 16,
+  },
+  warningSection: {
+    marginTop: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: "#FFF3CD",
+    borderRadius: 6,
+  },
+  warningText: {
+    fontSize: 12,
+    color: "#856404",
     lineHeight: 16,
   },
 

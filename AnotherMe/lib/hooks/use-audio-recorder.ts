@@ -11,6 +11,9 @@ declare global {
     SpeechRecognition: any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Web Speech API not typed in lib.dom
     webkitSpeechRecognition: any;
+    ReactNativeWebView?: {
+      postMessage: (message: string) => void;
+    };
   }
 }
 
@@ -26,6 +29,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
 
+  const nativeVoiceRequestIdRef = useRef<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -34,6 +38,40 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const transcriptionAbortRef = useRef<AbortController | null>(null);
   // Synchronous lock to prevent rapid re-entry (React state updates are async)
   const busyRef = useRef(false);
+
+  const stopTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const startTimer = useCallback(() => {
+    stopTimer();
+    setRecordingTime(0);
+    timerRef.current = setInterval(() => {
+      setRecordingTime((prev) => prev + 1);
+    }, 1000);
+  }, [stopTimer]);
+
+  const postNativeVoiceMessage = useCallback((type: 'start' | 'stop' | 'cancel', id: string) => {
+    window.ReactNativeWebView?.postMessage(
+      JSON.stringify({
+        source: 'anotherme-classroom',
+        type: `voice:${type}`,
+        id,
+      }),
+    );
+  }, []);
+
+  const resetNativeVoiceState = useCallback(() => {
+    nativeVoiceRequestIdRef.current = null;
+    busyRef.current = false;
+    setIsRecording(false);
+    setIsProcessing(false);
+    setRecordingTime(0);
+    stopTimer();
+  }, [stopTimer]);
 
   // Send audio to server for transcription
   const transcribeAudio = useCallback(
@@ -104,6 +142,19 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     if (busyRef.current) return;
     busyRef.current = true;
     try {
+      if (typeof window !== 'undefined' && window.ReactNativeWebView) {
+        const requestId =
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        nativeVoiceRequestIdRef.current = requestId;
+        setIsRecording(true);
+        setIsProcessing(false);
+        startTimer();
+        postNativeVoiceMessage('start', requestId);
+        return;
+      }
+
       // Get current ASR configuration
       if (typeof window !== 'undefined') {
         const { useSettingsStore } = await import('@/lib/store/settings');
@@ -113,6 +164,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         if (asrProviderId === 'browser-native') {
           // Check if Speech Recognition is supported
           if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+            busyRef.current = false;
             onError?.('您的浏览器不支持语音识别功能');
             return;
           }
@@ -126,12 +178,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
           recognition.onstart = () => {
             setIsRecording(true);
-            setRecordingTime(0);
-
-            // Start timer
-            timerRef.current = setInterval(() => {
-              setRecordingTime((prev) => prev + 1);
-            }, 1000);
+            startTimer();
           };
 
           recognition.onresult = (event: {
@@ -153,10 +200,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
                 busyRef.current = false;
                 setIsRecording(false);
                 setRecordingTime(0);
-                if (timerRef.current) {
-                  clearInterval(timerRef.current);
-                  timerRef.current = null;
-                }
+                stopTimer();
                 return;
               case 'no-speech':
                 errorMessage = '未检测到语音输入';
@@ -178,20 +222,14 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
             busyRef.current = false;
             setIsRecording(false);
             setRecordingTime(0);
-            if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
+            stopTimer();
           };
 
           recognition.onend = () => {
             busyRef.current = false;
             setIsRecording(false);
             setRecordingTime(0);
-            if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-            }
+            stopTimer();
           };
 
           recognition.start();
@@ -235,31 +273,32 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       // Start recording
       mediaRecorder.start();
       setIsRecording(true);
-      setRecordingTime(0);
-
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      startTimer();
     } catch (error) {
       busyRef.current = false;
       log.error('Failed to start recording:', error);
       onError?.('无法访问麦克风，请检查权限设置');
     }
-  }, [onTranscription, onError, transcribeAudio]);
+  }, [onTranscription, onError, postNativeVoiceMessage, startTimer, stopTimer, transcribeAudio]);
 
   // Stop recording
   const stopRecording = useCallback(() => {
+    const nativeRequestId = nativeVoiceRequestIdRef.current;
+    if (nativeRequestId) {
+      setIsRecording(false);
+      setIsProcessing(true);
+      stopTimer();
+      postNativeVoiceMessage('stop', nativeRequestId);
+      return;
+    }
+
     // Stop Speech Recognition if active
     if (speechRecognitionRef.current) {
       speechRecognitionRef.current.stop();
       speechRecognitionRef.current = null;
       busyRef.current = false;
       setIsRecording(false);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopTimer();
       return;
     }
 
@@ -269,15 +308,19 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       busyRef.current = false;
       setIsRecording(false);
 
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopTimer();
     }
-  }, [isRecording]);
+  }, [isRecording, postNativeVoiceMessage, stopTimer]);
 
   // Cancel recording
   const cancelRecording = useCallback(() => {
+    const nativeRequestId = nativeVoiceRequestIdRef.current;
+    if (nativeRequestId) {
+      postNativeVoiceMessage('cancel', nativeRequestId);
+      resetNativeVoiceState();
+      return;
+    }
+
     // Cancel Speech Recognition if active
     if (speechRecognitionRef.current) {
       speechRecognitionRef.current.onresult = null; // Prevent transcription callback
@@ -287,10 +330,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       busyRef.current = false;
       setIsRecording(false);
       setRecordingTime(0);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopTimer();
       return;
     }
 
@@ -310,17 +350,53 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       setIsRecording(false);
       setRecordingTime(0);
 
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopTimer();
 
       audioChunksRef.current = [];
     }
-  }, [isRecording]);
+  }, [isRecording, postNativeVoiceMessage, resetNativeVoiceState, stopTimer]);
+
+  useEffect(() => {
+    const handleNativeVoiceEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | {
+            id?: string;
+            type?: 'result' | 'error' | 'end';
+            text?: string;
+            error?: string;
+          }
+        | undefined;
+      if (!detail?.id || detail.id !== nativeVoiceRequestIdRef.current) return;
+
+      if (detail.type === 'result') {
+        resetNativeVoiceState();
+        onTranscription?.(detail.text || '');
+        return;
+      }
+
+      if (detail.type === 'error') {
+        resetNativeVoiceState();
+        onError?.(detail.error || '语音识别失败，请重试');
+        return;
+      }
+
+      if (detail.type === 'end') {
+        resetNativeVoiceState();
+      }
+    };
+
+    window.addEventListener('anotherme:native-voice', handleNativeVoiceEvent);
+    return () => {
+      window.removeEventListener('anotherme:native-voice', handleNativeVoiceEvent);
+    };
+  }, [onError, onTranscription, resetNativeVoiceState]);
 
   useEffect(() => {
     return () => {
+      const nativeRequestId = nativeVoiceRequestIdRef.current;
+      if (nativeRequestId) {
+        postNativeVoiceMessage('cancel', nativeRequestId);
+      }
       transcriptionAbortRef.current?.abort();
       if (speechRecognitionRef.current) {
         speechRecognitionRef.current.onresult = null;
@@ -338,14 +414,11 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         mediaRecorderRef.current.stream?.getTracks().forEach((track) => track.stop());
         mediaRecorderRef.current = null;
       }
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopTimer();
       audioChunksRef.current = [];
       busyRef.current = false;
     };
-  }, []);
+  }, [postNativeVoiceMessage, stopTimer]);
 
   return {
     isRecording,

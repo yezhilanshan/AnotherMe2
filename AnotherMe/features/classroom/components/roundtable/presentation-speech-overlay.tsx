@@ -133,7 +133,6 @@ function MobileSubtitleBar({
   readonly buttonState?: 'play' | 'bars' | 'restart' | 'none';
   readonly isPaused?: boolean;
 }) {
-  const { t } = useI18n();
   const playbackButtonLabel =
     buttonState === 'play' || buttonState === 'restart' || isPaused
       ? 'Play classroom playback'
@@ -141,9 +140,8 @@ function MobileSubtitleBar({
 
   return (
     <div
-      onClick={onClick}
       className={cn(
-        'w-full rounded-2xl border backdrop-blur-xl shadow-[0_-8px_30px_rgba(0,0,0,0.2)] overflow-hidden cursor-pointer',
+        'w-full rounded-2xl border backdrop-blur-xl shadow-[0_-8px_30px_rgba(0,0,0,0.2)] overflow-hidden',
         bubble.role === 'user'
           ? 'bg-violet-900/70 border-violet-700/50'
           : bubble.role === 'agent'
@@ -577,7 +575,7 @@ export function PresentationSpeechOverlay({
       return (
         <div className="absolute inset-x-0 bottom-0 z-30 pointer-events-auto">
           <AnimatePresence mode="wait">
-            {matchesSide && bubble && (
+            {bubble && (
               <motion.div
                 key={bubble.key}
                 initial={{ opacity: 0, y: 20 }}

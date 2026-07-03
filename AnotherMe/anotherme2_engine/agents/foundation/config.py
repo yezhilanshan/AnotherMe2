@@ -100,30 +100,15 @@ GROK_DEFAULT_BASE_URL = "https://api.x.ai/v1"
 
 # Default models for each provider
 PROVIDER_MODELS = {
-    "openai": {
-        "text": "gpt-5.2",
-        "vision": "gpt-5.2",
-        "ocr": "gpt-5.2",
-    },
-    "anthropic": {
-        "text": "claude-opus-4-6",
-        "vision": "claude-opus-4-6",
-        "ocr": "claude-opus-4-6",
-    },
-    "gemini": {
-        "text": "gemini-3.1-pro-preview",
-        "vision": "gemini-3.1-pro-preview",
-        "ocr": "gemini-3.1-pro-preview",
-    },
     "deepseek": {
         "text": "deepseek-chat",
         "vision": "deepseek-chat",
         "ocr": "deepseek-chat",
     },
     "qwen": {
-        "text": "qwen3.5-plus-2026-04-20",
-        "vision": "qwen3.5-plus-2026-04-20",
-        "ocr": "qwen-vl-ocr-latest",
+        "text": "qwen3.6-plus-2026-04-02",
+        "vision": "qwen3.6-plus-2026-04-02",
+        "ocr": "qwen3.5-ocr",
     },
     "kimi": {
         "text": "kimi-k2.5",
@@ -134,27 +119,7 @@ PROVIDER_MODELS = {
         "text": "MiniMax-M2.7",
         "vision": "MiniMax-M2.7",
         "ocr": "MiniMax-M2.7",
-    },
-    "glm": {
-        "text": "glm-5",
-        "vision": "glm-4.6v",
-        "ocr": "glm-4.6v",
-    },
-    "siliconflow": {
-        "text": "deepseek-ai/DeepSeek-V3.2",
-        "vision": "Qwen/Qwen2-VL-72B-Instruct",
-        "ocr": "Qwen/Qwen2-VL-72B-Instruct",
-    },
-    "doubao": {
-        "text": "doubao-seed-2-0-pro-260215",
-        "vision": "doubao-1.5-vision-pro-250328",
-        "ocr": "doubao-1.5-vision-pro-250328",
-    },
-    "grok": {
-        "text": "grok-4.20-beta-0309-non-reasoning",
-        "vision": "grok-4.20-beta-0309-non-reasoning",
-        "ocr": "grok-4.20-beta-0309-non-reasoning",
-    },
+    }
 }
 
 # Legacy fallback config
@@ -392,7 +357,11 @@ def _vision_base_url() -> str:
 
 
 def _text_model() -> str:
-    configured_model = _env_first("PROBLEM_VIDEO_TEXT_MODEL", "TEXT_MODEL")
+    configured_model = _env_first(
+        "PROBLEM_VIDEO_TEXT_MODEL",
+        "TEXT_MODEL",
+        "DEFAULT_MODEL",
+    )
     if configured_model:
         return _strip_model_provider(configured_model)
 

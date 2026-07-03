@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -39,6 +40,20 @@ from .models import (
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+MAX_STORED_AI_MESSAGE_CONTENT_CHARS = int(
+    os.getenv("AI_CHAT_MAX_STORED_MESSAGE_CONTENT_CHARS", "200000")
+)
+
+
+def _compact_ai_message_content(content: str) -> str:
+    if len(content) <= MAX_STORED_AI_MESSAGE_CONTENT_CHARS:
+        return content
+    return (
+        content[:MAX_STORED_AI_MESSAGE_CONTENT_CHARS]
+        + "\n\n[内容过长，已截断保存以保护移动端历史记录稳定性]"
+    )
 
 
 def _supports_for_update(session: Session) -> bool:
@@ -83,6 +98,8 @@ def sanitize_attachment_refs(
             persisted["file_size"] = item.get("file_size")
         elif item.get("size") is not None:
             persisted["file_size"] = item.get("size")
+        if item.get("sha256"):
+            persisted["sha256"] = str(item.get("sha256"))
         if isinstance(item.get("metadata"), dict):
             persisted["metadata"] = item["metadata"]
 
@@ -685,13 +702,47 @@ def list_ai_sessions(
     return [serialize_ai_session(row) for row in rows]
 
 
-def serialize_ai_message(message: AIChatMessage) -> dict[str, Any]:
+def serialize_ai_message(
+    message: AIChatMessage,
+    *,
+    max_content_chars: int | None = None,
+) -> dict[str, Any]:
+    full_content = message.content or ""
+    content = full_content
+    content_length = len(full_content)
+    content_preview: str | None = None
+    full_content_ref: str | None = None
+    content_truncated = False
+    history_preview_only = False
+    storage_preview_only = full_content.endswith(
+        "[内容过长，已截断保存以保护移动端历史记录稳定性]"
+    )
+    if max_content_chars is not None and content_length > max_content_chars:
+        content_preview = (
+            full_content[:max_content_chars]
+            + "\n\n[历史消息过长，已显示预览；展开可加载完整内容]"
+        )
+        content = (
+            content_preview
+        )
+        full_content_ref = message.id
+        content_truncated = True
+        history_preview_only = True
     return {
         "message_id": message.id,
         "session_id": message.session_id,
         "runtime_seq": message.runtime_seq,
         "role": message.role,
-        "content": message.content,
+        "content": content,
+        "content_preview": content_preview,
+        "full_content_ref": full_content_ref,
+        "content_length": content_length,
+        "content_truncated": content_truncated,
+        "model_incomplete": False,
+        "server_cutoff": False,
+        "client_preview_only": False,
+        "history_preview_only": history_preview_only,
+        "storage_preview_only": storage_preview_only,
         "content_type": message.content_type,
         "capability": message.capability,
         "events": message.events_json or [],
@@ -707,15 +758,65 @@ def serialize_ai_message(message: AIChatMessage) -> dict[str, Any]:
     }
 
 
-def list_ai_messages(session: Session, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+def list_ai_messages(
+    session: Session,
+    session_id: str,
+    limit: int = 200,
+    before_seq: int | None = None,
+    max_content_chars: int | None = None,
+) -> list[dict[str, Any]]:
+    query = session.query(AIChatMessage).filter(AIChatMessage.session_id == session_id)
+    if before_seq is not None:
+        query = query.filter(AIChatMessage.runtime_seq < before_seq)
+
     rows = (
-        session.query(AIChatMessage)
-        .filter(AIChatMessage.session_id == session_id)
-        .order_by(AIChatMessage.runtime_seq.asc().nulls_last(), AIChatMessage.created_at.asc())
+        query.order_by(
+            AIChatMessage.runtime_seq.desc().nulls_last(),
+            AIChatMessage.created_at.desc(),
+        )
         .limit(max(1, min(limit, 500)))
         .all()
     )
-    return [serialize_ai_message(row) for row in rows]
+    rows.reverse()
+    return [
+        serialize_ai_message(row, max_content_chars=max_content_chars)
+        for row in rows
+    ]
+
+
+def get_ai_message(
+    session: Session,
+    message_id: str,
+) -> dict[str, Any] | None:
+    row = session.get(AIChatMessage, message_id)
+    if not row:
+        return None
+    return serialize_ai_message(row, max_content_chars=None)
+
+
+def _ensure_ai_session(
+    session: Session,
+    session_id: str,
+    user_id: str | None = None,
+) -> AIChatSession:
+    """Return the existing AI session or auto-create one for the given session_id."""
+    ai_session = session.get(AIChatSession, session_id)
+    if ai_session:
+        if user_id and ai_session.user_id != user_id:
+            raise ValueError("AI session does not belong to the requested user")
+        return ai_session
+    effective_user = user_id or "mobile-user"
+    _ensure_user(session, effective_user)
+    ai_session = AIChatSession(
+        id=session_id,
+        user_id=effective_user,
+        title="新对话",
+        source="mobile",
+        archived_flag=False,
+    )
+    session.add(ai_session)
+    session.flush()
+    return ai_session
 
 
 def _next_ai_message_seq(session: Session, session_id: str) -> int:
@@ -748,12 +849,7 @@ def create_ai_message(
     events: list[dict[str, Any]] | None = None,
     attachments: list[dict[str, Any]] | None = None,
 ) -> AIChatMessage:
-    ai_session = session.get(AIChatSession, session_id)
-    if not ai_session:
-        raise ValueError("AI session not found")
-
-    if user_id and ai_session.user_id != user_id:
-        raise ValueError("AI session does not belong to user")
+    ai_session = _ensure_ai_session(session, session_id, user_id)
 
     if request_id:
         existing = session.query(AIChatMessage).filter(AIChatMessage.request_id == request_id).first()
@@ -761,6 +857,7 @@ def create_ai_message(
             return existing
 
     persisted_attachments = sanitize_attachment_refs(attachments)
+    persisted_content = _compact_ai_message_content(content)
 
     try:
         with nested_session_scope(session):
@@ -770,7 +867,7 @@ def create_ai_message(
                 session_id=session_id,
                 runtime_seq=resolved_runtime_seq,
                 role=role,
-                content=content,
+                content=persisted_content,
                 content_type=content_type,
                 capability=capability or "",
                 events_json=events or [],
@@ -877,22 +974,61 @@ _SUBJECT_RULES: list[tuple[str, str]] = [
 
 
 _KNOWLEDGE_KEYWORDS = [
+    # 数学 - 函数
     "二次函数",
     "一次函数",
-    "几何",
+    "反比例函数",
+    "指数函数",
+    "对数函数",
     "三角函数",
-    "导数",
-    "极限",
-    "概率",
+    "函数图像",
+    "函数单调性",
+    # 数学 - 方程与不等式
+    "一元二次方程",
     "方程",
     "不等式",
-    "牛顿定律",
-    "电路",
-    "化学反应",
-    "概率统计",
-    "函数图像",
-    "一元二次方程",
+    "线性方程组",
+    # 数学 - 几何
+    "几何",
+    "三角形",
+    "直角三角形",
+    "相似三角形",
+    "全等三角形",
+    "勾股定理",
+    "圆",
     "圆与扇形",
+    "平行四边形",
+    # 数学 - 微积分
+    "导数",
+    "极限",
+    "积分",
+    # 数学 - 其他
+    "概率",
+    "概率统计",
+    "排列组合",
+    "数列",
+    "向量",
+    "矩阵",
+    # 物理
+    "牛顿定律",
+    "力学",
+    "电路",
+    "电磁感应",
+    "光的折射",
+    "动能定理",
+    "动量",
+    "万有引力",
+    # 化学
+    "化学反应",
+    "氧化还原",
+    "电解质",
+    "有机化学",
+    # 英语
+    "语法",
+    "时态",
+    "从句",
+    "虚拟语气",
+    # 语文
     "古诗文",
 ]
 
@@ -923,14 +1059,12 @@ def _extract_knowledge_points(text: str) -> list[str]:
         return list(dict.fromkeys(hits))
 
     # A light-weight regex fallback for compact domain terms.
-    regex_hits = re.findall(r"([一-龥A-Za-z0-9]{2,16}(?:函数|方程|定理|法则|模型|公式))", text)
+    regex_hits = re.findall(r"([一-龥A-Za-z0-9]{2,16}(?:函数|方程|定理|法则|模型|公式|定律|不等式|变换|级数))", text)
     if regex_hits:
         return list(dict.fromkeys(regex_hits[:3]))
 
-    snippet = text.strip().replace("\n", " ")
-    if not snippet:
-        return []
-    return [snippet[: min(20, len(snippet))]]
+    # No fallback snippet — return empty to avoid creating garbage knowledge points.
+    return []
 
 
 def _detect_question_type(text: str) -> str:
@@ -1182,11 +1316,7 @@ def list_learning_records(
     user_id: str | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
-    ai_session = session.get(AIChatSession, session_id)
-    if not ai_session:
-        raise ValueError("AI session not found")
-    if user_id and user_id != ai_session.user_id:
-        raise ValueError("AI session does not belong to user")
+    ai_session = _ensure_ai_session(session, session_id, user_id)
 
     rows = (
         session.query(AILearningRecord)
@@ -1580,7 +1710,23 @@ def create_learning_event(
                 source_event_id=event.id,
                 payload=normalized_payload,
             )
-    elif event_type in ("hint_used", "confusion_detected", "problem_solved") and normalized_knowledge_points:
+    elif event_type in ("hint_used", "confusion_detected", "problem_solved"):
+        # Fallback: extract knowledge points from payload context when not provided
+        if not normalized_knowledge_points and normalized_payload:
+            context_text = (
+                normalized_payload.get("question_text")
+                or normalized_payload.get("context")
+                or normalized_payload.get("hint_content")
+                or ""
+            )
+            if context_text:
+                normalized_knowledge_points = _extract_knowledge_points(str(context_text))
+                if normalized_knowledge_points:
+                    # Update the already-persisted event with extracted knowledge points
+                    event.knowledge_points = normalized_knowledge_points
+                    session.flush()
+        if not normalized_knowledge_points:
+            return event
         confidence = float(normalized_payload.get("confidence_score", 1.0)) if normalized_payload else 1.0
         process_non_quiz_event(
             session=session,

@@ -23,6 +23,7 @@ _RUNTIME_ONLY_KEYS = {
     # any per-capability ``RequestConfig`` schema, so we strip it before
     # pydantic validation and re-attach it on the runtime-only side.
     "answer_now_context",
+    "model",
 }
 
 

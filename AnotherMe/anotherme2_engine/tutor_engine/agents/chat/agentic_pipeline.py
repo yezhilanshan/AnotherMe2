@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import logging
 import os
@@ -104,11 +104,16 @@ class ToolTrace:
 class AgenticChatPipeline:
     """Run chat as a 4-stage agentic pipeline."""
 
-    def __init__(self, language: str = "en") -> None:
+    def __init__(
+        self,
+        language: str = "en",
+        max_tokens_override: int | None = None,
+        model_override: str | None = None,
+    ) -> None:
         self.language = "zh" if language.lower().startswith("zh") else "en"
         self.llm_config = get_llm_config()
         self.binding = getattr(self.llm_config, "binding", None) or "openai"
-        self.model = getattr(self.llm_config, "model", None)
+        self.model = model_override or getattr(self.llm_config, "model", None)
         self.api_key = getattr(self.llm_config, "api_key", None)
         self.base_url = getattr(self.llm_config, "base_url", None)
         self.api_version = getattr(self.llm_config, "api_version", None)
@@ -127,6 +132,13 @@ class AgenticChatPipeline:
         except (TypeError, ValueError):
             self._chat_temperature = 0.2
         self._chat_limits = _ChatLimits.from_config(chat_cfg)
+        if max_tokens_override is not None:
+            bounded = max(1, min(int(max_tokens_override), 32768))
+            self._chat_limits = replace(
+                self._chat_limits,
+                responding=bounded,
+                answer_now=bounded,
+            )
         # Prompts live in tutor_engine/agents/chat/prompts/{zh,en}/agentic_chat.yaml
         # so all user-visible / LLM-facing copy is editable without touching code.
         try:
@@ -369,6 +381,8 @@ class AgenticChatPipeline:
                     f"{self._labeled_block('Tool Trace', self._format_tool_traces(tool_traces))}"
                 ),
             )
+
+            messages, _ = self._prepare_messages_with_attachments(messages, context)
 
             chunks: list[str] = []
             async for chunk in self._stream_messages(

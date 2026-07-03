@@ -1,4 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  memo,
+} from "react";
 import {
   View,
   Text,
@@ -15,13 +22,21 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
-import { File } from "expo-file-system";
+import * as FileSystem from "expo-file-system";
+import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
 import { useRouter } from "expo-router";
 import { api } from "../../lib/api";
-import { GATEWAY_URL, BEARER_TOKEN, TUNNEL_HEADERS, USER_ID } from "../../lib/config";
+import {
+  GATEWAY_URL,
+  BEARER_TOKEN,
+  TUNNEL_HEADERS,
+  USER_ID,
+} from "../../lib/config";
 import { getSafeStorage } from "../../lib/safeStorage";
+import { colors } from "../../lib/theme";
+import { BackgroundImage } from "../../components/ui/BackgroundImage";
 import {
   createProblemStepFollowupContext,
   saveProblemStepFollowupContext,
@@ -39,6 +54,22 @@ const BRAND_BLUE_LIGHTER = "#eef4ff";
 const ACTION_RED = "#E0573D";
 const SUCCESS_GREEN = "#34C759";
 
+// 参考图片风格：桃色背景 + 紫/橙强调色
+const PEACH_OVERLAY = "rgba(255, 245, 240, 0.72)";
+const PURPLE = "#6B5CE7";
+const PURPLE_LIGHT = "#EDE9FF";
+const ORANGE = "#FF8C61";
+const ORANGE_LIGHT = "#FFE8E0";
+const GLASS_BG = "rgba(255, 252, 249, 0.88)";
+const GLASS_BORDER = "rgba(255, 255, 255, 0.6)";
+const CARD_SHADOW = {
+  shadowColor: "#5A3E36",
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.08,
+  shadowRadius: 14,
+  elevation: 4,
+};
+
 type JobStatus =
   | "idle"
   | "uploading"
@@ -49,7 +80,7 @@ type JobStatus =
   | "failed"
   | "needs_confirmation";
 
-type SolveMode = "steps" | "video" | "matplotlib" | "interactive";
+type SolveMode = "manim_direct" | "video";
 
 interface JobState {
   status: JobStatus;
@@ -89,6 +120,9 @@ interface ProblemVideoHistoryItem extends PersistedProblemVideoState {
 const STORAGE_KEY = "@anotherme/problem-video/current";
 const HISTORY_KEY = "@anotherme/problem-video/history";
 const MAX_HISTORY_ITEMS = 20;
+const SAFE_UPLOAD_IMAGE_LONG_EDGE = 1600;
+const SAFE_UPLOAD_IMAGE_COMPRESS = 0.72;
+const MAX_CAMERA_IMAGE_BYTES = 8 * 1024 * 1024;
 const PROCESSING_STATUSES: JobStatus[] = [
   "uploading",
   "creating_job",
@@ -126,9 +160,7 @@ function formatHistoryTime(value: number): string {
   }
 }
 
-function renderModeForSolveMode(mode: SolveMode): string {
-  if (mode === "matplotlib") return "matplotlib";
-  if (mode === "interactive") return "interactive";
+function renderModeForSolveMode(_mode: SolveMode): string {
   return "video";
 }
 
@@ -151,9 +183,7 @@ function normalizeSolutionSteps(value: unknown): SolutionStep[] {
             .filter(Boolean)
         : [];
       const abilityTags = Array.isArray(raw.abilityTags)
-        ? raw.abilityTags
-            .map((item) => String(item).trim())
-            .filter(Boolean)
+        ? raw.abilityTags.map((item) => String(item).trim()).filter(Boolean)
         : [];
       return {
         id,
@@ -167,10 +197,295 @@ function normalizeSolutionSteps(value: unknown): SolutionStep[] {
     .filter((item): item is SolutionStep => item !== null);
 }
 
-async function readFileBytes(uri: string): Promise<Uint8Array> {
-  const file = new File(uri);
-  return new Uint8Array(await file.arrayBuffer());
+async function prepareUploadImageAsset(
+  asset: ImagePicker.ImagePickerAsset,
+): Promise<{
+  uri: string;
+  width?: number;
+  height?: number;
+  size?: number;
+  mimeType: string;
+}> {
+  const width = asset.width || 0;
+  const height = asset.height || 0;
+  const longestEdge = Math.max(width, height);
+  const resize =
+    longestEdge > SAFE_UPLOAD_IMAGE_LONG_EDGE
+      ? width >= height
+        ? { width: SAFE_UPLOAD_IMAGE_LONG_EDGE }
+        : { height: SAFE_UPLOAD_IMAGE_LONG_EDGE }
+      : {};
+
+  try {
+    const result = await ImageManipulator.manipulateAsync(
+      asset.uri,
+      Object.keys(resize).length ? [{ resize }] : [],
+      {
+        compress: SAFE_UPLOAD_IMAGE_COMPRESS,
+        format: ImageManipulator.SaveFormat.JPEG,
+      },
+    );
+    const info = await FileSystem.getInfoAsync(result.uri).catch(() => null);
+    return {
+      uri: result.uri,
+      width: result.width,
+      height: result.height,
+      size: info?.exists ? (info as any).size : undefined,
+      mimeType: "image/jpeg",
+    };
+  } catch (err) {
+    console.warn("[camera] image prepare failed, using original:", err);
+    const info = await FileSystem.getInfoAsync(asset.uri).catch(() => null);
+    return {
+      uri: asset.uri,
+      width: asset.width,
+      height: asset.height,
+      size: info?.exists ? (info as any).size : asset.fileSize,
+      mimeType: asset.mimeType || "image/jpeg",
+    };
+  }
 }
+
+// ─── 常量：模式选择器 tabs，避免每次渲染重建数组 ───
+const MODE_TABS: {
+  key: SolveMode;
+  icon: "flash" | "videocam";
+  label: string;
+}[] = [
+  { key: "manim_direct", icon: "flash", label: "AI直出" },
+  { key: "video", icon: "videocam", label: "视频" },
+];
+
+// ─── Memoized 卡片组件：避免列表重渲染 ───
+
+const HistoryVideoCard = memo(function HistoryVideoCard({
+  item,
+  onPress,
+}: {
+  item: ProblemVideoHistoryItem;
+  onPress: (item: ProblemVideoHistoryItem) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.videoGridCard}
+      onPress={() => onPress(item)}
+      activeOpacity={0.85}
+    >
+      <View style={styles.videoGridThumb}>
+        {item.imageUri ? (
+          <Image
+            source={{ uri: item.imageUri }}
+            style={styles.videoGridThumbImg}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.videoGridThumbFallback}>
+            <Ionicons
+              name="document-text"
+              size={24}
+              color="rgba(255,255,255,0.6)"
+            />
+          </View>
+        )}
+        <View style={styles.videoGridOverlay}>
+          <Ionicons
+            name="play-circle"
+            size={36}
+            color="rgba(255,255,255,0.9)"
+          />
+        </View>
+      </View>
+      <View style={styles.videoGridInfo}>
+        <Text style={styles.videoGridTitle} numberOfLines={2}>
+          {item.description.trim() || "拍题讲解"}
+        </Text>
+        <Text style={styles.videoGridMeta}>
+          {formatHistoryTime(item.updatedAt)}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
+/*
+const HistoryInteractiveCard = memo(function HistoryInteractiveCard({
+  item,
+  onPress,
+}: {
+  item: ProblemVideoHistoryItem;
+  onPress: (item: ProblemVideoHistoryItem) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.videoGridCard}
+      onPress={() => onPress(item)}
+      activeOpacity={0.85}
+    >
+      <View style={styles.videoGridThumb}>
+        {item.imageUri ? (
+          <Image
+            source={{ uri: item.imageUri }}
+            style={styles.videoGridThumbImg}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.videoGridThumbFallback}>
+            <Ionicons
+              name="analytics"
+              size={24}
+              color="rgba(255,255,255,0.6)"
+            />
+          </View>
+        )}
+        <View style={styles.videoGridOverlay}>
+          <Ionicons name="hand-left" size={32} color="rgba(255,255,255,0.9)" />
+        </View>
+      </View>
+      <View style={styles.videoGridInfo}>
+        <Text style={styles.videoGridTitle} numberOfLines={2}>
+          {item.description.trim() || "交互可视化"}
+        </Text>
+        <Text style={styles.videoGridMeta}>
+          {formatHistoryTime(item.updatedAt)}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+});
+*/
+
+/*
+const HistoryVizCard = memo(function HistoryVizCard({
+  item,
+  onPress,
+}: {
+  item: ProblemVideoHistoryItem;
+  onPress: (item: ProblemVideoHistoryItem) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.videoGridCard}
+      onPress={() => onPress(item)}
+      activeOpacity={0.85}
+    >
+      <View style={styles.videoGridThumb}>
+        {item.job.imageUrl ? (
+          <Image
+            source={{ uri: resolveUrl(item.job.imageUrl) }}
+            style={styles.videoGridThumbImg}
+            resizeMode="cover"
+          />
+        ) : item.imageUri ? (
+          <Image
+            source={{ uri: item.imageUri }}
+            style={styles.videoGridThumbImg}
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.videoGridThumbFallback}>
+            <Ionicons
+              name="bar-chart"
+              size={24}
+              color="rgba(255,255,255,0.6)"
+            />
+          </View>
+        )}
+      </View>
+      <View style={styles.videoGridInfo}>
+        <Text style={styles.videoGridTitle} numberOfLines={2}>
+          {item.description.trim() || "题目可视化"}
+        </Text>
+        <Text style={styles.videoGridMeta}>
+          {formatHistoryTime(item.updatedAt)}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+});
+*/
+
+const HistoryTaskCard = memo(function HistoryTaskCard({
+  item,
+  isActive,
+  statusColor,
+  statusText,
+  onPress,
+  onLongPress,
+}: {
+  item: ProblemVideoHistoryItem;
+  isActive: boolean;
+  statusColor: string;
+  statusText: string;
+  onPress: (item: ProblemVideoHistoryItem) => void;
+  onLongPress: (id: string) => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.taskCard, isActive && styles.taskCardActive]}
+      onPress={() => onPress(item)}
+      onLongPress={() => onLongPress(item.id)}
+      activeOpacity={0.7}
+    >
+      {item.imageUri ? (
+        <Image
+          source={{ uri: item.imageUri }}
+          style={styles.taskImage}
+          resizeMode="cover"
+        />
+      ) : (
+        <View style={styles.taskImageFallback}>
+          <Ionicons name="image-outline" size={20} color="#999" />
+        </View>
+      )}
+      <View style={styles.taskInfo}>
+        <Text style={styles.taskName} numberOfLines={1}>
+          {item.description.trim() || item.job.step || "拍题视频任务"}
+        </Text>
+        <View style={styles.taskMetaRow}>
+          <View
+            style={[
+              styles.taskStatusBadge,
+              { backgroundColor: statusColor + "18" },
+            ]}
+          >
+            <View
+              style={[styles.taskStatusDot, { backgroundColor: statusColor }]}
+            />
+            <Text style={[styles.taskStatusText, { color: statusColor }]}>
+              {statusText}
+            </Text>
+          </View>
+          <Text style={styles.taskTime}>
+            {formatHistoryTime(item.updatedAt)}
+          </Text>
+        </View>
+        {PROCESSING_STATUSES.includes(item.job.status) && (
+          <View style={styles.taskProgressBar}>
+            <View
+              style={[
+                styles.taskProgressFill,
+                { width: `${Math.round(item.job.progress || 0)}%` },
+              ]}
+            />
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+});
+
+// ─── 常量：历史状态标签 ───
+const HISTORY_STATUS_LABEL: Record<JobStatus, { text: string; color: string }> =
+  {
+    idle: { text: "未开始", color: "#999" },
+    uploading: { text: "上传中", color: BRAND_BLUE },
+    creating_job: { text: "创建中", color: BRAND_BLUE },
+    queued: { text: "排队中", color: "#FF9500" },
+    running: { text: "生成中", color: "#FF9500" },
+    completed: { text: "已完成", color: SUCCESS_GREEN },
+    failed: { text: "失败", color: "#FF3B30" },
+    needs_confirmation: { text: "需确认", color: "#FF9500" },
+  };
 
 export default function CameraScreen() {
   const insets = useSafeAreaInsets();
@@ -185,9 +500,12 @@ export default function CameraScreen() {
   const [history, setHistory] = useState<ProblemVideoHistoryItem[]>([]);
   const [videoModalUrl, setVideoModalUrl] = useState<string | null>(null);
   const [videoModalTitle, setVideoModalTitle] = useState("讲解视频");
-  const [solveMode, setSolveMode] = useState<SolveMode>("video");
+  const [solveMode, setSolveMode] = useState<SolveMode>("manim_direct");
   const [actionStep, setActionStep] = useState<SolutionStep | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resettingRef = useRef(false);
+  const currentJobIdRef = useRef<string | null>(null);
+  const jobStartedAtRef = useRef<number>(0);
 
   useEffect(() => {
     return () => {
@@ -220,43 +538,63 @@ export default function CameraScreen() {
         });
 
     if (!result.canceled && result.assets[0]) {
-      setImageUri(result.assets[0].uri);
+      const prepared = await prepareUploadImageAsset(result.assets[0]);
+      if (prepared.size && prepared.size > MAX_CAMERA_IMAGE_BYTES) {
+        setJob((prev) => ({
+          ...prev,
+          error: "图片过大，请重新拍摄或选择更小的图片",
+          status: "failed",
+        }));
+        return;
+      }
+      setImageUri(prepared.uri);
       setJob(EMPTY_JOB);
     }
   };
 
   const uploadImage = async (uri: string): Promise<string> => {
     setJob((prev) => ({ ...prev, status: "uploading", error: null }));
-    const boundary = "----FormBoundary" + Date.now().toString(36);
-    const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`;
-    const footer = `\r\n--${boundary}--\r\n`;
-    const bytes = await readFileBytes(uri);
-    const headerBytes = new TextEncoder().encode(header);
-    const footerBytes = new TextEncoder().encode(footer);
-    const body = new Uint8Array(
-      headerBytes.length + bytes.length + footerBytes.length,
-    );
-    body.set(headerBytes, 0);
-    body.set(bytes, headerBytes.length);
-    body.set(footerBytes, headerBytes.length + bytes.length);
-
-    const headers: Record<string, string> = {
-      "Content-Type": `multipart/form-data; boundary=${boundary}`,
-    };
-    if (BEARER_TOKEN) headers["Authorization"] = `Bearer ${BEARER_TOKEN}`;
-    Object.assign(headers, TUNNEL_HEADERS);
-
-    const res = await fetch(`${GATEWAY_URL}/v1/uploads`, {
-      method: "POST",
-      headers,
-      body: body.buffer,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`上传失败 (${res.status}): ${text}`);
+    const info = await FileSystem.getInfoAsync(uri).catch(() => null);
+    const size = info?.exists ? (info as any).size : undefined;
+    if (size && size > MAX_CAMERA_IMAGE_BYTES) {
+      throw new Error("图片过大，请重新拍摄或选择更小的图片");
     }
-    const data = await res.json();
-    return data.object_key as string;
+
+    // 使用 XMLHttpRequest 和 FormData 上传文件，兼容 React Native 环境
+    const formData = new FormData();
+    formData.append("file", {
+      uri,
+      name: "photo.jpg",
+      type: "image/jpeg",
+    } as any);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${GATEWAY_URL}/v1/uploads`);
+
+      if (BEARER_TOKEN) {
+        xhr.setRequestHeader("Authorization", `Bearer ${BEARER_TOKEN}`);
+      }
+      Object.entries(TUNNEL_HEADERS).forEach(([key, value]) => {
+        xhr.setRequestHeader(key, value as string);
+      });
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data.object_key as string);
+          } catch (err) {
+            reject(new Error("解析上传响应失败"));
+          }
+        } else {
+          reject(new Error(`上传失败 (${xhr.status}): ${xhr.responseText}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error("网络请求失败"));
+      xhr.send(formData);
+    });
   };
 
   const createJob = async (
@@ -270,32 +608,66 @@ export default function CameraScreen() {
     };
     if (BEARER_TOKEN) headers["Authorization"] = `Bearer ${BEARER_TOKEN}`;
 
-    const payload = {
+    const isManimDirect = solveMode === "manim_direct";
+    const jobType = isManimDirect
+      ? "photo_manim_direct"
+      : "problem_video_generate";
+
+    const payload: Record<string, unknown> = {
       image_object_key: objectKey,
       ...(description.trim() ? { problem_text: description.trim() } : {}),
-      render_mode: renderMode,
     };
-    console.log("[camera] createJob payload:", JSON.stringify(payload));
+    if (!isManimDirect) {
+      payload.render_mode = renderMode;
+    }
+    console.log(
+      "[camera] createJob jobType:",
+      jobType,
+      "payload:",
+      JSON.stringify(payload),
+    );
 
     const res = await fetch(`${GATEWAY_URL}/v1/jobs`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        job_type: "problem_video_generate",
+        job_type: jobType,
         payload,
         user_id: "mobile-user",
       }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      // 尝试解析服务端返回的结构化错误
+      try {
+        const errData = JSON.parse(text);
+        const detail = errData?.detail;
+        if (typeof detail === "object" && detail !== null) {
+          throw new Error(
+            ((detail as Record<string, unknown>).message as string) || text,
+          );
+        }
+        if (typeof detail === "string") {
+          throw new Error(detail);
+        }
+      } catch (parseErr) {
+        // 如果解析失败（text 本身就是错误消息），直接抛出原始错误
+        if (parseErr instanceof Error && parseErr.message !== text) {
+          throw parseErr;
+        }
+      }
       throw new Error(`创建任务失败 (${res.status}): ${text}`);
     }
     const data = await res.json();
     return data.job_id as string;
   };
 
+  const PROGRESS_CAP_MINUTES = 4;
+  const PROGRESS_CAP_MS = PROGRESS_CAP_MINUTES * 60 * 1000;
+
   const pollJob = useCallback((jobId: string) => {
     if (pollRef.current) clearInterval(pollRef.current);
+    jobStartedAtRef.current = Date.now();
     const headers: Record<string, string> = { ...TUNNEL_HEADERS };
     if (BEARER_TOKEN) headers["Authorization"] = `Bearer ${BEARER_TOKEN}`;
 
@@ -305,14 +677,20 @@ export default function CameraScreen() {
         if (!res.ok) return;
         const data = await res.json();
         const status = data.status as string;
-        const progress = (data.progress as number) || 0;
         const step = (data.step as string) || "";
+
+        // 以四分钟为基准：用已用时间驱动进度条从 0% 平滑走到 99%，完成后跳 100%
+        const elapsed = Date.now() - jobStartedAtRef.current;
+        const progress = Math.min((elapsed / PROGRESS_CAP_MS) * 99, 99);
         const result = data.result as Record<string, unknown> | undefined;
         const snapshot =
-          result?.problem_snapshot && typeof result.problem_snapshot === "object"
+          result?.problem_snapshot &&
+          typeof result.problem_snapshot === "object"
             ? (result.problem_snapshot as Record<string, unknown>)
             : null;
-        const steps = normalizeSolutionSteps(result?.steps || snapshot?.allSteps);
+        const steps = normalizeSolutionSteps(
+          result?.steps || snapshot?.allSteps,
+        );
         if (steps.length) {
           setSolutionSteps((prev) => {
             if (
@@ -420,13 +798,20 @@ export default function CameraScreen() {
           setExpandedSteps(new Set(saved.solutionSteps.map((s) => s.id)));
         }
         const restoredJob = saved.job || EMPTY_JOB;
+        // 若持久化 job 状态为 running 但没有 jobId，或 job 已运行超过 10 分钟（可能已卡住），
+        // 标记为失败而非恢复轮询
+        const isStaleRunning =
+          restoredJob.status === "running" && !restoredJob.jobId;
         setJob(
           restoredJob.status === "uploading" ||
-            restoredJob.status === "creating_job"
+            restoredJob.status === "creating_job" ||
+            isStaleRunning
             ? {
                 ...restoredJob,
                 status: "failed",
-                error: "上次任务在创建前中断，请重新提交",
+                error: isStaleRunning
+                  ? "上次任务可能已超时，请重新提交"
+                  : "上次任务在创建前中断，请重新提交",
               }
             : restoredJob,
         );
@@ -435,7 +820,8 @@ export default function CameraScreen() {
           saved.job?.jobId &&
           PROCESSING_STATUSES.includes(saved.job.status) &&
           saved.job.status !== "uploading" &&
-          saved.job.status !== "creating_job"
+          saved.job.status !== "creating_job" &&
+          saved.job.status !== "running"
         ) {
           pollJob(saved.job.jobId);
         }
@@ -451,6 +837,8 @@ export default function CameraScreen() {
 
   useEffect(() => {
     if (!hydrated) return;
+    // 重置过程中跳过持久化，避免旧状态被写回
+    if (resettingRef.current) return;
     const AS = getSafeStorage();
     const persist = async () => {
       if (!imageUri && job.status === "idle") {
@@ -505,6 +893,7 @@ export default function CameraScreen() {
     try {
       const objectKey = await uploadImage(imageUri!);
       const jobId = await createJob(objectKey, renderMode);
+      currentJobIdRef.current = jobId;
       setJob((prev) => ({ ...prev, jobId, status: "queued" }));
       pollJob(jobId);
     } catch (err) {
@@ -530,6 +919,7 @@ export default function CameraScreen() {
     try {
       const objectKey = await uploadImage(imageUri!);
       const jobId = await createJob(objectKey, renderMode);
+      currentJobIdRef.current = jobId;
       setJob((prev) => ({ ...prev, jobId, status: "queued" }));
       pollJob(jobId);
     } catch (err) {
@@ -552,25 +942,58 @@ export default function CameraScreen() {
   };
 
   const handleReset = () => {
+    // 先停止轮询，防止在清理过程中轮询又写回状态
     if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
+    const jobIdToCancel = currentJobIdRef.current;
+    currentJobIdRef.current = null;
+    // 尝试取消服务端的 job（fire-and-forget）
+    if (jobIdToCancel) {
+      const headers: Record<string, string> = { ...TUNNEL_HEADERS };
+      if (BEARER_TOKEN) headers["Authorization"] = `Bearer ${BEARER_TOKEN}`;
+      fetch(`${GATEWAY_URL}/v1/jobs/${jobIdToCancel}`, {
+        method: "DELETE",
+        headers,
+      }).catch(() => {});
+    }
+    // 设置重置标志，阻止 persist effect 在清理过程中写回旧状态
+    resettingRef.current = true;
     setImageUri(null);
     setDescription("");
     setJob(EMPTY_JOB);
-    // 解题步骤保留，不随重置清除
+    // 先同步移除存储，再异步确认（避免 persist 在 reset 之前写回）
     getSafeStorage()
       .removeItem(STORAGE_KEY)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        resettingRef.current = false;
+      });
   };
 
   const resumeHistoryItem = (item: ProblemVideoHistoryItem) => {
     if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
     setImageUri(item.imageUri);
     setDescription(item.description);
-    setJob(item.job);
+    // 如果历史任务处于 running 状态，很可能已经卡住，标记为失败
+    const safeJob =
+      item.job.status === "running"
+        ? {
+            ...item.job,
+            status: "failed" as JobStatus,
+            error: "该任务可能已超时或卡住，请重新提交",
+          }
+        : item.job;
+    setJob(safeJob);
     setSolutionSteps(item.solutionSteps || []);
     setExpandedSteps(new Set((item.solutionSteps || []).map((s) => s.id)));
-    if (item.job.jobId && PROCESSING_STATUSES.includes(item.job.status)) {
-      pollJob(item.job.jobId);
+    if (
+      safeJob.jobId &&
+      PROCESSING_STATUSES.includes(safeJob.status) &&
+      safeJob.status !== "running"
+    ) {
+      currentJobIdRef.current = safeJob.jobId;
+      pollJob(safeJob.jobId);
     }
   };
 
@@ -585,7 +1008,7 @@ export default function CameraScreen() {
     ]);
   };
 
-  const openVideo = (url: string, title = "讲解视频") => {
+  const openVideo = useCallback((url: string, title = "讲解视频") => {
     if (/^[a-zA-Z]:[\\/]/.test(url)) {
       setJob((prev) => ({
         ...prev,
@@ -596,7 +1019,7 @@ export default function CameraScreen() {
     }
     setVideoModalTitle(title);
     setVideoModalUrl(url);
-  };
+  }, []);
 
   const toggleStep = (stepId: number) => {
     setExpandedSteps((prev) => {
@@ -619,7 +1042,8 @@ export default function CameraScreen() {
       solveMode,
       problemSnapshot: {
         source: "problem_video_job",
-        summary: description.trim() || "拍题任务已生成解题步骤，题面文字未手动补充。",
+        summary:
+          description.trim() || "拍题任务已生成解题步骤，题面文字未手动补充。",
         allSteps: solutionSteps.map((item) => ({
           id: item.id,
           title: item.title,
@@ -637,7 +1061,9 @@ export default function CameraScreen() {
       api.learningEvents
         .createForUser(USER_ID, {
           event_type: "problem_step_questioned",
-          block_id: job.jobId ? `${job.jobId}:step:${step.id}` : `step:${step.id}`,
+          block_id: job.jobId
+            ? `${job.jobId}:step:${step.id}`
+            : `step:${step.id}`,
           payload: {
             followup_id: context.id,
             intent,
@@ -683,54 +1109,53 @@ export default function CameraScreen() {
 
   const isProcessing = PROCESSING_STATUSES.includes(job.status);
 
-  const statusLabel: Record<string, string> = {
-    uploading: "上传图片中...",
-    creating_job: "识别题目中...",
-    queued: "排队等待中...",
-    running:
-      solveMode === "matplotlib"
-        ? "AI 正在生成可视化图表..."
-        : solveMode === "interactive"
-          ? "AI 正在生成交互可视化..."
-        : "AI 正在生成讲解视频...",
-  };
-
-  const historyStatusLabel: Record<JobStatus, { text: string; color: string }> =
-    {
-      idle: { text: "未开始", color: "#999" },
-      uploading: { text: "上传中", color: BRAND_BLUE },
-      creating_job: { text: "创建中", color: BRAND_BLUE },
-      queued: { text: "排队中", color: "#FF9500" },
-      running: { text: "生成中", color: "#FF9500" },
-      completed: { text: "已完成", color: SUCCESS_GREEN },
-      failed: { text: "失败", color: "#FF3B30" },
-      needs_confirmation: { text: "需确认", color: "#FF9500" },
-    };
+  const statusLabel: Record<string, string> = useMemo(
+    () => ({
+      uploading: "上传图片中...",
+      creating_job: "识别题目中...",
+      queued: "排队等待中...",
+      running: "AI 正在生成讲解视频...",
+    }),
+    [],
+  );
 
   // ─── 分离已完成和进行中的历史 ───
-  const completedVideoHistory = history.filter(
-    (h) => h.job.status === "completed" && h.job.videoUrl && !h.job.interactiveUrl,
+  const completedVideoHistory = useMemo(
+    () => history.filter((h) => h.job.status === "completed" && h.job.videoUrl),
+    [history],
   );
-  const completedVizHistory = history.filter(
-    (h) =>
-      h.job.status === "completed" &&
-      h.job.imageUrl &&
-      !h.job.videoUrl &&
-      !h.job.interactiveUrl,
-  );
-  const completedInteractiveHistory = history.filter(
-    (h) => h.job.status === "completed" && h.job.interactiveUrl,
-  );
-  const otherHistory = history.filter(
-    (h) =>
-      !(
-        h.job.status === "completed" &&
-        (h.job.videoUrl || h.job.imageUrl || h.job.interactiveUrl)
+  /*
+  const completedVizHistory = useMemo(
+    () =>
+      history.filter(
+        (h) =>
+          h.job.status === "completed" &&
+          h.job.imageUrl &&
+          !h.job.videoUrl &&
+          !h.job.interactiveUrl,
       ),
+    [history],
+  );
+  const completedInteractiveHistory = useMemo(
+    () =>
+      history.filter(
+        (h) => h.job.status === "completed" && h.job.interactiveUrl,
+      ),
+    [history],
+  );
+  */
+  const otherHistory = useMemo(
+    () =>
+      history.filter((h) => !(h.job.status === "completed" && h.job.videoUrl)),
+    [history],
   );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <BackgroundImage
+        source={require("../../assets/backgrounds/camera_bg.png")}
+        overlayColor={PEACH_OVERLAY}
+      />
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>拍题答疑</Text>
@@ -860,28 +1285,7 @@ export default function CameraScreen() {
               <View style={styles.modeSelector}>
                 <Text style={styles.modeSelectorLabel}>解答方式</Text>
                 <View style={styles.modeTabs}>
-                  {[
-                    {
-                      key: "steps" as SolveMode,
-                      icon: "document-text" as const,
-                      label: "题解",
-                    },
-                    {
-                      key: "video" as SolveMode,
-                      icon: "videocam" as const,
-                      label: "视频",
-                    },
-                    {
-                      key: "matplotlib" as SolveMode,
-                      icon: "bar-chart" as const,
-                      label: "可视化",
-                    },
-                    {
-                      key: "interactive" as SolveMode,
-                      icon: "analytics" as const,
-                      label: "交互",
-                    },
-                  ].map((tab) => (
+                  {MODE_TABS.map((tab) => (
                     <TouchableOpacity
                       key={tab.key}
                       style={[
@@ -936,53 +1340,16 @@ export default function CameraScreen() {
               </View>
             )}
 
-            {/* 完成状态：视频卡片或 Matplotlib 图片 */}
+            {/* 完成状态：视频卡片 */}
             {job.status === "completed" && (
               <View style={styles.completedCard}>
+                {/* interactive/matplotlib 分支暂时注释
                 {job.interactiveUrl ? (
-                  <TouchableOpacity
-                    style={styles.videoPreviewCard}
-                    onPress={() => openVideo(job.interactiveUrl!, "交互可视化")}
-                    activeOpacity={0.85}
-                  >
-                    <View style={styles.interactivePreviewBg}>
-                      <View style={styles.videoPlayCircle}>
-                        <Ionicons name="analytics" size={30} color="#FFF" />
-                      </View>
-                    </View>
-                    <View style={styles.videoPreviewInfo}>
-                      <View style={styles.videoPreviewTitleRow}>
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={18}
-                          color={SUCCESS_GREEN}
-                        />
-                        <Text style={styles.videoPreviewTitle}>
-                          交互可视化生成完成
-                        </Text>
-                      </View>
-                      <Text style={styles.videoPreviewSub}>
-                        点击打开可拖拽几何演示
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
+                  ...
                 ) : job.imageUrl ? (
-                  <View style={styles.matplotlibResultCard}>
-                    <View style={styles.matplotlibHeaderRow}>
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={18}
-                        color={SUCCESS_GREEN}
-                      />
-                      <Text style={styles.matplotlibTitle}>可视化生成完成</Text>
-                    </View>
-                    <Image
-                      source={{ uri: resolveUrl(job.imageUrl) }}
-                      style={styles.matplotlibImage}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ) : job.videoUrl ? (
+                  ...
+                ) : */}
+                {job.videoUrl ? (
                   <TouchableOpacity
                     style={styles.videoPreviewCard}
                     onPress={() => openVideo(job.videoUrl!)}
@@ -1101,26 +1468,8 @@ export default function CameraScreen() {
                 onPress={handleSubmit}
                 activeOpacity={0.85}
               >
-                <Ionicons
-                  name={
-                    solveMode === "matplotlib"
-                      ? "bar-chart"
-                      : solveMode === "interactive"
-                        ? "analytics"
-                        : "videocam"
-                  }
-                  size={20}
-                  color="#FFF"
-                />
-                <Text style={styles.submitText}>
-                  {solveMode === "matplotlib"
-                    ? "生成可视化图表"
-                    : solveMode === "interactive"
-                      ? "生成交互可视化"
-                    : solveMode === "steps"
-                      ? "生成题解"
-                      : "生成讲解视频"}
-                </Text>
+                <Ionicons name="videocam" size={20} color="#FFF" />
+                <Text style={styles.submitText}>生成讲解视频</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1137,51 +1486,17 @@ export default function CameraScreen() {
             </View>
             <View style={styles.videoGrid}>
               {completedVideoHistory.map((item) => (
-                <TouchableOpacity
+                <HistoryVideoCard
                   key={item.id}
-                  style={styles.videoGridCard}
-                  onPress={() => openVideo(item.job.videoUrl!)}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.videoGridThumb}>
-                    {item.imageUri ? (
-                      <Image
-                        source={{ uri: item.imageUri }}
-                        style={styles.videoGridThumbImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.videoGridThumbFallback}>
-                        <Ionicons
-                          name="document-text"
-                          size={24}
-                          color="rgba(255,255,255,0.6)"
-                        />
-                      </View>
-                    )}
-                    <View style={styles.videoGridOverlay}>
-                      <Ionicons
-                        name="play-circle"
-                        size={36}
-                        color="rgba(255,255,255,0.9)"
-                      />
-                    </View>
-                  </View>
-                  <View style={styles.videoGridInfo}>
-                    <Text style={styles.videoGridTitle} numberOfLines={2}>
-                      {item.description.trim() || "拍题讲解"}
-                    </Text>
-                    <Text style={styles.videoGridMeta}>
-                      {formatHistoryTime(item.updatedAt)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+                  item={item}
+                  onPress={(it) => openVideo(it.job.videoUrl!)}
+                />
               ))}
             </View>
           </View>
         )}
 
-        {/* ─── 已完成交互可视化网格 ─── */}
+        {/* 交互可视化 / 可视化图表 网格暂时注释
         {completedInteractiveHistory.length > 0 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -1198,51 +1513,18 @@ export default function CameraScreen() {
             </View>
             <View style={styles.videoGrid}>
               {completedInteractiveHistory.map((item) => (
-                <TouchableOpacity
+                <HistoryInteractiveCard
                   key={item.id}
-                  style={styles.videoGridCard}
-                  onPress={() => openVideo(item.job.interactiveUrl!, "交互可视化")}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.videoGridThumb}>
-                    {item.imageUri ? (
-                      <Image
-                        source={{ uri: item.imageUri }}
-                        style={styles.videoGridThumbImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.videoGridThumbFallback}>
-                        <Ionicons
-                          name="analytics"
-                          size={24}
-                          color="rgba(255,255,255,0.6)"
-                        />
-                      </View>
-                    )}
-                    <View style={styles.videoGridOverlay}>
-                      <Ionicons
-                        name="hand-left"
-                        size={32}
-                        color="rgba(255,255,255,0.9)"
-                      />
-                    </View>
-                  </View>
-                  <View style={styles.videoGridInfo}>
-                    <Text style={styles.videoGridTitle} numberOfLines={2}>
-                      {item.description.trim() || "交互可视化"}
-                    </Text>
-                    <Text style={styles.videoGridMeta}>
-                      {formatHistoryTime(item.updatedAt)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+                  item={item}
+                  onPress={(it) =>
+                    openVideo(it.job.interactiveUrl!, "交互可视化")
+                  }
+                />
               ))}
             </View>
           </View>
         )}
 
-        {/* ─── 已完成可视化图表网格 ─── */}
         {completedVizHistory.length > 0 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -1259,48 +1541,16 @@ export default function CameraScreen() {
             </View>
             <View style={styles.videoGrid}>
               {completedVizHistory.map((item) => (
-                <TouchableOpacity
+                <HistoryVizCard
                   key={item.id}
-                  style={styles.videoGridCard}
-                  onPress={() => resumeHistoryItem(item)}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.videoGridThumb}>
-                    {item.job.imageUrl ? (
-                      <Image
-                        source={{ uri: resolveUrl(item.job.imageUrl) }}
-                        style={styles.videoGridThumbImg}
-                        resizeMode="cover"
-                      />
-                    ) : item.imageUri ? (
-                      <Image
-                        source={{ uri: item.imageUri }}
-                        style={styles.videoGridThumbImg}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.videoGridThumbFallback}>
-                        <Ionicons
-                          name="bar-chart"
-                          size={24}
-                          color="rgba(255,255,255,0.6)"
-                        />
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.videoGridInfo}>
-                    <Text style={styles.videoGridTitle} numberOfLines={2}>
-                      {item.description.trim() || "题目可视化"}
-                    </Text>
-                    <Text style={styles.videoGridMeta}>
-                      {formatHistoryTime(item.updatedAt)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
+                  item={item}
+                  onPress={resumeHistoryItem}
+                />
               ))}
             </View>
           </View>
         )}
+        */}
 
         {/* ─── 其他历史任务 ─── */}
         {otherHistory.length > 0 && (
@@ -1311,75 +1561,17 @@ export default function CameraScreen() {
                 <Text style={styles.sectionClear}>清空</Text>
               </TouchableOpacity>
             </View>
-            {otherHistory.map((item) => {
-              const active = item.job.jobId && item.job.jobId === job.jobId;
-              const statusInfo = historyStatusLabel[item.job.status];
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[styles.taskCard, active && styles.taskCardActive]}
-                  onPress={() => resumeHistoryItem(item)}
-                  onLongPress={() => deleteHistoryItem(item.id)}
-                  activeOpacity={0.7}
-                >
-                  {item.imageUri ? (
-                    <Image
-                      source={{ uri: item.imageUri }}
-                      style={styles.taskImage}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <View style={styles.taskImageFallback}>
-                      <Ionicons name="image-outline" size={20} color="#999" />
-                    </View>
-                  )}
-                  <View style={styles.taskInfo}>
-                    <Text style={styles.taskName} numberOfLines={1}>
-                      {item.description.trim() ||
-                        item.job.step ||
-                        "拍题视频任务"}
-                    </Text>
-                    <View style={styles.taskMetaRow}>
-                      <View
-                        style={[
-                          styles.taskStatusBadge,
-                          { backgroundColor: statusInfo.color + "18" },
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.taskStatusDot,
-                            { backgroundColor: statusInfo.color },
-                          ]}
-                        />
-                        <Text
-                          style={[
-                            styles.taskStatusText,
-                            { color: statusInfo.color },
-                          ]}
-                        >
-                          {statusInfo.text}
-                        </Text>
-                      </View>
-                      <Text style={styles.taskTime}>
-                        {formatHistoryTime(item.updatedAt)}
-                      </Text>
-                    </View>
-                    {PROCESSING_STATUSES.includes(item.job.status) && (
-                      <View style={styles.taskProgressBar}>
-                        <View
-                          style={[
-                            styles.taskProgressFill,
-                            { width: `${Math.max(item.job.progress, 8)}%` },
-                          ]}
-                        />
-                      </View>
-                    )}
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#CCC" />
-                </TouchableOpacity>
-              );
-            })}
+            {otherHistory.map((item) => (
+              <HistoryTaskCard
+                key={item.id}
+                item={item}
+                isActive={!!(item.job.jobId && item.job.jobId === job.jobId)}
+                statusColor={HISTORY_STATUS_LABEL[item.job.status].color}
+                statusText={HISTORY_STATUS_LABEL[item.job.status].text}
+                onPress={resumeHistoryItem}
+                onLongPress={deleteHistoryItem}
+              />
+            ))}
             <Text style={styles.historyHint}>点按恢复任务，长按删除</Text>
           </View>
         )}
@@ -1387,13 +1579,17 @@ export default function CameraScreen() {
         {/* 空状态 */}
         {history.length === 0 && !imageUri && (
           <View style={styles.emptyState}>
+            <Image
+              source={require("../../assets/illustrations/camera_empty.png")}
+              style={styles.emptyImage}
+              resizeMode="contain"
+            />
             <View style={styles.emptyIconWrap}>
-              <Ionicons name="videocam-outline" size={48} color={BRAND_BLUE} />
+              <Ionicons name="videocam-outline" size={36} color={BRAND_BLUE} />
             </View>
             <Text style={styles.emptyTitle}>开始拍题</Text>
             <Text style={styles.emptySub}>
-              拍照或从相册选择题目图片{"\n"}AI 将为你生成题解 / 讲解视频 /
-              可视化图表 / 交互演示
+              拍照或从相册选择题目图片{"\n"}AI 将为你生成讲解视频
             </Text>
           </View>
         )}
@@ -1426,30 +1622,48 @@ export default function CameraScreen() {
               style={styles.actionSheetItem}
               onPress={() => runStepAction("socratic")}
             >
-              <Ionicons name="help-circle-outline" size={21} color={BRAND_BLUE} />
+              <Ionicons
+                name="help-circle-outline"
+                size={21}
+                color={BRAND_BLUE}
+              />
               <View style={styles.actionSheetItemText}>
                 <Text style={styles.actionSheetItemTitle}>引导追问</Text>
-                <Text style={styles.actionSheetItemSub}>先用问题帮你自己想出来</Text>
+                <Text style={styles.actionSheetItemSub}>
+                  先用问题帮你自己想出来
+                </Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionSheetItem}
               onPress={() => runStepAction("explain")}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={21} color={BRAND_BLUE} />
+              <Ionicons
+                name="chatbubble-ellipses-outline"
+                size={21}
+                color={BRAND_BLUE}
+              />
               <View style={styles.actionSheetItemText}>
                 <Text style={styles.actionSheetItemTitle}>直接解释</Text>
-                <Text style={styles.actionSheetItemSub}>说明为什么能这样做</Text>
+                <Text style={styles.actionSheetItemSub}>
+                  说明为什么能这样做
+                </Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionSheetItem}
               onPress={() => runStepAction("reframe")}
             >
-              <Ionicons name="color-wand-outline" size={21} color={BRAND_BLUE} />
+              <Ionicons
+                name="color-wand-outline"
+                size={21}
+                color={BRAND_BLUE}
+              />
               <View style={styles.actionSheetItemText}>
                 <Text style={styles.actionSheetItemTitle}>换种讲法</Text>
-                <Text style={styles.actionSheetItemSub}>用更直观的语言重新讲</Text>
+                <Text style={styles.actionSheetItemSub}>
+                  用更直观的语言重新讲
+                </Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
@@ -1459,7 +1673,9 @@ export default function CameraScreen() {
               <Ionicons name="create-outline" size={21} color={BRAND_BLUE} />
               <View style={styles.actionSheetItemText}>
                 <Text style={styles.actionSheetItemTitle}>生成类似题</Text>
-                <Text style={styles.actionSheetItemSub}>用一道小题检查是否掌握</Text>
+                <Text style={styles.actionSheetItemSub}>
+                  用一道小题检查是否掌握
+                </Text>
               </View>
             </TouchableOpacity>
             <TouchableOpacity
@@ -1526,16 +1742,13 @@ export default function CameraScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F5F5F7" },
+  container: { flex: 1, backgroundColor: "rgba(0,0,0,0)" },
   header: {
-    backgroundColor: "#FFF",
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#E5E5EA",
   },
-  headerTitle: { fontSize: 24, fontWeight: "700", color: "#1A1A1A" },
-  headerSub: { fontSize: 13, color: "#8E8E93", marginTop: 4 },
+  headerTitle: { fontSize: 24, fontWeight: "700", color: colors.textPrimary },
+  headerSub: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   content: { flex: 1 },
   videoModalContainer: { flex: 1, backgroundColor: "#000" },
   videoModalHeader: {
@@ -1693,48 +1906,50 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   cameraCard: {
-    borderRadius: 16,
+    borderRadius: 24,
     overflow: "hidden",
+    ...CARD_SHADOW,
   },
   cameraCardBg: {
-    backgroundColor: BRAND_BLUE,
-    paddingVertical: 36,
+    backgroundColor: PURPLE,
+    paddingVertical: 38,
     alignItems: "center",
     gap: 8,
   },
   cameraIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "rgba(255,255,255,0.2)",
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "rgba(255,255,255,0.18)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 4,
   },
-  cameraCardTitle: { fontSize: 18, fontWeight: "700", color: "#FFF" },
-  cameraCardSub: { fontSize: 13, color: "rgba(255,255,255,0.75)" },
+  cameraCardTitle: { fontSize: 18, fontWeight: "800", color: "#FFF" },
+  cameraCardSub: { fontSize: 13, color: "rgba(255,255,255,0.78)" },
 
   albumCard: {
-    borderRadius: 16,
-    backgroundColor: "#FFF",
-    paddingVertical: 28,
+    borderRadius: 24,
+    backgroundColor: GLASS_BG,
+    paddingVertical: 30,
     alignItems: "center",
     gap: 8,
     borderWidth: 1.5,
-    borderColor: "#E0E0E0",
+    borderColor: GLASS_BORDER,
     borderStyle: "dashed",
+    ...CARD_SHADOW,
   },
   albumIconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: PURPLE_LIGHT,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 4,
   },
-  albumCardTitle: { fontSize: 16, fontWeight: "600", color: "#333" },
-  albumCardSub: { fontSize: 13, color: "#999" },
+  albumCardTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  albumCardSub: { fontSize: 13, color: colors.textMuted },
 
   // ─── Preview Section ───
   previewSection: {
@@ -1742,10 +1957,13 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   previewImageWrap: {
-    borderRadius: 12,
+    borderRadius: 20,
     overflow: "hidden",
-    backgroundColor: "#FFF",
+    backgroundColor: GLASS_BG,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
     position: "relative",
+    ...CARD_SHADOW,
   },
   previewImage: { width: "100%", height: 200 },
   previewCloseBtn: {
@@ -1757,37 +1975,41 @@ const styles = StyleSheet.create({
   // ─── Description ───
   descriptionBox: {
     marginTop: 12,
-    backgroundColor: "#FFF",
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: GLASS_BG,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   descriptionLabel: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#666",
+    fontWeight: "700",
+    color: colors.textSecondary,
     marginBottom: 8,
   },
   descriptionInput: {
     minHeight: 64,
     maxHeight: 110,
     borderWidth: 1,
-    borderColor: "#E5E5EA",
-    borderRadius: 10,
+    borderColor: "rgba(107,92,231,0.15)",
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    color: "#333",
-    backgroundColor: "#FAFAFA",
+    color: colors.textPrimary,
+    backgroundColor: "rgba(255,255,255,0.6)",
   },
 
   // ─── Progress ───
   progressCard: {
     marginTop: 12,
-    backgroundColor: "#FFF",
-    borderRadius: 12,
+    backgroundColor: GLASS_BG,
+    borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#E8EFF8",
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   progressHeaderRow: {
     flexDirection: "row",
@@ -1795,17 +2017,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  progressHeaderTitle: { fontSize: 14, fontWeight: "600", color: "#333" },
-  progressHeaderPercent: { fontSize: 14, fontWeight: "700", color: BRAND_BLUE },
+  progressHeaderTitle: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
+  progressHeaderPercent: { fontSize: 14, fontWeight: "800", color: PURPLE },
   progressBar: {
     height: 6,
-    backgroundColor: "#E5E5EA",
+    backgroundColor: "rgba(107,92,231,0.12)",
     borderRadius: 3,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: BRAND_BLUE,
+    backgroundColor: PURPLE,
     borderRadius: 3,
   },
   progressHintRow: {
@@ -1813,21 +2035,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     marginTop: 12,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    backgroundColor: PURPLE_LIGHT,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: 10,
   },
-  progressHintText: { fontSize: 13, color: BRAND_BLUE, fontWeight: "500" },
+  progressHintText: { fontSize: 13, color: PURPLE, fontWeight: "600" },
 
   // ─── Solution Steps ───
   stepsCard: {
     marginTop: 12,
-    backgroundColor: "#FFF",
-    borderRadius: 12,
+    backgroundColor: GLASS_BG,
+    borderRadius: 20,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#E8EFF8",
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   stepsHeaderRow: {
     flexDirection: "row",
@@ -1856,20 +2079,20 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: BRAND_BLUE,
+    backgroundColor: PURPLE,
     alignItems: "center",
     justifyContent: "center",
   },
   stepNumberText: { fontSize: 13, fontWeight: "700", color: "#FFF" },
-  stepTitle: { fontSize: 14, fontWeight: "600", color: "#333", flex: 1 },
+  stepTitle: { fontSize: 14, fontWeight: "700", color: colors.textPrimary, flex: 1 },
   stepNarrationWrap: {
     marginTop: 8,
     marginLeft: 36,
     paddingLeft: 12,
     borderLeftWidth: 2,
-    borderLeftColor: BRAND_BLUE_LIGHTER,
+    borderLeftColor: PURPLE_LIGHT,
   },
-  stepNarration: { fontSize: 13, color: "#555", lineHeight: 21 },
+  stepNarration: { fontSize: 13, color: colors.textSecondary, lineHeight: 21 },
   stepFollowupButton: {
     marginTop: 10,
     alignSelf: "flex-start",
@@ -1879,11 +2102,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 14,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    backgroundColor: PURPLE_LIGHT,
   },
   stepFollowupText: {
     fontSize: 12,
-    color: BRAND_BLUE,
+    color: PURPLE,
     fontWeight: "600",
   },
 
@@ -1893,19 +2116,22 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   videoPreviewCard: {
-    borderRadius: 14,
+    borderRadius: 20,
     overflow: "hidden",
-    backgroundColor: "#FFF",
+    backgroundColor: GLASS_BG,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   videoPreviewBg: {
     height: 140,
-    backgroundColor: BRAND_BLUE,
+    backgroundColor: PURPLE,
     alignItems: "center",
     justifyContent: "center",
   },
   interactivePreviewBg: {
     height: 140,
-    backgroundColor: "#5B8DEF",
+    backgroundColor: ORANGE,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1921,13 +2147,13 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   videoPreviewTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  videoPreviewTitle: { fontSize: 15, fontWeight: "600", color: "#333" },
-  videoPreviewSub: { fontSize: 13, color: "#999", marginTop: 4 },
+  videoPreviewTitle: { fontSize: 15, fontWeight: "700", color: colors.textPrimary },
+  videoPreviewSub: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   completedNoVideo: { alignItems: "center", paddingVertical: 28 },
   completedText: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
+    fontWeight: "700",
+    color: colors.textPrimary,
     marginTop: 12,
   },
   resetButton: {
@@ -1935,11 +2161,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    backgroundColor: PURPLE_LIGHT,
     paddingVertical: 13,
-    borderRadius: 10,
+    borderRadius: 12,
   },
-  resetText: { color: BRAND_BLUE, fontSize: 15, fontWeight: "600" },
+  resetText: { color: PURPLE, fontSize: 15, fontWeight: "700" },
 
   // ─── Submit ───
   submitButton: {
@@ -1947,12 +2173,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: ACTION_RED,
+    backgroundColor: ORANGE,
     marginTop: 16,
     paddingVertical: 15,
-    borderRadius: 12,
+    borderRadius: 14,
+    ...CARD_SHADOW,
   },
-  submitText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
+  submitText: { color: "#FFF", fontSize: 16, fontWeight: "800" },
 
   // ─── Sections ───
   section: {
@@ -1965,9 +2192,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
-  sectionTitle: { fontSize: 17, fontWeight: "700", color: "#1A1A1A" },
-  sectionCount: { fontSize: 13, color: "#999" },
-  sectionClear: { fontSize: 13, color: "#FF3B30" },
+  sectionTitle: { fontSize: 17, fontWeight: "800", color: colors.textPrimary },
+  sectionCount: { fontSize: 13, color: colors.textMuted },
+  sectionClear: { fontSize: 13, color: colors.error },
 
   // ─── Video Grid (completed) ───
   videoGrid: {
@@ -1977,9 +2204,12 @@ const styles = StyleSheet.create({
   },
   videoGridCard: {
     width: GRID_CARD_WIDTH,
-    borderRadius: 12,
+    borderRadius: 16,
     overflow: "hidden",
-    backgroundColor: "#FFF",
+    backgroundColor: GLASS_BG,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   videoGridThumb: {
     width: "100%",
@@ -1994,7 +2224,7 @@ const styles = StyleSheet.create({
   videoGridThumbFallback: {
     width: "100%",
     height: "100%",
-    backgroundColor: BRAND_BLUE,
+    backgroundColor: PURPLE,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2009,13 +2239,13 @@ const styles = StyleSheet.create({
   },
   videoGridTitle: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#333",
+    fontWeight: "700",
+    color: colors.textPrimary,
     lineHeight: 18,
   },
   videoGridMeta: {
     fontSize: 11,
-    color: "#999",
+    color: colors.textMuted,
     marginTop: 4,
   },
 
@@ -2023,16 +2253,17 @@ const styles = StyleSheet.create({
   taskCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFF",
-    borderRadius: 12,
+    backgroundColor: GLASS_BG,
+    borderRadius: 16,
     padding: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "transparent",
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   taskCardActive: {
-    borderColor: BRAND_BLUE,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    borderColor: PURPLE,
+    backgroundColor: PURPLE_LIGHT,
   },
   taskImage: { width: 48, height: 48, borderRadius: 8, marginRight: 12 },
   taskImageFallback: {
@@ -2040,12 +2271,12 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 8,
     marginRight: 12,
-    backgroundColor: "#F2F2F7",
+    backgroundColor: "rgba(255,255,255,0.6)",
     alignItems: "center",
     justifyContent: "center",
   },
   taskInfo: { flex: 1 },
-  taskName: { fontSize: 14, fontWeight: "500", color: "#333" },
+  taskName: { fontSize: 14, fontWeight: "600", color: colors.textPrimary },
   taskMetaRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2062,18 +2293,18 @@ const styles = StyleSheet.create({
   },
   taskStatusDot: { width: 6, height: 6, borderRadius: 3 },
   taskStatusText: { fontSize: 11, fontWeight: "600" },
-  taskTime: { fontSize: 11, color: "#999" },
+  taskTime: { fontSize: 11, color: colors.textMuted },
   taskProgressBar: {
     height: 3,
-    backgroundColor: "#E5E5EA",
+    backgroundColor: "rgba(107,92,231,0.12)",
     borderRadius: 2,
     marginTop: 6,
     overflow: "hidden",
   },
-  taskProgressFill: { height: "100%", backgroundColor: BRAND_BLUE },
+  taskProgressFill: { height: "100%", backgroundColor: PURPLE },
   historyHint: {
     fontSize: 12,
-    color: "#999",
+    color: colors.textMuted,
     marginTop: 4,
     textAlign: "center",
   },
@@ -2084,24 +2315,29 @@ const styles = StyleSheet.create({
     paddingVertical: 48,
     paddingHorizontal: 32,
   },
+  emptyImage: {
+    width: 180,
+    height: 180,
+    marginBottom: 8,
+  },
   emptyIconWrap: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: BRAND_BLUE_LIGHTER,
+    backgroundColor: PURPLE_LIGHT,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
   },
   emptyTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#333",
+    fontWeight: "800",
+    color: colors.textPrimary,
     marginBottom: 8,
   },
   emptySub: {
     fontSize: 14,
-    color: "#999",
+    color: colors.textMuted,
     textAlign: "center",
     lineHeight: 22,
   },
@@ -2109,14 +2345,17 @@ const styles = StyleSheet.create({
   // ─── Mode Selector ───
   modeSelector: {
     marginTop: 12,
-    backgroundColor: "#FFF",
-    borderRadius: 12,
+    backgroundColor: GLASS_BG,
+    borderRadius: 20,
     padding: 14,
+    borderWidth: 1,
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   modeSelectorLabel: {
     fontSize: 13,
-    fontWeight: "600",
-    color: "#666",
+    fontWeight: "700",
+    color: colors.textSecondary,
     marginBottom: 10,
   },
   modeTabs: {
@@ -2130,25 +2369,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     paddingVertical: 11,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: BRAND_BLUE,
+    borderColor: PURPLE,
     backgroundColor: "#FFF",
   },
   modeTabActive: {
-    backgroundColor: BRAND_BLUE,
-    borderColor: BRAND_BLUE,
+    backgroundColor: PURPLE,
+    borderColor: PURPLE,
   },
-  modeTabText: { fontSize: 14, fontWeight: "600", color: BRAND_BLUE },
+  modeTabText: { fontSize: 14, fontWeight: "700", color: PURPLE },
   modeTabTextActive: { color: "#FFF" },
 
   // ─── Matplotlib Result ───
   matplotlibResultCard: {
-    backgroundColor: "#FFF",
-    borderRadius: 14,
+    backgroundColor: GLASS_BG,
+    borderRadius: 20,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#E8EFF8",
+    borderColor: GLASS_BORDER,
+    ...CARD_SHADOW,
   },
   matplotlibHeaderRow: {
     flexDirection: "row",

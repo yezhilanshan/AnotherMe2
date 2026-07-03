@@ -1,6 +1,30 @@
+import { sanitizeIncompleteMarkdown } from "./incomplete-markdown";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import { debugLog } from "./debug";
+
 // ============================================================
 // LaTeX → Unicode 工具函数（纯函数，无 React 依赖，可独立测试）
 // ============================================================
+
+const SIMPLIFY_LATEX_CACHE = new Map<string, string>();
+const SIMPLIFY_LATEX_CACHE_LIMIT = 200;
+
+function getCachedSimplifyLatex(formula: string): string | undefined {
+  return SIMPLIFY_LATEX_CACHE.get(formula);
+}
+
+function setCachedSimplifyLatex(formula: string, result: string): void {
+  if (SIMPLIFY_LATEX_CACHE.size >= SIMPLIFY_LATEX_CACHE_LIMIT) {
+    const firstKey = SIMPLIFY_LATEX_CACHE.keys().next().value;
+    if (firstKey !== undefined) {
+      SIMPLIFY_LATEX_CACHE.delete(firstKey);
+    }
+  }
+  SIMPLIFY_LATEX_CACHE.set(formula, result);
+}
 
 const LATEX_UNICODE: Record<string, string> = {
   // 希腊字母
@@ -71,6 +95,8 @@ const LATEX_UNICODE: Record<string, string> = {
   longleftarrow: "⟵",
   leftrightarrow: "↔",
   Leftrightarrow: "⇔",
+  implies: "⇒",
+  iff: "⇔",
   uparrow: "↑",
   downarrow: "↓",
   mapsto: "↦",
@@ -104,6 +130,8 @@ const LATEX_UNICODE: Record<string, string> = {
   setminus: "∖",
   complement: "∁",
   // 杂项
+  perp: "⊥",
+  parallel: "∥",
   angle: "∠",
   triangle: "△",
   square: "□",
@@ -231,27 +259,86 @@ export function subscript(s: string): string {
  * 简化 LaTeX 公式字符串：常用命令 → Unicode 符号
  */
 export function simplifyLatex(formula: string): string {
+  const cached = getCachedSimplifyLatex(formula);
+  if (cached !== undefined) return cached;
+
+  // 辅助：从 pos 位置开始匹配平衡花括号 {...}，返回内容和结束位置
+  function matchBrace(s: string, pos: number): [string, number] | null {
+    if (pos >= s.length || s[pos] !== "{") return null;
+    let depth = 0;
+    const start = pos + 1;
+    for (let i = pos; i < s.length; i++) {
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}") {
+        depth--;
+        if (depth === 0) return [s.slice(start, i), i + 1];
+      }
+    }
+    return null;
+  }
+
+  // 辅助：扫描字符串，替换 \cmd{...}{...} 等模式（平衡花括号匹配）
+  // 从 prefix 之后开始查找 { 并匹配平衡花括号
+  function replacePattern(
+    s: string,
+    prefix: string,
+    paramCount: number,
+    handler: (...groups: string[]) => string,
+  ): string {
+    let out = "";
+    let i = 0;
+    while (i < s.length) {
+      const idx = s.indexOf(prefix, i);
+      if (idx === -1) {
+        out += s.slice(i);
+        break;
+      }
+      out += s.slice(i, idx);
+      let pos = idx + prefix.length;
+      const groups: string[] = [];
+      let ok = true;
+      for (let b = 0; b < paramCount; b++) {
+        // 找到下一个 { 并匹配平衡花括号
+        const bracePos = s.indexOf("{", pos);
+        if (bracePos === -1) { ok = false; break; }
+        const result = matchBrace(s, bracePos);
+        if (!result) { ok = false; break; }
+        groups.push(result[0]);
+        pos = result[1];
+      }
+      if (ok) {
+        out += handler(...groups);
+        i = pos;
+      } else {
+        out += prefix;
+        i = idx + prefix.length;
+      }
+    }
+    return out;
+  }
+
   let result = formula
     // 先将 JSON 转义的双反斜杠还原为单反斜杠
     .replace(/\\\\/g, "\\")
     // \mathbb{...} / \mathcal{...} / \mathbf{...} ... → 保留内容
     .replace(
-      /\\(?:mathbb|mathcal|mathbf|mathit|mathrm|mathfrak|mathsf|mathtt)\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
+      /\\(?:mathbb|mathcal|mathbf|mathit|mathrm|mathfrak|mathsf|mathtt)\{([^{}]*)\}/g,
       "$1",
     )
+    // \vec{AB} / \overrightarrow{AB} → →AB
+    .replace(/\\(?:vec|overrightarrow)\{([^{}]*)\}/g, "→$1")
     // \text{...} / \textrm{...} → 保留文字内容
-    .replace(/\\(?:text|textrm)\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, "$1");
+    .replace(/\\(?:text|textrm)\{([^{}]*)\}/g, "$1");
 
   // Pass 1: superscripts/subscripts（先展平嵌套，让后续 \frac 更容易匹配）
-  // 先对花括号内容做符号替换，再调用 superscript/subscript
   const resolveInner = (s: string) =>
     s.replace(/\\([a-zA-Z]+)/g, (_, cmd: string) => LATEX_UNICODE[cmd] || cmd);
 
   result = result
-    .replace(/\^{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, (_, inner: string) =>
+    .replace(/\^{([^{}]*)}/g, (_, inner: string) =>
       superscript(resolveInner(inner)),
     )
-    .replace(/_{([^{}]*(?:\{[^{}]*\}[^{}]*)*)}/g, (_, inner: string) =>
+    .replace(/_{([^{}]*)}/g, (_, inner: string) =>
       subscript(resolveInner(inner)),
     )
     // 单字符上下标（无花括号）
@@ -264,17 +351,17 @@ export function simplifyLatex(formula: string): string {
       (_, base: string, sub: string) => base + subscript(sub),
     );
 
-  // Pass 2: \frac / \sqrt（此时嵌套花括号已被 upper/lower 展开）
+  // Pass 2: \frac — 用平衡花括号匹配，避免正则嵌套量词导致的灾难性回溯
+  result = replacePattern(result, "\\frac", 2, (num, den) =>
+    `(${num})/(${den})`,
+  );
+  // \sqrt 用简单正则即可（单花括号组无嵌套量词问题）
   result = result
     .replace(
-      /\\frac\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
-      "($1)/($2)",
-    )
-    .replace(
-      /\\sqrt\[([^\]]+)\]\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
+      /\\sqrt\[([^\]]+)\]\{([^{}]*)\}/g,
       (_, idx: string, inner: string) => superscript(idx) + "√(" + inner + ")",
     )
-    .replace(/\\sqrt\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g, "√($1)");
+    .replace(/\\sqrt\{([^{}]*)\}/g, "√($1)");
 
   // Pass 3: LaTeX 符号 → Unicode（必须在 \frac/\sqrt 之后，确保它们不被吃掉）
   result = result.replace(
@@ -284,7 +371,9 @@ export function simplifyLatex(formula: string): string {
 
   // 清理残留花括号
   result = result.replace(/[{}]/g, "").trim();
-  return result || formula;
+  const finalResult = result || formula;
+  setCachedSimplifyLatex(formula, finalResult);
+  return finalResult;
 }
 
 // ============================================================
@@ -414,8 +503,258 @@ export interface MarkdownBlock {
   rows?: string[][];
   headers?: string[];
   order?: number;
+  checked?: boolean | null;
   teachingKind?: string;
   title?: string;
+}
+
+const markdownProcessor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath);
+
+type MdastNode = {
+  type: string;
+  value?: string;
+  lang?: string | null;
+  depth?: number;
+  ordered?: boolean;
+  start?: number | null;
+  checked?: boolean | null;
+  children?: MdastNode[];
+  align?: Array<"left" | "right" | "center" | null>;
+  position?: {
+    start?: { line?: number; column?: number; offset?: number };
+    end?: { line?: number; column?: number; offset?: number };
+  };
+};
+
+function getNodeSource(text: string, node: MdastNode): string {
+  const start = node.position?.start?.offset;
+  const end = node.position?.end?.offset;
+  if (typeof start === "number" && typeof end === "number") {
+    return text.slice(start, end);
+  }
+  return "";
+}
+
+function inlineMarkdownFromNode(text: string, node: MdastNode): string {
+  const source = getNodeSource(text, node);
+  if (source) return source.trim();
+  return extractText(node).trim();
+}
+
+function extractText(node: MdastNode | undefined): string {
+  if (!node) return "";
+  if (typeof node.value === "string") return node.value;
+  return (node.children || []).map((child) => extractText(child)).join("");
+}
+
+function headingContent(text: string, node: MdastNode): string {
+  const source = getNodeSource(text, node);
+  if (source) {
+    return source.replace(/^#{1,6}[ \t]+/, "").trim();
+  }
+  return extractText(node).trim();
+}
+
+function paragraphContent(text: string, node: MdastNode): string {
+  const source = getNodeSource(text, node);
+  if (source) return source.replace(/\n+/g, " ").trim();
+  return extractText(node).trim();
+}
+
+function blockquoteContent(text: string, node: MdastNode): string {
+  const source = getNodeSource(text, node);
+  if (source) {
+    return source
+      .split("\n")
+      .map((line) => line.replace(/^\s*> ?/, ""))
+      .join("\n")
+      .trim();
+  }
+  return (node.children || [])
+    .map((child) => blockContent(text, child))
+    .join("\n\n")
+    .trim();
+}
+
+function blockContent(text: string, node: MdastNode): string {
+  switch (node.type) {
+    case "paragraph":
+      return paragraphContent(text, node);
+    case "heading":
+      return headingContent(text, node);
+    case "code":
+    case "math":
+      return node.value || "";
+    case "blockquote":
+      return blockquoteContent(text, node);
+    default:
+      return inlineMarkdownFromNode(text, node);
+  }
+}
+
+function tableCellText(cell: MdastNode | undefined): string {
+  return extractText(cell).trim();
+}
+
+function blankLineBlocksBetween(
+  lines: string[],
+  previousEndLine: number,
+  nextStartLine: number,
+): MarkdownBlock[] {
+  if (previousEndLine <= 0 || nextStartLine <= previousEndLine + 1) {
+    return [];
+  }
+  const blocks: MarkdownBlock[] = [];
+  for (let lineNo = previousEndLine + 1; lineNo < nextStartLine; lineNo++) {
+    if ((lines[lineNo - 1] ?? "").trim() === "") {
+      blocks.push({ type: "empty", content: "" });
+    }
+  }
+  return blocks;
+}
+
+function paragraphIsSingleLineDisplayMath(
+  text: string,
+  node: MdastNode,
+): string | null {
+  const source = getNodeSource(text, node).trim();
+  if (!source.startsWith("$$") || !source.endsWith("$$")) return null;
+  if ((node.children || []).length !== 1) return null;
+  const child = node.children?.[0];
+  if (child?.type !== "inlineMath") return null;
+  return child.value?.trim() || null;
+}
+
+function listItemContent(text: string, item: MdastNode): string {
+  const contentChildren = (item.children || []).filter(
+    (child) => child.type !== "list",
+  );
+  const paragraph = contentChildren.find((child) => child.type === "paragraph");
+  if (paragraph) return paragraphContent(text, paragraph);
+  return contentChildren
+    .map((child) => blockContent(text, child))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function appendListBlocks(
+  text: string,
+  list: MdastNode,
+  blocks: MarkdownBlock[],
+  level = 0,
+) {
+  const start = list.start ?? 1;
+  (list.children || []).forEach((item, index) => {
+    const block: MarkdownBlock = {
+      type: list.ordered ? "ordered_list" : "list",
+      content: listItemContent(text, item),
+      level,
+      order: list.ordered ? start + index : undefined,
+    };
+    if (typeof item.checked === "boolean") {
+      block.checked = item.checked;
+    }
+    blocks.push(block);
+
+    for (const child of item.children || []) {
+      if (child.type === "list") {
+        appendListBlocks(text, child, blocks, level + 1);
+      }
+    }
+  });
+}
+
+function hasUnclosedDisplayMath(text: string): boolean {
+  let count = 0;
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] === "\\" && text[i + 1] === "$") {
+      i += 1;
+      continue;
+    }
+    if (text[i] === "$" && text[i + 1] === "$") {
+      count += 1;
+      i += 1;
+    }
+  }
+  return count % 2 === 1;
+}
+
+function convertMdastNode(text: string, node: MdastNode): MarkdownBlock[] {
+  switch (node.type) {
+    case "heading":
+      return [
+        {
+          type: "heading",
+          content: headingContent(text, node),
+          level: node.depth || 1,
+        },
+      ];
+    case "code":
+      return [
+        {
+          type: "code",
+          content: node.value || "",
+          language: node.lang || undefined,
+        },
+      ];
+    case "math":
+      return [{ type: "latex_display", content: node.value || "" }];
+    case "paragraph": {
+      const displayMath = paragraphIsSingleLineDisplayMath(text, node);
+      if (displayMath) {
+        return [{ type: "latex_display", content: displayMath }];
+      }
+      return [{ type: "paragraph", content: paragraphContent(text, node) }];
+    }
+    case "blockquote": {
+      const content = blockquoteContent(text, node);
+      const firstLine = content.split("\n")[0] || "";
+      const firstTeachingLine = detectTeachingLine(firstLine);
+      if (firstTeachingLine) {
+        return [
+          {
+            type: "teaching",
+            content: [firstTeachingLine.content, ...content.split("\n").slice(1)]
+              .filter(Boolean)
+              .join("\n"),
+            teachingKind: firstTeachingLine.kind,
+            title: firstTeachingLine.title,
+          },
+        ];
+      }
+      return [{ type: "blockquote", content }];
+    }
+    case "list": {
+      const blocks: MarkdownBlock[] = [];
+      appendListBlocks(text, node, blocks);
+      return blocks;
+    }
+    case "thematicBreak":
+      return [{ type: "hr", content: "" }];
+    case "table": {
+      const rows = node.children || [];
+      const headerRow = rows[0];
+      const headers = (headerRow?.children || []).map(tableCellText);
+      const dataRows = rows
+        .slice(1)
+        .map((row) => (row.children || []).map(tableCellText));
+      return [{ type: "table", content: "", headers, rows: dataRows }];
+    }
+    case "html":
+      return [
+        {
+          type: "paragraph",
+          content: getNodeSource(text, node) || node.value || "",
+        },
+      ];
+    default: {
+      const content = blockContent(text, node);
+      return content ? [{ type: "paragraph", content }] : [];
+    }
+  }
 }
 
 function detectTeachingLine(
@@ -462,226 +801,287 @@ function detectTeachingHeading(
   return { kind: line.kind, title: normalized };
 }
 
+const ZERO_WIDTH_REGEX = /[\u200B-\u200D\uFEFF]/g;
+const EMPTY_HTML_BLOCK_REGEX =
+  /<(p|div|section|article|aside|blockquote)(?:\s[^>]*)?>\s*(?:&nbsp;|\s|<br\s*\/?>)*\s*<\/\1>/gi;
+const EMPTY_DETAILS_REGEX =
+  /<details(?:\s[^>]*)?>\s*(<summary(?:\s[^>]*)?>\s*(?:&nbsp;|\s|<br\s*\/?>)*\s*<\/summary>\s*)?<\/details>/gi;
+const EMPTY_SUMMARY_REGEX =
+  /<summary(?:\s[^>]*)?>\s*(?:&nbsp;|\s|<br\s*\/?>)*\s*<\/summary>/gi;
+const EMPTY_PROGRESS_REGEX =
+  /<progress(?:\s[^>]*)?>\s*(?:&nbsp;|\s|<br\s*\/?>)*\s*<\/progress>/gi;
+const RAW_INPUT_REGEX = /<input(?:\s[^>]*)?>/gi;
+const EMPTY_FORM_CONTROL_REGEX =
+  /<(textarea|select|button|meter)(?:\s[^>]*)?>\s*(?:&nbsp;|\s|<br\s*\/?>)*\s*<\/\1>/gi;
+const EMPTY_FENCED_CODE_BLOCK_REGEX = /```[^\n`]*\n?\s*```/g;
+const HTML_LIKE_TAG_REGEX = /<\/?([A-Za-z][A-Za-z0-9_-]*)\b[^<>]*?\/?>/g;
+const PROTECTED_SPAN_REGEX = /```[\s\S]*?```|`[^`\n]*`/g;
+const PROTECTED_PLACEHOLDER_REGEX = /\u0000PROTECTED_(\d+)\u0000/g;
+
+// 允许直接透传的 HTML 标签集合。不在此集合内的形如 <tag> 的 token
+// 会被转义成行内代码，避免 remark-parse 把它们解析成奇怪结构。
+const ALLOWED_HTML_TAGS = new Set<string>([
+  "p",
+  "div",
+  "span",
+  "section",
+  "article",
+  "aside",
+  "header",
+  "footer",
+  "main",
+  "nav",
+  "address",
+  "a",
+  "em",
+  "strong",
+  "b",
+  "i",
+  "u",
+  "s",
+  "del",
+  "ins",
+  "small",
+  "sub",
+  "sup",
+  "mark",
+  "kbd",
+  "code",
+  "samp",
+  "var",
+  "q",
+  "cite",
+  "abbr",
+  "time",
+  "wbr",
+  "br",
+  "hr",
+  "ol",
+  "ul",
+  "li",
+  "dl",
+  "dt",
+  "dd",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "blockquote",
+  "pre",
+  "figure",
+  "figcaption",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "th",
+  "td",
+  "caption",
+  "col",
+  "colgroup",
+  "img",
+  "video",
+  "audio",
+  "source",
+  "picture",
+  "track",
+  "details",
+  "summary",
+  "progress",
+  "meter",
+  "math",
+  "mi",
+  "mn",
+  "mo",
+  "ms",
+  "mtext",
+  "mrow",
+  "mfrac",
+  "msup",
+  "msub",
+  "msubsup",
+  "munder",
+  "mover",
+  "munderover",
+  "mroot",
+  "msqrt",
+  "menclose",
+  "mspace",
+  "mtable",
+  "mtr",
+  "mtd",
+]);
+
+function stripInvisibleCharacters(value: string): string {
+  return value.replace(ZERO_WIDTH_REGEX, "");
+}
+
+function escapeUnknownHtmlTags(content: string): string {
+  if (!content || (!content.includes("<") && !content.includes(">"))) {
+    return content;
+  }
+  const protectedSpans: string[] = [];
+  const masked = content.replace(PROTECTED_SPAN_REGEX, (match) => {
+    protectedSpans.push(match);
+    return `\u0000PROTECTED_${protectedSpans.length - 1}\u0000`;
+  });
+  const escaped = masked.replace(HTML_LIKE_TAG_REGEX, (match, name: string) => {
+    const lower = String(name).toLowerCase();
+    if (ALLOWED_HTML_TAGS.has(lower)) return match;
+    return `\`${match}\``;
+  });
+  return escaped.replace(
+    PROTECTED_PLACEHOLDER_REGEX,
+    (_, idx: string) => protectedSpans[Number(idx)] ?? "",
+  );
+}
+
+function removeEmptyHtmlBlocks(content: string): string {
+  return content
+    .replace(EMPTY_DETAILS_REGEX, "")
+    .replace(EMPTY_SUMMARY_REGEX, "")
+    .replace(EMPTY_PROGRESS_REGEX, "")
+    .replace(RAW_INPUT_REGEX, "")
+    .replace(EMPTY_FORM_CONTROL_REGEX, "")
+    .replace(EMPTY_HTML_BLOCK_REGEX, "");
+}
+
+/**
+ * 清理模型输出的特殊控制 token，避免它们进入 Markdown 解析器造成结构异常。
+ *
+ * 借鉴 Open WebUI 的 sanitizeResponseContent：
+ * - 移除 <|...|> 形式（DeepSeek/Qwen/Llama 等）的完整 special token
+ * - 移除末尾未闭合的 <|... 片段
+ * - 移除常见的 EOS/BOS token（<s>, </s>, <|endoftext|>, <|im_start|>, <|im_end|>）
+ *
+ * 注意：这里不像 Open WebUI 那样把所有 < > 转义为 &lt; / &gt;，
+ * 因为移动端已有 escapeUnknownHtmlTags 把未知标签转义成行内代码，
+ * 保留合法 HTML（如 <details>）的渲染能力。
+ */
+export function sanitizeResponseContent(content: string): string {
+  return (
+    content
+      // 完整 special token，如 <|end▁of▁sentence|>、<|tool_call_begin|> 等
+      .replace(/<\|[a-zA-Z0-9_\u4e00-\u9fa5▁]+\|>/g, " ")
+      // 末尾未闭合的 <|... 片段
+      .replace(/<\|[a-zA-Z0-9_\u4e00-\u9fa5▁]*$/, "")
+      .replace(/<\|[a-zA-Z0-9_\u4e00-\u9fa5▁]+\|?$/, "")
+      // 常见 EOS/BOS / role token
+      .replace(/<\|endoftext\|>/gi, " ")
+      .replace(/<\|im_(start|end)\|>/gi, " ")
+      .replace(/<s>|<\/s>/gi, " ")
+      .trim()
+  );
+}
+
+export function normalizeHtmlLineBreaks(text: string): string {
+  return text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<p\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n");
+}
+
+/**
+ * 移动端 Markdown 显示前归一化。
+ *
+ * 处理内容：
+ * - 清理模型 special token
+ * - 去除零宽字符
+ * - 把 \r\n 统一为 \n
+ * - HTML 换行标签归一化为 \n
+ * - 清理空的 HTML 块级标签 / details / form 控件
+ * - 把未在白名单内的伪 HTML 标签（如 <think>、<tool_call>）转义成行内代码
+ * - 折叠连续 3 行及以上空行为 2 行
+ */
+export function normalizeMarkdownForDisplay(content: string): string {
+  if (!content) return "";
+  const sanitized = sanitizeResponseContent(String(content));
+  const normalized = stripInvisibleCharacters(sanitized)
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+|\n+$/g, "");
+  const cleaned = removeEmptyHtmlBlocks(normalized);
+  const withLineBreaks = normalizeHtmlLineBreaks(cleaned);
+  const safe = escapeUnknownHtmlTags(withLineBreaks)
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+|\n+$/g, "");
+  return safe;
+}
+
+/**
+ * 判断一段 Markdown 是否包含可见内容。
+ *
+ * 会把 Markdown 语法（链接、图片、代码围栏、HTML 标签、标题标记等）剥离后，
+ * 再检查是否还有非空白字符。比简单 trim().length > 0 更可靠。
+ */
+export function hasVisibleMarkdownContent(content: string): boolean {
+  if (!content) return false;
+  const normalized = normalizeMarkdownForDisplay(content);
+  if (!normalized.trim()) return false;
+
+  const withoutEmptyBlocks = normalized
+    .replace(EMPTY_FENCED_CODE_BLOCK_REGEX, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\[(.*?)\]\([^)]+\)/g, "$1")
+    .replace(/!\[(.*?)\]\([^)]+\)/g, "$1")
+    .replace(/^[\s>*\-+|#`]+$/gm, "");
+
+  return stripInvisibleCharacters(withoutEmptyBlocks).trim().length > 0;
+}
+
 export function parseMarkdown(
   text: string,
   isStreaming = false,
 ): MarkdownBlock[] {
+  const startedAt = Date.now();
+  const rawText = normalizeMarkdownForDisplay(normalizeStructuredTutorResponse(text));
+  if (isStreaming && hasUnclosedDisplayMath(rawText)) {
+    debugLog("latex-utils", "parse_markdown_bypass_unclosed_math", {
+      chars: rawText.length,
+      isStreaming,
+    });
+    return [{ type: "paragraph", content: rawText }];
+  }
+  // 流式传输时，先对未闭合的 Markdown 标记（粗体、斜体、代码、公式、链接等）
+  // 进行安全补全或中和，避免解析器输出异常结构导致渲染崩溃。
+  const safeText = isStreaming
+    ? sanitizeIncompleteMarkdown(rawText)
+    : rawText;
+  const parseStartedAt = Date.now();
+  const tree = markdownProcessor.runSync(markdownProcessor.parse(safeText)) as MdastNode;
+  const parserMs = Date.now() - parseStartedAt;
+  const lines = safeText.split("\n");
   const blocks: MarkdownBlock[] = [];
-  const lines = normalizeStructuredTutorResponse(text).split("\n");
-  let i = 0;
+  let previousEndLine = 0;
 
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // 空行
-    if (line.trim() === "") {
-      blocks.push({ type: "empty", content: "" });
-      i++;
-      continue;
-    }
-
-    // 分隔线 --- / *** / ___
-    if (/^[-*_]{3,}\s*$/.test(line.trim())) {
-      blocks.push({ type: "hr", content: "" });
-      i++;
-      continue;
-    }
-
-    // 代码块 ```
-    if (line.trim().startsWith("```")) {
-      const language = line.trim().slice(3).trim() || undefined;
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].trim().startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      blocks.push({ type: "code", content: codeLines.join("\n"), language });
-      i++;
-      continue;
-    }
-
-    // 显示模式 LaTeX 公式 $$...$$
-    if (line.trim().startsWith("$$")) {
-      // 流式传输保护：如果是最后一行且未闭合 $$，当作普通段落
-      if (isStreaming && i === lines.length - 1) {
-        const fl = line.trim().slice(2);
-        if (!fl.endsWith("$$")) {
-          blocks.push({ type: "paragraph", content: line });
-          i++;
-          continue;
-        }
-      }
-      const formulaLines: string[] = [];
-      const firstLine = line.trim().slice(2);
-      if (firstLine.endsWith("$$") && firstLine.length > 2) {
-        blocks.push({ type: "latex_display", content: firstLine.slice(0, -2) });
-        i++;
-        continue;
-      }
-      // 多行公式
-      if (firstLine) formulaLines.push(firstLine);
-      i++;
-      while (i < lines.length && !lines[i].trim().endsWith("$$")) {
-        if (isStreaming && i === lines.length - 1) {
-          const allLines = [line, ...formulaLines, lines[i]];
-          blocks.push({ type: "paragraph", content: allLines.join("\n") });
-          i++;
-          // 流式中断后跳过后续清理
-          formulaLines.length = 0;
-          break;
-        }
-        formulaLines.push(lines[i]);
-        i++;
-      }
-      if (i < lines.length && formulaLines.length > 0) {
-        const lastLine = lines[i].trim();
-        const stripped = lastLine.slice(0, -2);
-        if (stripped) formulaLines.push(stripped);
-        i++;
-      }
-      if (formulaLines.length > 0) {
-        blocks.push({
-          type: "latex_display",
-          content: formulaLines.join("\n"),
-        });
-      }
-      continue;
-    }
-
-    // 表格
-    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-      const tableLines: string[] = [];
-      while (
-        i < lines.length &&
-        lines[i].trim().startsWith("|") &&
-        lines[i].trim().endsWith("|")
-      ) {
-        tableLines.push(lines[i]);
-        i++;
-      }
-      if (tableLines.length >= 2) {
-        const parseRow = (row: string) => row.split("|").slice(1, -1);
-        const headers = parseRow(tableLines[0]);
-        const dataRows = tableLines.slice(2).map(parseRow);
-        blocks.push({ type: "table", content: "", headers, rows: dataRows });
-      }
-      continue;
-    }
-
-    // 引用块 >
-    if (line.trim().startsWith(">")) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i].trim().startsWith(">")) {
-        quoteLines.push(lines[i].replace(/^>\s?/, ""));
-        i++;
-      }
-      const firstTeachingLine = detectTeachingLine(quoteLines[0] || "");
-      if (firstTeachingLine) {
-        const content = [firstTeachingLine.content, ...quoteLines.slice(1)]
-          .filter(Boolean)
-          .join("\n");
-        blocks.push({
-          type: "teaching",
-          content,
-          teachingKind: firstTeachingLine.kind,
-          title: firstTeachingLine.title,
-        });
-      } else {
-        blocks.push({ type: "blockquote", content: quoteLines.join("\n") });
-      }
-      continue;
-    }
-
-    // 教学语义行
-    const teachingLine = detectTeachingLine(line);
-    if (teachingLine) {
-      blocks.push({
-        type: "teaching",
-        content: teachingLine.content,
-        teachingKind: teachingLine.kind,
-        title: teachingLine.title,
-      });
-      i++;
-      continue;
-    }
-
-    // 标题 # ## ###
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
-    if (headingMatch) {
-      const teachingHeading = detectTeachingHeading(headingMatch[2]);
-      if (teachingHeading) {
-        const contentLines: string[] = [];
-        i++;
-        while (i < lines.length && !lines[i].match(/^#{1,6}\s+/)) {
-          contentLines.push(lines[i]);
-          i++;
-        }
-        blocks.push({
-          type: "teaching",
-          content: contentLines.join("\n").trim(),
-          teachingKind: teachingHeading.kind,
-          title: teachingHeading.title,
-        });
-        continue;
-      }
-      blocks.push({
-        type: "heading",
-        content: headingMatch[2],
-        level: headingMatch[1].length,
-      });
-      i++;
-      continue;
-    }
-
-    // 无序列表
-    const listMatch = line.match(/^(\s*)[-*]\s+(.+)/);
-    if (listMatch) {
-      const indent = listMatch[1].length;
-      blocks.push({
-        type: "list",
-        content: listMatch[2],
-        level: Math.floor(indent / 2),
-      });
-      i++;
-      continue;
-    }
-
-    // 有序列表
-    const orderedMatch = line.match(/^(\s*)(\d+)\.\s+(.+)/);
-    if (orderedMatch) {
-      const indent = orderedMatch[1].length;
-      blocks.push({
-        type: "ordered_list",
-        content: orderedMatch[3],
-        level: Math.floor(indent / 2),
-        order: Number(orderedMatch[2]),
-      });
-      i++;
-      continue;
-    }
-
-    // 普通段落
-    let paragraph = line;
-    i++;
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !lines[i].trim().startsWith("```") &&
-      !lines[i].trim().startsWith("$$") &&
-      !lines[i].match(/^#{1,6}\s/) &&
-      !lines[i].match(/^\s*[-*]\s/) &&
-      !lines[i].match(/^\s*\d+\.\s/) &&
-      !lines[i].trim().startsWith(">") &&
-      !lines[i].trim().startsWith("|") &&
-      !/^[-*_]{3,}\s*$/.test(lines[i].trim())
-    ) {
-      paragraph += " " + lines[i];
-      i++;
-    }
-    blocks.push({ type: "paragraph", content: paragraph });
+  for (const node of tree.children || []) {
+    const startLine = node.position?.start?.line ?? previousEndLine + 1;
+    blocks.push(...blankLineBlocksBetween(lines, previousEndLine, startLine));
+    blocks.push(...convertMdastNode(safeText, node));
+    previousEndLine = node.position?.end?.line ?? startLine;
   }
 
+  for (let lineNo = previousEndLine + 1; lineNo <= lines.length; lineNo++) {
+    if ((lines[lineNo - 1] ?? "").trim() === "") {
+      blocks.push({ type: "empty", content: "" });
+    }
+  }
+
+  const totalMs = Date.now() - startedAt;
+  if (totalMs > 24 || parserMs > 16 || safeText.length > 1200 || blocks.length > 24) {
+    debugLog("latex-utils", "parse_markdown", {
+      chars: safeText.length,
+      isStreaming,
+      parserMs,
+      totalMs,
+      lines: lines.length,
+      nodes: tree.children?.length || 0,
+      blocks: blocks.length,
+    });
+  }
   return blocks;
 }
 
@@ -696,7 +1096,7 @@ export interface InlineToken {
 }
 
 const INLINE_REGEX =
-  /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|\$[^$]+?\$|\\[a-zA-Z]+(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})*|[a-zA-Z0-9]\^(?:\{[^{}]*\}|[a-zA-Z0-9])|[a-zA-Z0-9]_(?:\{[^{}]*\}|[a-zA-Z0-9]))/g;
+  /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|\$[^$]+?\$|\\[a-zA-Z]+(?:\{[^{}]*\})*|[a-zA-Z0-9]\^(?:\{[^{}]*\}|[a-zA-Z0-9])|[a-zA-Z0-9]_(?:\{[^{}]*\}|[a-zA-Z0-9]))/g;
 
 /**
  * 将行内文本拆分为 token 数组（纯数据结构，不含 JSX）

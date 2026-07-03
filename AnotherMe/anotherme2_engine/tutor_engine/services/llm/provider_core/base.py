@@ -342,22 +342,17 @@ class LLMProvider(ABC):
             if not self._is_transient_error(response.content):
                 stripped = self._strip_image_content(messages)
                 if stripped is not None:
-                    logger.warning(
-                        "Non-transient LLM error with image content, retrying once without images"
+                    logger.error(
+                        "Non-transient LLM error with image content; not retrying without images: {}",
+                        (response.content or "")[:500],
                     )
-                    retry_response = await call(
-                        messages=stripped,
-                        tools=tools,
-                        model=model,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        reasoning_effort=reasoning_effort,
-                        tool_choice=tool_choice,
-                        **kwargs,
+                    return LLMResponse(
+                        content=(
+                            "图片题解析失败：视觉模型没有成功读取这张图片。"
+                            "请重新发送一张更清晰、裁剪到题目区域的图片。"
+                        ),
+                        finish_reason="error",
                     )
-                    if retry_response.finish_reason != "error":
-                        self._strip_image_content_inplace(messages)
-                    return retry_response
                 return response
 
             if attempt > len(delays):

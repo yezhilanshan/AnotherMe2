@@ -1,76 +1,146 @@
-import { createApiClient } from '@anotherme/api-client';
-import { GATEWAY_URL, WEB_URL, BEARER_TOKEN, USER_ID, TUNNEL_HEADERS, WEB_TUNNEL_HEADERS } from './config';
-import { normalizeCapability, CAPABILITY_IDS } from './config';
-import { CircuitBreakerOpenError } from './circuit-breaker';
+import { createApiClient, type ApiClient } from "@anotherme/api-client";
+import {
+  getGatewayUrl,
+  getWebUrl,
+  onGatewayConfigChange,
+} from "./runtime-gateway-config";
+import {
+  BEARER_TOKEN,
+  USER_ID,
+  TUNNEL_HEADERS,
+  WEB_TUNNEL_HEADERS,
+} from "./config";
+import { normalizeCapability, CAPABILITY_IDS } from "./config";
+import { CircuitBreakerOpenError } from "./circuit-breaker";
 
 // Re-export ApiError for backward compatibility
-export { ApiError } from '@anotherme/api-client';
+export { ApiError } from "@anotherme/api-client";
 
-// Create the shared API client instance
-export const api = createApiClient({
-  baseUrl: GATEWAY_URL,
-  getToken: () => BEARER_TOKEN,
-  defaultHeaders: TUNNEL_HEADERS,
-});
+// ── Lazy / reactive API clients ──
+// Clients are recreated whenever runtime gateway config changes,
+// so the app picks up new IPs without a rebuild.
 
-export const bffApi = createApiClient({
-  baseUrl: `${WEB_URL}/api`,
-  getToken: () => BEARER_TOKEN,
-  timeout: 120000,
-  defaultHeaders: WEB_TUNNEL_HEADERS,
-});
+let _api!: ApiClient;
+let _bffApi!: ApiClient;
+let _liveBookApi!: ApiClient["liveBook"];
 
-export const liveBookApi = bffApi.liveBook;
+function recreateClients(): void {
+  const gw = getGatewayUrl();
+  const web = getWebUrl();
 
-export function formatGatewayError(error: unknown, fallback = '请求失败'): string {
-  const message = error instanceof Error ? error.message : String(error || fallback);
-  const errorCode = typeof error === 'object' && error !== null && 'errorCode' in error
-    ? String((error as { errorCode?: unknown }).errorCode || '')
-    : '';
+  _api = createApiClient({
+    baseUrl: gw,
+    getToken: () => BEARER_TOKEN,
+    defaultHeaders: TUNNEL_HEADERS,
+  });
+
+  _bffApi = createApiClient({
+    baseUrl: `${web}/api`,
+    getToken: () => BEARER_TOKEN,
+    timeout: 120000,
+    defaultHeaders: WEB_TUNNEL_HEADERS,
+  });
+
+  const gwLiveBook = createApiClient({
+    baseUrl: gw,
+    getToken: () => BEARER_TOKEN,
+    timeout: 120000,
+    defaultHeaders: TUNNEL_HEADERS,
+  });
+  _liveBookApi = gwLiveBook.liveBook;
+
+  // Update the live bindings so all importers see the new clients
+  api = _api;
+  bffApi = _bffApi;
+  liveBookApi = _liveBookApi;
+}
+
+// Initial creation
+recreateClients();
+
+// Recreate when runtime config changes
+onGatewayConfigChange(recreateClients);
+
+// Export as let — ESM live bindings ensure all importers always
+// read the latest reference after recreateClients() updates them.
+export let api: ApiClient = _api;
+export let bffApi: ApiClient = _bffApi;
+export let liveBookApi: typeof _liveBookApi = _liveBookApi;
+
+// Re-export for streaming module
+export { getGatewayUrl, getWebUrl };
+
+export function formatGatewayError(
+  error: unknown,
+  fallback = "请求失败",
+): string {
+  const gw = getGatewayUrl();
+  const message =
+    error instanceof Error ? error.message : String(error || fallback);
+  const errorCode =
+    typeof error === "object" && error !== null && "errorCode" in error
+      ? String((error as { errorCode?: unknown }).errorCode || "")
+      : "";
 
   if (error instanceof CircuitBreakerOpenError) {
     const retryAfterSec = Math.ceil(error.retryAfterMs / 1000);
     return `网络不稳定，请求已暂时暂停。请等待 ${retryAfterSec} 秒后重试。`;
   }
 
-  if (errorCode === 'NETWORK_ERROR' || message === 'Network connection failed') {
+  if (
+    errorCode === "NETWORK_ERROR" ||
+    message === "Network connection failed"
+  ) {
     return [
-      `无法连接 Gateway：${GATEWAY_URL}`,
-      '请确认 Python Gateway 已启动并监听 0.0.0.0，手机和电脑在同一网络，Windows 防火墙允许当前端口。',
-      '如果自动识别到 localhost，请在 mobile/lib/config.ts 设置 DEV_SERVER_HOST 为电脑局域网 IP。',
-    ].join('\n');
+      `无法连接 Gateway：${gw}`,
+      "请确认 Python Gateway 已启动并监听 0.0.0.0，手机和电脑在同一网络，Windows 防火墙允许当前端口。",
+      "请在 我的 → Gateway 设置 中修改电脑局域网 IP 地址。",
+    ].join("\n");
   }
 
-  if (errorCode === 'TIMEOUT' || message === 'Request timed out') {
-    return `Gateway 请求超时：${GATEWAY_URL}\n请确认服务没有卡住，或稍后重试。`;
+  if (errorCode === "TIMEOUT" || message === "Request timed out") {
+    return `Gateway 请求超时：${gw}\n请确认服务没有卡住，或稍后重试。`;
   }
 
   return message || fallback;
 }
 
-export function formatLiveBookError(error: unknown, fallback = '活书请求失败'): string {
-  const message = error instanceof Error ? error.message : String(error || fallback);
-  const errorCode = typeof error === 'object' && error !== null && 'errorCode' in error
-    ? String((error as { errorCode?: unknown }).errorCode || '')
-    : '';
+export function formatLiveBookError(
+  error: unknown,
+  fallback = "活书请求失败",
+): string {
+  const gw = getGatewayUrl();
+  const message =
+    error instanceof Error ? error.message : String(error || fallback);
+  const errorCode =
+    typeof error === "object" && error !== null && "errorCode" in error
+      ? String((error as { errorCode?: unknown }).errorCode || "")
+      : "";
 
-  if (errorCode === 'NETWORK_ERROR' || message === 'Network connection failed') {
-    return [
-      `无法连接 Web/BFF：${WEB_URL}`,
-      '活书移动端现在通过 Web 端 /api/live-book 代理访问后端。请确认 Next.js Web 服务已启动，手机可以访问该地址，并且 Web 服务所在电脑能访问 Python Gateway。',
-      '如果手机访问不到 Web 地址，请检查同一网络、防火墙，或用 EXPO_PUBLIC_WEB_URL / EXPO_PUBLIC_DEV_SERVER_HOST 覆盖 mobile 端地址。',
-    ].join('\n');
+  if (error instanceof CircuitBreakerOpenError) {
+    const retryAfterSec = Math.ceil(error.retryAfterMs / 1000);
+    return `网络不稳定，请求已暂时暂停。请等待 ${retryAfterSec} 秒后重试。`;
   }
 
-  if (errorCode === 'TIMEOUT' || message === 'Request timed out') {
-    return `活书请求超时：${WEB_URL}/api/live-book\n请确认 Web 服务和 Python Gateway 都没有卡住。`;
+  if (
+    errorCode === "NETWORK_ERROR" ||
+    message === "Network connection failed"
+  ) {
+    return [
+      `无法连接 Gateway：${gw}`,
+      "活书移动端现在直接连接 Python Gateway。请确认 Python Gateway 已启动并监听 0.0.0.0，手机和电脑在同一网络，Windows 防火墙允许当前端口。",
+      "请在 我的 → Gateway 设置 中修改电脑局域网 IP 地址。",
+    ].join("\n");
+  }
+
+  if (errorCode === "TIMEOUT" || message === "Request timed out") {
+    return `活书请求超时：${gw}\n请确认 Python Gateway 没有卡住，或稍后重试。`;
   }
 
   return message || fallback;
 }
 
 // ==================== Backward-compatible named exports ====================
-// These delegate to the shared client, preserving the original function signatures.
 
 export async function healthCheck() {
   return api.core.healthCheck();
@@ -81,7 +151,6 @@ export async function getCapabilities() {
 }
 
 export async function getJobs() {
-  // Gateway has no GET /v1/jobs list endpoint; return empty for now.
   return { jobs: [] as unknown[] };
 }
 
@@ -120,11 +189,11 @@ export async function askQuestionWithImageObject(
   description?: string,
 ) {
   return {
-    content: description?.trim() || '请分析这张图片',
+    content: description?.trim() || "请分析这张图片",
     capability: CAPABILITY_IDS.deep_solve,
     attachments: [
       {
-        type: 'image',
+        type: "image",
         object_key: objectKey,
       },
     ],

@@ -69,6 +69,7 @@ def _event_to_dict(event: StreamEvent) -> dict[str, Any]:
         base["content"] = event.content
         base["source"] = event.source
         base["stage"] = event.stage
+        base["metadata"] = event.metadata
 
     elif flat_type == "status":
         message = event.content
@@ -100,7 +101,7 @@ def _event_to_dict(event: StreamEvent) -> dict[str, Any]:
         base["source"] = event.source
 
     elif flat_type == "done":
-        pass  # No extra fields needed
+        base["metadata"] = event.metadata
 
     return base
 
@@ -130,10 +131,16 @@ async def stream_capability_via_orchestrator(
             attachment_objects.append(
                 Attachment(
                     type=att_type,
+                    url=att_dict.get("url", ""),
                     base64=att_dict.get("base64", ""),
                     filename=att_dict.get("filename", ""),
                     mime_type=att_dict.get("mime_type", ""),
                     extracted_text=extracted,
+                    _hydration_error=att_dict.get("_hydration_error", ""),
+                    sha256=att_dict.get("sha256", ""),
+                    object_key=att_dict.get("object_key", ""),
+                    size=int(att_dict.get("size", 0) or 0),
+                    metadata=att_dict.get("metadata", {}),
                 )
             )
 

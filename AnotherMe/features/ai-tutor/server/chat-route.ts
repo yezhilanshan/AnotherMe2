@@ -345,6 +345,7 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   let chatModel: string | undefined;
   let chatMessageCount: number | undefined;
+  const t0 = Date.now();
 
   try {
     const body: StatelessChatRequest = await req.json();
@@ -376,17 +377,24 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_API_KEY', 401, 'API Key is required');
     }
 
-    log.info('Processing request');
+    log.info('========== [STAGE-0-recv] Chat request received ==========');
     log.info(
-      `Agents: ${body.config.agentIds.join(', ')}, Messages: ${body.messages.length}, Turn: ${body.directorState?.turnCount ?? 0}`,
+      `Agents: ${body.config.agentIds.join(', ')}, Messages: ${body.messages.length}, Turn: ${body.directorState?.turnCount ?? 0}, Model: ${body.model || 'default'}, Capability: ${body.capability || 'chat'}`,
     );
 
     let persistenceSessionId: string | undefined;
     let persistenceUserId = '';
     if (body.persistence?.enabled) {
       try {
+        const t_persist_start = Date.now();
         const authUser = await getAuthenticatedUserFromRequest(req);
         persistenceUserId = authUser?.id?.trim() || '';
+        log.info(
+          'Auth resolved in ' +
+            (Date.now() - t_persist_start) +
+            'ms, userId=' +
+            (persistenceUserId || 'none'),
+        );
       } catch (error) {
         log.warn('Failed to resolve authenticated user for persistence, skip persistence:', error);
       }
@@ -437,6 +445,7 @@ export async function POST(req: NextRequest) {
 
     let learningContext = body.learningContext;
     if (persistenceUserId) {
+      const t_lc_start = Date.now();
       learningContext = await buildLearningContext({
         userId: persistenceUserId,
         source: resolveChatSource(body.persistence?.source),
@@ -461,6 +470,7 @@ export async function POST(req: NextRequest) {
         ],
         lookbackDays: 14,
       });
+      log.info('Learning context built in ' + (Date.now() - t_lc_start) + 'ms');
 
       // Merge client-provided diagnostic session into learning context
       if (body.diagnosticSession && learningContext) {
@@ -672,12 +682,12 @@ export async function POST(req: NextRequest) {
           isAnotherMe2GatewayConfigured();
 
         // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
-        const useAutoGateway =
-          requestedCapability === 'auto' && isAnotherMe2GatewayConfigured();
+        const useAutoGateway = requestedCapability === 'auto' && isAnotherMe2GatewayConfigured();
 
         // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
         if (useAutoGateway) {
-          log.info(`Using Python DeepTutor gateway for auto capability`);
+          log.info('Using Python DeepTutor gateway for auto capability');
+          const t_gw_start = Date.now();
 
           try {
             const gatewayMessages = body.messages.map((msg) => {
@@ -709,6 +719,12 @@ export async function POST(req: NextRequest) {
               persistUserMessage: false,
               signal,
             });
+            log.info(
+              'Gateway auto response received in ' +
+                (Date.now() - t_gw_start) +
+                'ms, status=' +
+                gatewayResponse.status,
+            );
 
             if (!gatewayResponse.ok) {
               const errText = await gatewayResponse.text().catch(() => 'Gateway error');
@@ -787,7 +803,9 @@ export async function POST(req: NextRequest) {
             log.error('Auto gateway pipeline failed:', error);
             const errorEvent: StatelessEvent = {
               type: 'error',
-              data: { message: `Auto 路由失败: ${error instanceof Error ? error.message : String(error)}` },
+              data: {
+                message: `Auto 路由失败: ${error instanceof Error ? error.message : String(error)}`,
+              },
             };
             await writer.write(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
             await writer.close();
@@ -796,7 +814,8 @@ export async function POST(req: NextRequest) {
         }
 
         if (useGatewayPipeline) {
-          log.info(`Using Python DeepTutor gateway for agentic chat`);
+          log.info('Using Python DeepTutor gateway for agentic chat');
+          const t_gw_start = Date.now();
 
           try {
             // 将消息转换为 gateway 格式
@@ -830,6 +849,12 @@ export async function POST(req: NextRequest) {
               persistUserMessage: false,
               signal,
             });
+            log.info(
+              'Gateway agentic response received in ' +
+                (Date.now() - t_gw_start) +
+                'ms, status=' +
+                gatewayResponse.status,
+            );
 
             if (!gatewayResponse.ok) {
               const errText = await gatewayResponse.text().catch(() => 'Gateway error');
@@ -1180,6 +1205,8 @@ export async function POST(req: NextRequest) {
       `Chat request failed [model=${chatModel ?? 'unknown'}, messages=${chatMessageCount ?? 0}]:`,
       error,
     );
+    const totalMs = Date.now() - t0;
+    log.error('Total request processing time before error: ' + totalMs + 'ms');
     const message = error instanceof Error ? error.message : 'Failed to process request';
     if (/api key required/i.test(message)) {
       return apiError('MISSING_API_KEY', 401, message);

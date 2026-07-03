@@ -79,8 +79,20 @@ export function createApiClient(config: ApiClientConfig) {
         http.request<Record<string, unknown>[]>(`/v1/ai/sessions?user_id=${params.user_id}${params.limit ? `&limit=${params.limit}` : ''}${params.linked_conversation_id ? `&linked_conversation_id=${params.linked_conversation_id}` : ''}`),
       createSession: (body: { user_id: string; title: string; source?: string; subject?: string; linked_classroom_id?: string; linked_conversation_id?: string }) =>
         http.request<Record<string, unknown>>('/v1/ai/sessions', { method: 'POST', body }),
-      getSessionMessages: (sessionId: string, limit?: number) =>
-        http.request<Record<string, unknown>[]>(`/v1/ai/sessions/${sessionId}/messages${limit ? `?limit=${limit}` : ''}`),
+      getSessionMessages: (sessionId: string, params?: number | { limit?: number; before_seq?: number; max_content_chars?: number }) => {
+        const qs = new URLSearchParams();
+        if (typeof params === 'number') {
+          qs.set('limit', String(params));
+        } else {
+          if (params?.limit) qs.set('limit', String(params.limit));
+          if (params?.before_seq) qs.set('before_seq', String(params.before_seq));
+          if (params?.max_content_chars) qs.set('max_content_chars', String(params.max_content_chars));
+        }
+        const q = qs.toString();
+        return http.request<Record<string, unknown>[]>(`/v1/ai/sessions/${sessionId}/messages${q ? `?${q}` : ''}`);
+      },
+      getMessage: (messageId: string) =>
+        http.request<Record<string, unknown>>(`/v1/ai/messages/${messageId}`),
       createSessionMessage: (sessionId: string, body: { role: string; content: string; user_id?: string; content_type?: string; capability?: string; events?: unknown[]; attachments?: unknown[]; model_name?: string; prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; latency_ms?: number; request_id?: string; parent_message_id?: string }) =>
         http.request<Record<string, unknown>>(`/v1/ai/sessions/${sessionId}/messages`, { method: 'POST', body }),
       getSessionLearningRecords: (sessionId: string, params?: { user_id?: string; limit?: number }) => {

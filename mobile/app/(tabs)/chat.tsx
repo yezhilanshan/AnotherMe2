@@ -1,33 +1,30 @@
-import React, {
-  useRef,
-  useEffect,
-  useState,
-  useCallback,
-} from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import {
   View,
-  FlatList,
   Text,
+  Image,
   StyleSheet,
-  ActivityIndicator,
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  FlatList,
+  ActivityIndicator,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router";
 import { useTabBarStore } from "../../lib/tab-bar-store";
 import { ChatBubble } from "../../components/ChatBubble";
 import { ChatInput } from "../../components/ChatInput";
+import { RenderDebugBoundary } from "../../components/RenderDebugBoundary";
 import { SessionList } from "../../components/SessionList";
 import { CapabilityBar } from "../../components/CapabilitySelector";
-import { useChatStore, type Message } from "../../lib/store";
+import { useChatStore } from "../../lib/store";
 import { api } from "../../lib/api";
 import { USER_ID } from "../../lib/config";
 import { colors } from "../../lib/theme";
-import type { MessageAttachment, ReviewPlanItem } from "../../lib/types";
+import { BackgroundImage } from "../../components/ui/BackgroundImage";
+import type { Message, MessageAttachment, ReviewPlanItem } from "../../lib/types";
 import { buildReviewPrompt } from "../../lib/review-scheduler";
 import {
   buildProblemStepFollowupPrompt,
@@ -41,79 +38,9 @@ import {
   saveSocraticFollowupState,
 } from "../../lib/socratic-followup";
 
-// 格式化时间为微信风格
-function formatTimeWeChat(timestamp: number): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  const hours = date.getHours();
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  const isAM = hours < 12;
-  const displayHours = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-  const period = isAM ? "上午" : "下午";
-
-  if (diffMins < 1) {
-    return "刚刚";
-  } else if (diffMins < 60) {
-    return `${diffMins}分钟前`;
-  } else if (diffHours < 24) {
-    return `${period}${displayHours}:${minutes}`;
-  } else if (diffDays === 1) {
-    return `昨天 ${period}${displayHours}:${minutes}`;
-  } else if (diffDays < 7) {
-    const weekDays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-    return `${weekDays[date.getDay()]} ${period}${displayHours}:${minutes}`;
-  } else {
-    return `${date.getMonth() + 1}/${date.getDate()} ${period}${displayHours}:${minutes}`;
-  }
-}
-
-// 时间分隔组件
-function TimeSeparator({ timestamp }: { timestamp: number }) {
-  return (
-    <View style={styles.timeSeparator}>
-      <Text style={styles.timeSeparatorText}>{formatTimeWeChat(timestamp)}</Text>
-    </View>
-  );
-}
-
-const RenderItem = React.memo(
-  ({
-    item,
-    onFeedback,
-    onRetry,
-    onEdit,
-  }: {
-    item: Message;
-    onFeedback?: (id: string, r: "like" | "dislike") => void;
-    onRetry?: () => void;
-    onEdit?: (id: string, newText: string) => void;
-  }) => (
-    <ChatBubble
-      message={item}
-      onFeedback={onFeedback}
-      onRetry={onRetry}
-      onEdit={onEdit}
-    />
-  ),
-);
-
-function EmptyState() {
-  return (
-    <View style={styles.emptyContainer}>
-      <View style={styles.emptyIconContainer}>
-        <Ionicons name="chatbubbles" size={48} color={colors.primary} />
-      </View>
-      <Text style={styles.emptyTitle}>AI 导师</Text>
-      <Text style={styles.emptySubtitle}>输入消息开始对话</Text>
-    </View>
-  );
-}
-const MemoEmptyState = React.memo(EmptyState);
+const PEACH_OVERLAY = "rgba(255, 245, 240, 0.72)";
+const PURPLE = "#6B5CE7";
+const ORANGE = "#FF8C61";
 
 function firstParam(value?: string | string[]): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -136,48 +63,56 @@ export default function ChatScreen() {
     reviewCheckQuestion,
     reviewIntervalDays,
     reviewNextReviewAt,
-  } =
-    useLocalSearchParams<{
-      followupId?: string | string[];
-      reviewKnowledgePointId?: string | string[];
-      reviewTitle?: string | string[];
-      reviewMastery?: string | string[];
-      reviewReason?: string | string[];
-      reviewMaterial?: string | string[];
-      reviewCheckQuestion?: string | string[];
-      reviewIntervalDays?: string | string[];
-      reviewNextReviewAt?: string | string[];
-    }>();
+  } = useLocalSearchParams<{
+    followupId?: string | string[];
+    reviewKnowledgePointId?: string | string[];
+    reviewTitle?: string | string[];
+    reviewMastery?: string | string[];
+    reviewReason?: string | string[];
+    reviewMaterial?: string | string[];
+    reviewCheckQuestion?: string | string[];
+    reviewIntervalDays?: string | string[];
+    reviewNextReviewAt?: string | string[];
+  }>();
   const messages = useChatStore((s) => s.messages);
+  const streamingVersion = useChatStore((s) => s.streamingVersion);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const error = useChatStore((s) => s.error);
   const currentAgent = useChatStore((s) => s.currentAgent);
+  const isLoadingMessages = useChatStore((s) => s.isLoadingMessages);
+  const isLoadingOlderMessages = useChatStore((s) => s.isLoadingOlderMessages);
+  const hasOlderMessages = useChatStore((s) => s.hasOlderMessages);
   const sessions = useChatStore((s) => s.sessions);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
   const selectedCapability = useChatStore((s) => s.selectedCapability);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const clearError = useChatStore((s) => s.clearError);
-  const submitFeedback = useChatStore((s) => s.submitFeedback);
-  const retryMessage = useChatStore((s) => s.retryMessage);
-  const editMessage = useChatStore((s) => s.editMessage);
   const loadSessions = useChatStore((s) => s.loadSessions);
+  const loadOlderMessages = useChatStore((s) => s.loadOlderMessages);
+  const loadFullMessageContent = useChatStore((s) => s.loadFullMessageContent);
   const createSession = useChatStore((s) => s.createSession);
   const switchSession = useChatStore((s) => s.switchSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
+  const submitFeedback = useChatStore((s) => s.submitFeedback);
+  const retryMessage = useChatStore((s) => s.retryMessage);
+  const editMessage = useChatStore((s) => s.editMessage);
   const refreshLearningContext = useChatStore((s) => s.refreshLearningContext);
   const setSelectedCapability = useChatStore((s) => s.setSelectedCapability);
   const hideTabBar = useTabBarStore((s) => s.hide);
   const showTabBar = useTabBarStore((s) => s.show);
 
-  const flatListRef = useRef<FlatList<Message>>(null);
   const processedFollowupRef = useRef<string | null>(null);
   const processedReviewRef = useRef<string | null>(null);
+  const listRef = useRef<FlatList<Message>>(null);
+  const shouldAutoScrollRef = useRef(true);
   const insets = useSafeAreaInsets();
   const [sessionListVisible, setSessionListVisible] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
-  const [reviewSubmitted, setReviewSubmitted] = useState<"mastered" | "needs_practice" | null>(null);
+  const [reviewSubmitted, setReviewSubmitted] = useState<
+    "mastered" | "needs_practice" | null
+  >(null);
 
   useEffect(() => {
     loadSessions();
@@ -230,7 +165,9 @@ export default function ChatScreen() {
     if (!kpId || processedReviewRef.current === kpId) return;
     processedReviewRef.current = kpId;
 
-    const titleParam = Array.isArray(reviewTitle) ? reviewTitle[0] : reviewTitle;
+    const titleParam = Array.isArray(reviewTitle)
+      ? reviewTitle[0]
+      : reviewTitle;
     const name = titleParam || kpId;
     let cancelled = false;
 
@@ -241,11 +178,16 @@ export default function ChatScreen() {
       setSelectedCapability("chat");
       const storedItem = useChatStore
         .getState()
-        .learningContext.reviewPlan.find((item) => item.knowledgePointId === kpId);
+        .learningContext.reviewPlan.find(
+          (item) => item.knowledgePointId === kpId,
+        );
       const fallbackItem: ReviewPlanItem = {
         knowledgePointId: kpId,
         name,
-        mastery: numberParam(firstParam(reviewMastery), storedItem?.mastery ?? 0),
+        mastery: numberParam(
+          firstParam(reviewMastery),
+          storedItem?.mastery ?? 0,
+        ),
         attempts: storedItem?.attempts ?? 0,
         lastPracticedAt: storedItem?.lastPracticedAt,
         nextReviewAt:
@@ -327,11 +269,88 @@ export default function ChatScreen() {
     [sendMessage, createSession, handleFocusChange],
   );
 
+  useEffect(() => {
+    if (isLoadingOlderMessages) return;
+    if (!shouldAutoScrollRef.current && !isStreaming) return;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    }, 40);
+    return () => clearTimeout(timer);
+  }, [messages.length, streamingVersion, isStreaming, isLoadingOlderMessages]);
+
+  const handleListScroll = useCallback(
+    (event: {
+      nativeEvent: {
+        contentOffset: { y: number };
+        contentSize: { height: number };
+        layoutMeasurement: { height: number };
+      };
+    }) => {
+      const { contentOffset, contentSize, layoutMeasurement } =
+        event.nativeEvent;
+      const distanceFromBottom =
+        contentSize.height - layoutMeasurement.height - contentOffset.y;
+      shouldAutoScrollRef.current = distanceFromBottom < 140;
+      if (
+        contentOffset.y < 36 &&
+        hasOlderMessages &&
+        !isLoadingMessages &&
+        !isLoadingOlderMessages
+      ) {
+        loadOlderMessages();
+      }
+    },
+    [
+      hasOlderMessages,
+      isLoadingMessages,
+      isLoadingOlderMessages,
+      loadOlderMessages,
+    ],
+  );
+
+  const renderMessage = useCallback(
+    ({ item }: { item: Message }) => (
+      <RenderDebugBoundary
+        name="ChatBubble"
+        meta={{ id: item.id, role: item.role }}
+      >
+        <ChatBubble
+          message={item}
+          onFeedback={submitFeedback}
+          onRetry={retryMessage}
+          onEdit={editMessage}
+          onLoadFullContent={(message) => loadFullMessageContent(message.id)}
+        />
+      </RenderDebugBoundary>
+    ),
+    [editMessage, loadFullMessageContent, retryMessage, submitFeedback],
+  );
+
+  const listHeader = (
+    <View style={styles.historyHeader}>
+      {isLoadingOlderMessages ? (
+        <View style={styles.historyStatus}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={styles.historyStatusText}>正在加载历史消息...</Text>
+        </View>
+      ) : hasOlderMessages ? (
+        <TouchableOpacity
+          style={styles.historyLoadButton}
+          onPress={loadOlderMessages}
+        >
+          <Text style={styles.historyLoadText}>加载更早消息</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+
   const activeSession = sessions.find((s) => s.id === activeSessionId);
   const activeReviewKnowledgePointId = Array.isArray(reviewKnowledgePointId)
     ? reviewKnowledgePointId[0]
     : reviewKnowledgePointId;
-  const activeReviewTitle = Array.isArray(reviewTitle) ? reviewTitle[0] : reviewTitle;
+  const activeReviewTitle = Array.isArray(reviewTitle)
+    ? reviewTitle[0]
+    : reviewTitle;
 
   const submitReviewResult = useCallback(
     async (isCorrect: boolean) => {
@@ -377,46 +396,16 @@ export default function ChatScreen() {
     ],
   );
 
-  const renderItem = useCallback(
-    ({ item, index }: { item: Message; index: number }) => {
-      // 判断是否需要显示时间分隔符
-      let showTimeSeparator = false;
-      if (index === 0) {
-        // 第一条消息显示时间
-        showTimeSeparator = true;
-      } else if (index > 0) {
-        // 与上一条消息间隔超过5分钟显示时间
-        const prevTimestamp = messages[index - 1].timestamp;
-        const currTimestamp = item.timestamp;
-        const diffMinutes = (currTimestamp - prevTimestamp) / (1000 * 60);
-        if (diffMinutes > 5) {
-          showTimeSeparator = true;
-        }
-      }
-
-      return (
-        <View>
-          {showTimeSeparator && <TimeSeparator timestamp={item.timestamp} />}
-          <RenderItem
-            item={item}
-            onFeedback={submitFeedback}
-            onRetry={retryMessage}
-            onEdit={editMessage}
-          />
-        </View>
-      );
-    },
-    [messages, submitFeedback, retryMessage, editMessage],
-  );
-
-  const keyExtractor = useCallback((item: Message) => item.id, []);
-
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior="padding"
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
+      <BackgroundImage
+        source={require("../../assets/backgrounds/chat_bg.png")}
+        overlayColor={PEACH_OVERLAY}
+      />
       {/* Header — 只保留左侧会话切换 */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
@@ -480,23 +469,56 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={renderItem}
-        keyExtractor={keyExtractor}
-        contentContainerStyle={[
-          styles.messageList,
-          { paddingBottom: insets.bottom + 60 },
-        ]}
-        ListEmptyComponent={<MemoEmptyState />}
-        onContentSizeChange={() =>
-          flatListRef.current?.scrollToEnd({ animated: false })
-        }
-        removeClippedSubviews
-        maxToRenderPerBatch={8}
-        windowSize={10}
-      />
+      <RenderDebugBoundary
+        name="NativeChatList"
+        meta={{
+          messageCount: messages.length,
+          sessionId: activeSessionId,
+        }}
+      >
+        <FlatList
+          ref={listRef}
+          style={styles.messageList}
+          contentContainerStyle={[
+            styles.messageListContent,
+            { paddingBottom: Math.max(insets.bottom, 10) + 12 },
+          ]}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={(item) => item.id}
+          extraData={streamingVersion}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={
+            isLoadingMessages ? (
+              <View style={styles.emptyState}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.emptyStateText}>正在加载会话...</Text>
+              </View>
+            ) : (
+              <View style={styles.emptyState}>
+              <Image
+                source={require("../../assets/illustrations/chat_empty.png")}
+                style={styles.emptyStateImage}
+                resizeMode="contain"
+              />
+              <Text style={styles.emptyStateTitle}>开始对话</Text>
+              <Text style={styles.emptyStateText}>
+                选择能力后输入问题，结果会直接显示在这里。
+              </Text>
+            </View>
+            )
+          }
+          keyboardShouldPersistTaps="handled"
+          onScroll={handleListScroll}
+          scrollEventThrottle={80}
+          onContentSizeChange={() => {
+            if (shouldAutoScrollRef.current || isStreaming) {
+              listRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
+          removeClippedSubviews={false}
+        />
+      </RenderDebugBoundary>
 
       <CapabilityBar
         selectedCapability={selectedCapability}
@@ -525,17 +547,78 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgPage },
+  container: { flex: 1, backgroundColor: "rgba(0,0,0,0)" },
+  messageList: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0)",
+  },
+  messageListContent: {
+    paddingTop: 8,
+    paddingHorizontal: 0,
+  },
+  historyHeader: {
+    minHeight: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 4,
+  },
+  historyStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+  },
+  historyStatusText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  historyLoadButton: {
+    minHeight: 32,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 6,
+    backgroundColor: colors.bgCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    justifyContent: "center",
+  },
+  historyLoadText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  emptyState: {
+    minHeight: 220,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+  },
+  emptyStateTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  emptyStateText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
+  },
+  emptyStateImage: {
+    width: 160,
+    height: 160,
+    marginBottom: 10,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
     paddingBottom: 12,
-    backgroundColor: colors.primary,
   },
   headerLeft: { flex: 1 },
-  headerTitle: { fontSize: 18, fontWeight: "600", color: colors.textInverse },
-  headerAgent: { fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 },
+  headerTitle: { fontSize: 18, fontWeight: "700", color: colors.textPrimary },
+  headerAgent: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   errorContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -555,9 +638,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: colors.warningLight,
+    backgroundColor: "rgba(255, 232, 224, 0.9)",
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: "rgba(255,255,255,0.5)",
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
@@ -604,42 +687,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: colors.textInverse,
-  },
-  messageList: { paddingVertical: 12, flexGrow: 1 },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingBottom: 40,
-    paddingHorizontal: 20,
-  },
-  emptyIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primaryLight,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: colors.textPrimary,
-    marginBottom: 6,
-  },
-  emptySubtitle: { fontSize: 14, color: colors.textMuted },
-  timeSeparator: {
-    alignItems: "center",
-    marginVertical: 12,
-  },
-  timeSeparatorText: {
-    fontSize: 12,
-    color: colors.textMuted,
-    backgroundColor: colors.bgInput,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-    overflow: "hidden",
   },
 });

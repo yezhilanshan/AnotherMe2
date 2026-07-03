@@ -88,6 +88,15 @@ diff.txt
 output_test/
 tmp_template_frames/
 .pytest-run-tmp-*/
+**/.dbg/
+**/.gradle-ascii-home/
+**/.gradle-user-home/
+**/.tmp/
+*.diff
+**/debug-*.md
+**/*-修复建议.md
+讲解稿.md
+expo-screen.png
 **/diff_output.txt
 **/staged_diff.txt
 **/unstaged_diff.txt
