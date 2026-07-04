@@ -11,7 +11,7 @@ import {
   type SocraticTeachingActionRecord,
   type SocraticVariantEvaluation,
   type SocraticPhase,
-} from "../../AnotherMe/packages/teaching-core/src";
+} from "../../AnotherMe/packages/teaching-core/src/index";
 import { getSafeStorage } from "./safeStorage";
 import type { ProblemStepFollowupContext } from "./problem-step-followup";
 

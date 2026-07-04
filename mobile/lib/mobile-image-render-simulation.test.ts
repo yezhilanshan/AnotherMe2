@@ -7,8 +7,6 @@
  * visible content renders as markdown/math text.
  */
 
-import { supportsLiveAnswerSteps } from "./config";
-
 type Role = "user" | "assistant";
 
 type Message = {
@@ -61,6 +59,12 @@ type StreamEvent =
     };
 
 type RenderMode = "empty" | "streamingMarkdown" | "answerSteps" | "finalMarkdown";
+
+const LIVE_ANSWER_STEP_CAPABILITIES = new Set(["deep_solve"]);
+
+function supportsLiveAnswerSteps(capability: string | null | undefined): boolean {
+  return LIVE_ANSWER_STEP_CAPABILITIES.has(capability || "chat");
+}
 
 function assertEq<T>(actual: T, expected: T, label = "") {
   if (actual !== expected) {

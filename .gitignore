@@ -67,6 +67,7 @@ media/videos/
 media/texts/
 media/images/
 media/Tex/
+*.bundle
 graphify-out/
 AnotherMe/anotherme2_engine/graphify-out/
 AnotherMe/public/generated/

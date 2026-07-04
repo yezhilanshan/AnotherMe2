@@ -3,6 +3,18 @@ import { ASR_PROVIDERS } from '@/lib/audio/constants';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AudioRecorder');
+const SYSTEM_RECOGNITION_BUSY_MESSAGE = '系统识别服务繁忙，暂时不可使用，请稍后再试';
+
+function isSystemRecognitionUnavailable(error?: string) {
+  const normalized = (error || '').toLowerCase();
+  return (
+    normalized.includes('busy') ||
+    normalized.includes('service-not-allowed') ||
+    normalized.includes('recognizer is unavailable') ||
+    normalized.includes('recognitionservice busy') ||
+    normalized.includes('system recognition service')
+  );
+}
 
 // TypeScript declarations for Web Speech API
 declare global {
@@ -194,6 +206,16 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
             log.error('Speech recognition error:', event.error);
             let errorMessage = '语音识别失败';
 
+            if (isSystemRecognitionUnavailable(event.error)) {
+              errorMessage = SYSTEM_RECOGNITION_BUSY_MESSAGE;
+              onError?.(errorMessage);
+              busyRef.current = false;
+              setIsRecording(false);
+              setRecordingTime(0);
+              stopTimer();
+              return;
+            }
+
             switch (event.error) {
               case 'aborted':
                 // Non-fatal: caused by our own cancel/stop logic or rapid toggle
@@ -277,7 +299,12 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     } catch (error) {
       busyRef.current = false;
       log.error('Failed to start recording:', error);
-      onError?.('无法访问麦克风，请检查权限设置');
+      const message = error instanceof Error ? error.message : String(error);
+      onError?.(
+        isSystemRecognitionUnavailable(message)
+          ? SYSTEM_RECOGNITION_BUSY_MESSAGE
+          : '无法访问麦克风，请检查权限设置',
+      );
     }
   }, [onTranscription, onError, postNativeVoiceMessage, startTimer, stopTimer, transcribeAudio]);
 
@@ -376,7 +403,11 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
       if (detail.type === 'error') {
         resetNativeVoiceState();
-        onError?.(detail.error || '语音识别失败，请重试');
+        onError?.(
+          isSystemRecognitionUnavailable(detail.error)
+            ? SYSTEM_RECOGNITION_BUSY_MESSAGE
+            : detail.error || '语音识别失败，请重试',
+        );
         return;
       }
 

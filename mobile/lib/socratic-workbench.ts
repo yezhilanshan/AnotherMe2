@@ -12,7 +12,7 @@ import {
   type SocraticAttemptVerdict,
   type SocraticVariantEvaluation,
   type SocraticPhase,
-} from "../../AnotherMe/packages/teaching-core/src";
+} from "../../AnotherMe/packages/teaching-core/src/index";
 import { streamChatWithRetry } from "./streaming";
 import { DEFAULT_MODEL, USER_ID } from "./config";
 export type {

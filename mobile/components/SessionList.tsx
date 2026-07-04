@@ -26,7 +26,6 @@ interface SessionListProps {
   sessions: Session[];
   activeSessionId: string | null;
   onClose: () => void;
-  onCreateSession: (title: string) => Promise<string>;
   onSwitchSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
 }
@@ -41,12 +40,9 @@ export function SessionList({
   sessions,
   activeSessionId,
   onClose,
-  onCreateSession,
   onSwitchSession,
   onDeleteSession,
 }: SessionListProps) {
-  const [newTitle, setNewTitle] = useState('');
-  const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState('');
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
@@ -91,21 +87,6 @@ export function SessionList({
       ]).start();
     }
   }, [visible, fadeAnim, slideAnim]);
-
-  const handleCreate = async () => {
-    const title = newTitle.trim();
-    if (!title) return;
-    setCreating(true);
-    try {
-      await onCreateSession(title);
-      setNewTitle('');
-      onClose();
-    } catch {
-      Alert.alert('错误', '创建会话失败');
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handleDelete = (session: Session) => {
     Alert.alert('删除会话', `确定删除「${session.title}」？`, [
@@ -197,26 +178,6 @@ export function SessionList({
               </TouchableOpacity>
             </View>
 
-            {/* 新建会话 */}
-            <View style={styles.createRow}>
-              <TextInput
-                style={styles.createInput}
-                value={newTitle}
-                onChangeText={setNewTitle}
-                placeholder="新建会话标题..."
-                placeholderTextColor={colors.textMuted}
-                returnKeyType="done"
-                onSubmitEditing={handleCreate}
-              />
-              <TouchableOpacity
-                style={[styles.createButton, (!newTitle.trim() || creating) && styles.createButtonDisabled]}
-                onPress={handleCreate}
-                disabled={!newTitle.trim() || creating}
-              >
-                <Ionicons name="add" size={20} color={colors.textInverse} />
-              </TouchableOpacity>
-            </View>
-
             {/* 会话列表 */}
             <FlatList
               data={grouped}
@@ -235,7 +196,7 @@ export function SessionList({
                 <View style={styles.empty}>
                   <Ionicons name="chatbubble-ellipses-outline" size={40} color={colors.textMuted} />
                   <Text style={styles.emptyText}>
-                    {query.trim() ? '未找到匹配的会话' : '暂无会话，创建一个开始吧'}
+                    {query.trim() ? '未找到匹配的会话' : '暂无会话'}
                   </Text>
                 </View>
               }
@@ -366,35 +327,6 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 6,
     marginLeft: 8,
-  },
-  createRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: colors.bgCard,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  createInput: {
-    flex: 1,
-    height: 38,
-    backgroundColor: colors.bgPage,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    fontSize: 14,
-    color: colors.textPrimary,
-    marginRight: 8,
-  },
-  createButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  createButtonDisabled: {
-    backgroundColor: colors.primaryLight,
   },
   listContent: {
     paddingBottom: 12,

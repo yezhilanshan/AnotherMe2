@@ -6,6 +6,9 @@ import {
 } from "expo-speech-recognition";
 import { Alert } from "react-native";
 
+export const VOICE_RECOGNITION_BUSY_MESSAGE =
+  "系统识别服务繁忙，暂时不可使用，请稍后再试";
+
 interface UseVoiceInputOptions {
   lang?: string;
   onTranscript: (text: string, isFinal: boolean) => void;
@@ -38,6 +41,26 @@ function isBusyError(error: unknown): boolean {
     return error.message.toLowerCase().includes("busy");
   }
   return String(error).toLowerCase().includes("busy");
+}
+
+function isSystemRecognitionUnavailable(error: string, message?: string) {
+  const normalized = `${error} ${message ?? ""}`.toLowerCase();
+  return (
+    normalized.includes("busy") ||
+    normalized.includes("service-not-allowed") ||
+    normalized.includes("recognizer is unavailable") ||
+    normalized.includes("recognitionservice busy") ||
+    normalized.includes("system recognition service")
+  );
+}
+
+function canUseSystemRecognition(): boolean {
+  try {
+    return ExpoSpeechRecognitionModule.isRecognitionAvailable();
+  } catch {
+    // Older/native edge cases should still attempt start and surface its error.
+    return true;
+  }
 }
 
 function buildRecognitionOptions(lang: string) {
@@ -183,7 +206,7 @@ export function useVoiceInput({
       activeVoiceOwner = null;
       resetLocalState();
       settlePendingStart(false);
-      onErrorRef.current?.("系统识别服务繁忙，暂时不可使用，请稍后再试");
+      onErrorRef.current?.(VOICE_RECOGNITION_BUSY_MESSAGE);
       return;
     }
 
@@ -287,7 +310,7 @@ export function useVoiceInput({
       suppressAbortErrorRef.current = false;
       return;
     }
-    const errorMsg = mapErrorMessage(event.error);
+    const errorMsg = mapErrorMessage(event.error, event.message);
     activeVoiceOwner = null;
     settlePendingStart(false);
     onErrorRef.current?.(errorMsg);
@@ -312,6 +335,13 @@ export function useVoiceInput({
         setIsProcessing(false);
         onErrorRef.current?.("麦克风权限被拒绝，请在设置中开启");
         Alert.alert("权限不足", "请在系统设置中允许麦克风和语音识别权限");
+        return false;
+      }
+
+      if (!canUseSystemRecognition()) {
+        activeVoiceOwner = null;
+        resetLocalState();
+        onErrorRef.current?.(VOICE_RECOGNITION_BUSY_MESSAGE);
         return false;
       }
 
@@ -363,7 +393,13 @@ export function useVoiceInput({
       activeVoiceOwner = null;
       rejectPendingStart(e);
       console.warn("[useVoiceInput] start failed:", e);
-      onErrorRef.current?.(e instanceof Error ? e.message : "启动语音识别失败");
+      const fallbackMessage =
+        e instanceof Error && isSystemRecognitionUnavailable("unknown", e.message)
+          ? VOICE_RECOGNITION_BUSY_MESSAGE
+          : e instanceof Error
+            ? e.message
+            : "启动语音识别失败";
+      onErrorRef.current?.(fallbackMessage);
       return false;
     } finally {
       startPromiseRef.current = null;
@@ -419,7 +455,11 @@ export function useVoiceInput({
 }
 
 /** 将原生错误码映射为中文提示 */
-function mapErrorMessage(error: string): string {
+function mapErrorMessage(error: string, message?: string): string {
+  if (isSystemRecognitionUnavailable(error, message)) {
+    return VOICE_RECOGNITION_BUSY_MESSAGE;
+  }
+
   switch (error) {
     case "not-allowed":
       return "麦克风权限被拒绝，请在设置中开启";

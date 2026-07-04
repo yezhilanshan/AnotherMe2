@@ -979,11 +979,9 @@ ${cssVars(theme)}
 
   function renderReasoning(message) {
     var reasoning = String((message && message.reasoning) || "");
-    if (!reasoning && !message.isStreaming) return "";
+    if (!reasoning.trim()) return "";
     var title = message.isStreaming ? "思考中" : "思考过程";
-    var body = reasoning
-      ? escapeHtml(reasoning)
-      : '<span style="color:var(--text-muted)">正在整理思路...</span>';
+    var body = escapeHtml(reasoning);
     return '<div class="reasoning ' + (message.isStreaming ? "streaming" : "done") + '">' +
       '<div class="reasoning-head"><span class="reasoning-dot"></span><span>' + title + "</span></div>" +
       '<div class="reasoning-body">' + body +
@@ -1042,28 +1040,41 @@ ${cssVars(theme)}
   function renderMessageHtml(message) {
     var role = message.role === "user" ? "user" : "assistant";
     var body = plainContent(message);
+    var hasBody = body.trim();
+    var hasReasoning = String((message && message.reasoning) || "").trim();
+    var hasStructuredResult = role === "assistant" && hasCapabilityResult(message);
     var capabilityHtml = role === "assistant" ? renderCapabilityResult(message, body) : "";
+    var shouldRenderBubble =
+      !!hasBody ||
+      role === "user" ||
+      (message.isStreaming && !hasReasoning) ||
+      hasStructuredResult ||
+      (role === "assistant" && !message.isStreaming);
     var html = renderAttachments(message);
     if (role === "assistant") {
       html += renderReasoning(message);
     }
-    html += '<div class="bubble"><div class="message-body">';
-    if (body.trim()) {
-      html += role === "assistant" ? renderMarkdown(body) : escapeHtml(body).replace(/\\n/g, "<br>");
-    } else if (message.isStreaming && !message.reasoning) {
-      html += '<span style="color:var(--text-secondary)">正在思考</span>';
-    } else if (role === "assistant" && hasCapabilityResult(message)) {
-      html += '<span style="color:var(--text-secondary)">已生成结构化结果。</span>';
-    } else if (role === "assistant") {
-      html += '<span style="color:var(--text-secondary)">这条回复没有可显示内容，请重试。</span>';
+    if (shouldRenderBubble) {
+      html += '<div class="bubble"><div class="message-body">';
+      if (hasBody) {
+        html += role === "assistant" ? renderMarkdown(body) : escapeHtml(body).replace(/\\n/g, "<br>");
+      } else if (message.isStreaming && !hasReasoning) {
+        html += '<span style="color:var(--text-secondary)">正在思考</span>';
+      } else if (hasStructuredResult) {
+        html += '<span style="color:var(--text-secondary)">已生成结构化结果。</span>';
+      } else if (role === "assistant") {
+        html += '<span style="color:var(--text-secondary)">这条回复没有可显示内容，请重试。</span>';
+      }
+      if (message.isStreaming && hasBody) html += '<span class="cursor">▊</span>';
+      html += "</div></div>";
     }
-    if (message.isStreaming && body.trim()) html += '<span class="cursor">▊</span>';
-    html += "</div></div>";
     html += capabilityHtml;
     if (message.queued) html += '<div class="queued">等待网络恢复后发送</div>';
     html += renderMeta(message);
-    html += '<div class="actions"><button type="button" class="action" data-action="copy" data-id="' +
-      escapeHtml(message.id) + '">复制</button></div>';
+    if (body.trim()) {
+      html += '<div class="actions"><button type="button" class="action" data-action="copy" data-id="' +
+        escapeHtml(message.id) + '">复制</button></div>';
+    }
     return html;
   }
 

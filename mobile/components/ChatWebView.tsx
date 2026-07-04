@@ -26,6 +26,7 @@ interface ChatWebViewProps {
   isLoadingMessages: boolean;
   isLoadingOlderMessages: boolean;
   bottomInset: number;
+  backgroundColor?: string;
   onLoadOlderMessages?: () => void;
 }
 
@@ -190,9 +191,9 @@ function buildStatusKey(props: {
   ].join("|");
 }
 
-function buildTheme(): ChatWebViewTheme {
+function buildTheme(bgPage = colors.bgPage): ChatWebViewTheme {
   return {
-    bgPage: colors.bgPage,
+    bgPage,
     bgCard: colors.bgCard,
     bgInput: colors.bgInput,
     textPrimary: colors.textPrimary,
@@ -218,6 +219,7 @@ export function ChatWebView({
   isLoadingMessages,
   isLoadingOlderMessages,
   bottomInset,
+  backgroundColor = colors.bgPage,
   onLoadOlderMessages,
 }: ChatWebViewProps) {
   const webViewRef = useRef<WebView>(null);
@@ -225,8 +227,11 @@ export function ChatWebView({
   const readyRef = useRef(false);
   const [ready, setReady] = useState(false);
 
-  const theme = useMemo(buildTheme, []);
-  const { katexCss, katexJs } = useKatexAssets();
+  const theme = useMemo(
+    () => buildTheme(backgroundColor),
+    [backgroundColor],
+  );
+  const { katexCss, katexJs, loaded: katexLoaded } = useKatexAssets();
   const html = useMemo(
     () =>
       buildChatWebViewHtml({
@@ -399,10 +404,13 @@ export function ChatWebView({
 
   return (
     <WebView
+      key={
+        katexLoaded ? "chat-webview-katex-ready" : "chat-webview-katex-loading"
+      }
       ref={webViewRef}
       source={{ html }}
-      style={styles.webView}
-      containerStyle={styles.webViewContainer}
+      style={[styles.webView, { backgroundColor }]}
+      containerStyle={[styles.webViewContainer, { backgroundColor }]}
       originWhitelist={["*"]}
       javaScriptEnabled
       domStorageEnabled={false}

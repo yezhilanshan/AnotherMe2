@@ -1,5 +1,5 @@
 import { getSafeStorage } from "./safeStorage";
-import { deriveStepGoal } from "../../AnotherMe/packages/teaching-core/src";
+import { deriveStepGoal } from "../../AnotherMe/packages/teaching-core/src/index";
 
 const FOLLOWUP_PREFIX = "@anotherme/problem-step-followup/";
 

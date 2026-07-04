@@ -27,7 +27,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { WEB_URL } from "../../lib/config";
-import { useVoiceInput } from "../../hooks/useVoiceInput";
+import {
+  useVoiceInput,
+  VOICE_RECOGNITION_BUSY_MESSAGE,
+} from "../../hooks/useVoiceInput";
 
 // ── Screen ──
 
@@ -42,6 +45,32 @@ export default function CourseDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [webError, setWebError] = useState(false);
   const webViewVersion = useMemo(() => Date.now().toString(), [id]);
+  const webViewSafeAreaStyle = useMemo(
+    () => ({
+      paddingTop: insets.top,
+      paddingRight: insets.right,
+      paddingBottom: insets.bottom,
+      paddingLeft: insets.left,
+    }),
+    [insets.bottom, insets.left, insets.right, insets.top],
+  );
+  const loadingBarSafeAreaStyle = useMemo(
+    () => ({
+      top: insets.top,
+      left: insets.left,
+      right: insets.right,
+    }),
+    [insets.left, insets.right, insets.top],
+  );
+  const errorOverlaySafeAreaStyle = useMemo(
+    () => ({
+      paddingTop: insets.top + 32,
+      paddingRight: insets.right + 32,
+      paddingBottom: insets.bottom + 32,
+      paddingLeft: insets.left + 32,
+    }),
+    [insets.bottom, insets.left, insets.right, insets.top],
+  );
 
   const webUrl = `${WEB_URL}/classroom/${id}?mobile=1&v=${webViewVersion}`;
 
@@ -143,7 +172,7 @@ export default function CourseDetailScreen() {
         voiceResultSentRef.current = false;
         const started = await startListening();
         if (!started) {
-          sendNativeVoiceError("语音识别启动失败，请稍后再试");
+          sendNativeVoiceError(VOICE_RECOGNITION_BUSY_MESSAGE);
         }
         return true;
       }
@@ -201,32 +230,34 @@ export default function CourseDetailScreen() {
 
   return (
     <View style={styles.container}>
-      {/* WebView — fills entire screen for immersive classroom */}
-      <WebView
-        ref={webViewRef}
-        source={{ uri: webUrl }}
-        style={styles.webview}
-        onLoadStart={handleLoadStart}
-        onLoadEnd={handleLoadEnd}
-        onError={handleError}
-        onMessage={handleMessage}
-        javaScriptEnabled
-        domStorageEnabled
-        sharedCookiesEnabled
-        cacheEnabled={false}
-        startInLoadingState
-        allowsBackForwardNavigationGestures
-        scalesPageToFit={false}
-        overScrollMode="never"
-        allowsInlineMediaPlayback
-        mediaPlaybackRequiresUserAction={false}
-        mediaCapturePermissionGrantType="grant"
-        allowsAirPlayForMediaPlayback
-      />
+      {/* WebView stays inside the edge-to-edge safe area so Android system bars do not cover classroom controls. */}
+      <View style={[styles.webviewSafeArea, webViewSafeAreaStyle]}>
+        <WebView
+          ref={webViewRef}
+          source={{ uri: webUrl }}
+          style={styles.webview}
+          onLoadStart={handleLoadStart}
+          onLoadEnd={handleLoadEnd}
+          onError={handleError}
+          onMessage={handleMessage}
+          javaScriptEnabled
+          domStorageEnabled
+          sharedCookiesEnabled
+          cacheEnabled={false}
+          startInLoadingState
+          allowsBackForwardNavigationGestures
+          scalesPageToFit={false}
+          overScrollMode="never"
+          allowsInlineMediaPlayback
+          mediaPlaybackRequiresUserAction={false}
+          mediaCapturePermissionGrantType="grant"
+          allowsAirPlayForMediaPlayback
+        />
+      </View>
 
       {/* Loading indicator — thin bar at top */}
       {loading && (
-        <View style={[styles.loadingBar, { top: insets.top }]}>
+        <View style={[styles.loadingBar, loadingBarSafeAreaStyle]}>
           <ActivityIndicator size="small" color="#8B5CF6" />
         </View>
       )}
@@ -248,7 +279,7 @@ export default function CourseDetailScreen() {
 
       {/* Error overlay */}
       {webError && (
-        <View style={[styles.errorOverlay, { paddingTop: insets.top }]}>
+        <View style={[styles.errorOverlay, errorOverlaySafeAreaStyle]}>
           <View style={styles.errorCard}>
             <Ionicons name="cloud-offline-outline" size={48} color="#CCC" />
             <Text style={styles.errorMessage}>加载失败，请检查网络连接</Text>
@@ -281,6 +312,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#000",
+  },
+  webviewSafeArea: {
+    flex: 1,
+    backgroundColor: "#f6f4f0",
   },
   webview: {
     flex: 1,

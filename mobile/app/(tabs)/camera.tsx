@@ -62,6 +62,11 @@ const ORANGE = "#FF8C61";
 const ORANGE_LIGHT = "#FFE8E0";
 const GLASS_BG = "rgba(255, 252, 249, 0.88)";
 const GLASS_BORDER = "rgba(255, 255, 255, 0.6)";
+
+// 示例视频（与 web 端 question-explanation 页保持一致）
+const EXAMPLE_VIDEO_URL = "/videos/final_from_template_with_audio_custom_raw.mp4";
+const EXAMPLE_VIDEO_TITLE = "菱形折叠坐标法讲解（示例）";
+
 const CARD_SHADOW = {
   shadowColor: "#5A3E36",
   shadowOffset: { width: 0, height: 6 },
@@ -140,6 +145,20 @@ const EMPTY_JOB: JobState = {
   scenePackageUrl: null,
   error: null,
   softenedPrompt: null,
+};
+
+const EXAMPLE_VIDEO_HISTORY_ITEM: ProblemVideoHistoryItem = {
+  id: "example-video",
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  imageUri: null,
+  description: EXAMPLE_VIDEO_TITLE,
+  job: {
+    ...EMPTY_JOB,
+    status: "completed",
+    videoUrl: EXAMPLE_VIDEO_URL,
+  },
+  solutionSteps: [],
 };
 
 function resolveUrl(url: string): string {
@@ -252,8 +271,8 @@ const MODE_TABS: {
   icon: "flash" | "videocam";
   label: string;
 }[] = [
-  { key: "manim_direct", icon: "flash", label: "AI直出" },
-  { key: "video", icon: "videocam", label: "视频" },
+  { key: "manim_direct", icon: "flash", label: "快速" },
+  { key: "video", icon: "videocam", label: "思考" },
 ];
 
 // ─── Memoized 卡片组件：避免列表重渲染 ───
@@ -455,6 +474,12 @@ const HistoryTaskCard = memo(function HistoryTaskCard({
               {statusText}
             </Text>
           </View>
+          {(item.solutionSteps?.length ?? 0) > 0 && (
+            <View style={styles.taskSolutionBadge}>
+              <Ionicons name="document-text" size={10} color={BRAND_BLUE} />
+              <Text style={styles.taskSolutionBadgeText}>含题解</Text>
+            </View>
+          )}
           <Text style={styles.taskTime}>
             {formatHistoryTime(item.updatedAt)}
           </Text>
@@ -608,18 +633,14 @@ export default function CameraScreen() {
     };
     if (BEARER_TOKEN) headers["Authorization"] = `Bearer ${BEARER_TOKEN}`;
 
-    const isManimDirect = solveMode === "manim_direct";
-    const jobType = isManimDirect
-      ? "photo_manim_direct"
-      : "problem_video_generate";
+    // 快速 与 思考 模式统一使用 problem_video_generate，确保返回完整解题步骤与视频
+    const jobType = "problem_video_generate";
 
     const payload: Record<string, unknown> = {
       image_object_key: objectKey,
+      render_mode: renderMode,
       ...(description.trim() ? { problem_text: description.trim() } : {}),
     };
-    if (!isManimDirect) {
-      payload.render_mode = renderMode;
-    }
     console.log(
       "[camera] createJob jobType:",
       jobType,
@@ -1119,11 +1140,11 @@ export default function CameraScreen() {
     [],
   );
 
-  // ─── 分离已完成和进行中的历史 ───
   const completedVideoHistory = useMemo(
-    () => history.filter((h) => h.job.status === "completed" && h.job.videoUrl),
-    [history],
+    () => [EXAMPLE_VIDEO_HISTORY_ITEM],
+    [],
   );
+
   /*
   const completedVizHistory = useMemo(
     () =>
@@ -1340,62 +1361,6 @@ export default function CameraScreen() {
               </View>
             )}
 
-            {/* 完成状态：视频卡片 */}
-            {job.status === "completed" && (
-              <View style={styles.completedCard}>
-                {/* interactive/matplotlib 分支暂时注释
-                {job.interactiveUrl ? (
-                  ...
-                ) : job.imageUrl ? (
-                  ...
-                ) : */}
-                {job.videoUrl ? (
-                  <TouchableOpacity
-                    style={styles.videoPreviewCard}
-                    onPress={() => openVideo(job.videoUrl!)}
-                    activeOpacity={0.85}
-                  >
-                    <View style={styles.videoPreviewBg}>
-                      <View style={styles.videoPlayCircle}>
-                        <Ionicons name="play" size={32} color="#FFF" />
-                      </View>
-                    </View>
-                    <View style={styles.videoPreviewInfo}>
-                      <View style={styles.videoPreviewTitleRow}>
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={18}
-                          color={SUCCESS_GREEN}
-                        />
-                        <Text style={styles.videoPreviewTitle}>
-                          视频生成完成
-                        </Text>
-                      </View>
-                      <Text style={styles.videoPreviewSub}>
-                        点击播放讲解视频
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.completedNoVideo}>
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={48}
-                      color={SUCCESS_GREEN}
-                    />
-                    <Text style={styles.completedText}>生成完成！</Text>
-                  </View>
-                )}
-                <TouchableOpacity
-                  style={styles.resetButton}
-                  onPress={handleReset}
-                >
-                  <Ionicons name="camera" size={18} color={BRAND_BLUE} />
-                  <Text style={styles.resetText}>再拍一题</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
             {/* 解题步骤（始终保留，不随完成/重置清除） */}
             {solutionSteps.length > 0 && (
               <View style={styles.stepsCard}>
@@ -1458,6 +1423,62 @@ export default function CameraScreen() {
                     </View>
                   );
                 })}
+              </View>
+            )}
+
+            {/* 完成状态：视频卡片 */}
+            {job.status === "completed" && (
+              <View style={styles.completedCard}>
+                {/* interactive/matplotlib 分支暂时注释
+                {job.interactiveUrl ? (
+                  ...
+                ) : job.imageUrl ? (
+                  ...
+                ) : */}
+                {job.videoUrl ? (
+                  <TouchableOpacity
+                    style={styles.videoPreviewCard}
+                    onPress={() => openVideo(job.videoUrl!)}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.videoPreviewBg}>
+                      <View style={styles.videoPlayCircle}>
+                        <Ionicons name="play" size={32} color="#FFF" />
+                      </View>
+                    </View>
+                    <View style={styles.videoPreviewInfo}>
+                      <View style={styles.videoPreviewTitleRow}>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={SUCCESS_GREEN}
+                        />
+                        <Text style={styles.videoPreviewTitle}>
+                          视频生成完成
+                        </Text>
+                      </View>
+                      <Text style={styles.videoPreviewSub}>
+                        点击播放讲解视频
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.completedNoVideo}>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={48}
+                      color={SUCCESS_GREEN}
+                    />
+                    <Text style={styles.completedText}>生成完成！</Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={styles.resetButton}
+                  onPress={handleReset}
+                >
+                  <Ionicons name="camera" size={18} color={BRAND_BLUE} />
+                  <Text style={styles.resetText}>再拍一题</Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -2293,6 +2314,20 @@ const styles = StyleSheet.create({
   },
   taskStatusDot: { width: 6, height: 6, borderRadius: 3 },
   taskStatusText: { fontSize: 11, fontWeight: "600" },
+  taskSolutionBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: `${BRAND_BLUE}18`,
+  },
+  taskSolutionBadgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: BRAND_BLUE,
+  },
   taskTime: { fontSize: 11, color: colors.textMuted },
   taskProgressBar: {
     height: 3,

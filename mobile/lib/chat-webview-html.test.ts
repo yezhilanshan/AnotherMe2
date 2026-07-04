@@ -398,6 +398,19 @@ try {
 
   harness.windowMock.__ANOTHERME_CHAT_WEBVIEW_EVENT({
     type: "replace_message",
+    message: message("a-empty-stream", "assistant", "", {
+      isStreaming: true,
+    }),
+  });
+  harness.runTimers(75);
+  assert(
+    count(harness.root.innerHTML, "reasoning-body") === 0 &&
+      count(harness.root.innerHTML, "正在思考") === 1,
+    "empty streaming assistant renders one thinking placeholder",
+  );
+
+  harness.windowMock.__ANOTHERME_CHAT_WEBVIEW_EVENT({
+    type: "replace_message",
     message: message("a3", "assistant", "", {
       isStreaming: true,
       reasoning: "先判断题目条件。\n",
@@ -425,10 +438,42 @@ try {
       harness.root.innerHTML.includes("最后检查边界情况"),
     "streaming reasoning deltas render inside the constrained reasoning box",
   );
+  assert(
+    !harness.root.innerHTML.includes("这条回复没有可显示内容"),
+    "reasoning-only streaming message does not render an empty-answer bubble",
+  );
 } catch (error) {
   failed += 1;
   failures.push(
     `  x chat bridge mocked DOM flow works: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+  );
+}
+
+try {
+  const harness = runBridge(html);
+  harness.windowMock.__ANOTHERME_CHAT_WEBVIEW_EVENT({
+    type: "set_messages",
+    messages: [
+      message(
+        "math-all",
+        "assistant",
+        "Inline \\(a+b\\) and $c^2$\n\n\\[\\frac{1}{2}\\]\n\n$$E=mc^2$$",
+      ),
+    ],
+  });
+  assert(
+    harness.root.innerHTML.includes("inline:a+b") &&
+      harness.root.innerHTML.includes("inline:c^2") &&
+      harness.root.innerHTML.includes("block:\\frac{1}{2}") &&
+      harness.root.innerHTML.includes("block:E=mc^2"),
+    "common inline and display math syntaxes render through KaTeX",
+  );
+} catch (error) {
+  failed += 1;
+  failures.push(
+    `  x common math syntaxes render in WebView: ${
       error instanceof Error ? error.message : String(error)
     }`,
   );

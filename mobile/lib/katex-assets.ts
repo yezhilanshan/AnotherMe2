@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Asset } from "expo-asset";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
+import { debugError } from "./debug";
 
 declare const require: (path: string) => number;
 
@@ -46,7 +47,12 @@ export async function loadKatexAssets(): Promise<KatexAssetText> {
       };
       return cachedKatexAssets;
     })
-    .catch(() => EMPTY_KATEX_ASSETS)
+    .catch((error) => {
+      debugError("katex-assets", "load_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return EMPTY_KATEX_ASSETS;
+    })
     .finally(() => {
       pendingKatexLoad = null;
     });
