@@ -157,6 +157,46 @@ export interface ASRTranscriptionResult {
   text: string;
 }
 
+export function detectAudioMimeType(audioBuffer: Buffer): string {
+  if (
+    audioBuffer.length >= 12 &&
+    audioBuffer.toString('ascii', 0, 4) === 'RIFF' &&
+    audioBuffer.toString('ascii', 8, 12) === 'WAVE'
+  ) {
+    return 'audio/wav';
+  }
+  if (
+    audioBuffer.length >= 4 &&
+    audioBuffer[0] === 0x1a &&
+    audioBuffer[1] === 0x45 &&
+    audioBuffer[2] === 0xdf &&
+    audioBuffer[3] === 0xa3
+  ) {
+    return 'audio/webm';
+  }
+  if (audioBuffer.length >= 4 && audioBuffer.toString('ascii', 0, 4) === 'OggS') {
+    return 'audio/ogg';
+  }
+  if (
+    audioBuffer.length >= 2 &&
+    audioBuffer[0] === 0xff &&
+    (audioBuffer[1] & 0xf6) === 0xf0
+  ) {
+    return 'audio/aac';
+  }
+  if (
+    audioBuffer.length >= 3 &&
+    (audioBuffer.toString('ascii', 0, 3) === 'ID3' ||
+      (audioBuffer[0] === 0xff && (audioBuffer[1] & 0xe0) === 0xe0))
+  ) {
+    return 'audio/mpeg';
+  }
+  if (audioBuffer.length >= 12 && audioBuffer.toString('ascii', 4, 8) === 'ftyp') {
+    return 'audio/mp4';
+  }
+  return 'application/octet-stream';
+}
+
 /**
  * Transcribe audio using specified ASR provider
  */
@@ -245,11 +285,15 @@ async function transcribeQwenASR(
 
   // Convert audio to base64
   let base64Audio: string;
+  let audioMimeType: string;
   if (audioBuffer instanceof Buffer) {
     base64Audio = audioBuffer.toString('base64');
+    audioMimeType = detectAudioMimeType(audioBuffer);
   } else if (audioBuffer instanceof Blob) {
     const arrayBuffer = await audioBuffer.arrayBuffer();
-    base64Audio = Buffer.from(arrayBuffer).toString('base64');
+    const buffer = Buffer.from(arrayBuffer);
+    base64Audio = buffer.toString('base64');
+    audioMimeType = audioBuffer.type || detectAudioMimeType(buffer);
   } else {
     throw new Error('Invalid audio buffer type');
   }
@@ -263,7 +307,7 @@ async function transcribeQwenASR(
           role: 'user',
           content: [
             {
-              audio: `data:audio/wav;base64,${base64Audio}`,
+              audio: `data:${audioMimeType};base64,${base64Audio}`,
             },
           ],
         },
@@ -286,7 +330,6 @@ async function transcribeQwenASR(
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json; charset=utf-8',
-      'X-DashScope-Audio-Format': 'wav',
     },
     body: JSON.stringify(requestBody),
   });

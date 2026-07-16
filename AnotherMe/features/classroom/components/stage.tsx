@@ -1,6 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useStageStore } from '@/lib/store';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
@@ -1763,6 +1770,7 @@ function MobileLandscapeDock({
   const [inputValue, setInputValue] = useState('');
   const [isSendCooldown, setIsSendCooldown] = useState(false);
   const isSendCooldownRef = useRef(false);
+  const voicePressActiveRef = useRef(false);
   const showPlaybackButton = !!onPlayPause && playbackButtonState && playbackButtonState !== 'none';
   const shouldShowPlayIcon =
     playbackButtonState === 'play' || playbackButtonState === 'restart' || isPaused;
@@ -1822,28 +1830,49 @@ function MobileLandscapeDock({
     }
   }, [cancelRecording, isInputOpen, isProcessing, isSendCooldown, isVoiceOpen, onInputActivate]);
 
-  const handleToggleVoice = useCallback(() => {
-    if (isVoiceOpen) {
-      if (isRecording) {
-        stopRecording();
-      }
-      setIsVoiceOpen(false);
-    } else {
-      if (isSendCooldown || isProcessing) return;
-      onInputActivate?.();
-      setIsVoiceOpen(true);
-      setIsInputOpen(false);
-      startRecording();
-    }
+  const handleVoicePressStart = useCallback(() => {
+    if (voicePressActiveRef.current || isSendCooldown || isProcessing) return;
+    voicePressActiveRef.current = true;
+    onInputActivate?.();
+    setIsVoiceOpen(true);
+    setIsInputOpen(false);
+    void startRecording();
+  }, [isProcessing, isSendCooldown, onInputActivate, startRecording]);
+
+  const handleVoicePressEnd = useCallback(() => {
+    if (!voicePressActiveRef.current) return;
+    voicePressActiveRef.current = false;
+    stopRecording();
+  }, [stopRecording]);
+
+  const handleVoicePressCancel = useCallback(() => {
+    if (!voicePressActiveRef.current) return;
+    voicePressActiveRef.current = false;
+    cancelRecording();
+    setIsVoiceOpen(false);
   }, [
-    isProcessing,
-    isRecording,
-    isSendCooldown,
-    isVoiceOpen,
-    onInputActivate,
-    startRecording,
-    stopRecording,
+    cancelRecording,
   ]);
+
+  const handleVoiceKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) {
+        event.preventDefault();
+        handleVoicePressStart();
+      }
+    },
+    [handleVoicePressStart],
+  );
+
+  const handleVoiceKeyUp = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handleVoicePressEnd();
+      }
+    },
+    [handleVoicePressEnd],
+  );
 
   // Clear cooldown when agent starts speaking
   useEffect(() => {
@@ -1946,14 +1975,12 @@ function MobileLandscapeDock({
               <span className="text-[10px] font-semibold tracking-wider text-purple-600 dark:text-purple-300 uppercase">
                 {isProcessing ? t('roundtable.processing') : t('roundtable.listening')}
               </span>
-              <button
-                type="button"
-                onClick={handleToggleVoice}
+              <div
                 className="relative w-9 h-9 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 flex items-center justify-center shadow-md border border-white/20"
-                aria-label={t('roundtable.stopRecording') || '停止录音'}
+                aria-hidden="true"
               >
                 <Mic className="w-4 h-4 text-white" />
-              </button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -2016,12 +2043,23 @@ function MobileLandscapeDock({
             <button
               type="button"
               aria-label={
-                asrEnabled ? t('roundtable.voiceInput') : t('roundtable.voiceInputDisabled')
+                asrEnabled ? '按住说话，松开结束' : t('roundtable.voiceInputDisabled')
               }
-              onClick={() => {
-                if (asrEnabled) handleToggleVoice();
+              onPointerDown={(event) => {
+                if (!asrEnabled) return;
+                event.preventDefault();
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                handleVoicePressStart();
               }}
-              disabled={!asrEnabled}
+              onPointerUp={(event) => {
+                event.preventDefault();
+                handleVoicePressEnd();
+              }}
+              onPointerCancel={handleVoicePressCancel}
+              onContextMenu={(event) => event.preventDefault()}
+              onKeyDown={handleVoiceKeyDown}
+              onKeyUp={handleVoiceKeyUp}
+              disabled={!asrEnabled || isProcessing}
               className={cn(
                 'w-9 h-9 rounded-full flex items-center justify-center transition-all active:scale-95',
                 !asrEnabled

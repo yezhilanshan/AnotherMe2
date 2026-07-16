@@ -16,7 +16,15 @@ import {
 // ============================================================
 // 开发环境配置
 // ============================================================
-const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "");
+const normalizeUrl = (url: string) => {
+  let result = url.trim().replace(/\/+$/, "");
+  // Convert http://host:443 → https://host and https://host:443 → https://host
+  result = result.replace(/^http:\/\/(.+):443(\/.*)?$/, "https://$1$2");
+  result = result.replace(/^https:\/\/(.+):443(\/.*)?$/, "https://$1$2");
+  // Convert http://host:80 → http://host and https://host:80 → http://host
+  result = result.replace(/^https?:\/\/(.+):80(\/.*)?$/, "http://$1$2");
+  return result;
+};
 
 type ExpoHostConstants = {
   expoConfig?: { hostUri?: string };
@@ -88,6 +96,21 @@ let WEB_PORT = process.env.EXPO_PUBLIC_WEB_PORT?.trim() || "3000";
 // 设置了覆盖 URL 则直接使用，忽略 DEV_SERVER_HOST
 // ============================================================
 
+function buildUrlFromHostPort(host: string, port: string): string {
+  const cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const cleanPort = String(port || "").trim();
+
+  if (cleanPort === "443") {
+    return `https://${cleanHost}`;
+  }
+
+  if (cleanPort === "80") {
+    return `http://${cleanHost}`;
+  }
+
+  return `http://${cleanHost}:${cleanPort}`;
+}
+
 const GATEWAY_URL_FROM_ENV = process.env.EXPO_PUBLIC_GATEWAY_URL?.trim();
 const GATEWAY_OVERRIDE_URL_FROM_ENV =
   process.env.EXPO_PUBLIC_GATEWAY_OVERRIDE_URL?.trim();
@@ -96,7 +119,7 @@ const GATEWAY_OVERRIDE_URL: string | undefined =
 
 export let GATEWAY_URL = GATEWAY_OVERRIDE_URL
   ? normalizeUrl(GATEWAY_OVERRIDE_URL)
-  : `http://${DEV_SERVER_HOST}:${GATEWAY_PORT}`;
+  : buildUrlFromHostPort(DEV_SERVER_HOST, GATEWAY_PORT);
 
 // localtunnel 需要 bypass header 才能直接返回 API 响应
 export let TUNNEL_HEADERS: Record<string, string> =
@@ -116,7 +139,7 @@ const WEB_OVERRIDE_URL: string | undefined =
 
 export let WEB_URL = WEB_OVERRIDE_URL
   ? normalizeUrl(WEB_OVERRIDE_URL)
-  : `http://${DEV_SERVER_HOST}:${WEB_PORT}`;
+  : buildUrlFromHostPort(DEV_SERVER_HOST, WEB_PORT);
 
 export let WEB_TUNNEL_HEADERS: Record<string, string> =
   WEB_OVERRIDE_URL &&
@@ -153,58 +176,113 @@ export function ensureRuntimeConfigSynced(): boolean {
 // ============================================================
 
 /** 测试 Gateway 连接，返回是否可达 */
+/** 测试 Gateway 连接，返回是否可达 */
 export async function testGatewayConnection(): Promise<{
   ok: boolean;
   message: string;
 }> {
+  const url = `${GATEWAY_URL}/v1/capabilities`;
+  console.log("[gateway-test] request url:", url);
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`${GATEWAY_URL}/`, {
-      signal: controller.signal,
+    const startedAt = Date.now();
+
+    const res = await fetch(url, {
       headers: TUNNEL_HEADERS,
     });
-    clearTimeout(timeoutId);
+
+    const elapsed = Date.now() - startedAt;
+
+    console.log("[gateway-test] response:", {
+      url,
+      status: res.status,
+      ok: res.ok,
+      elapsed,
+    });
+
     if (res.ok) {
       const data = await res.json();
-      return { ok: true, message: `连接成功: ${data.service || "Gateway"}` };
+      return {
+        ok: true,
+        message: `连接成功: ${data.service || "Gateway"}\n${url}\nHTTP ${res.status}\n耗时 ${elapsed}ms`,
+      };
     }
-    return { ok: false, message: `HTTP ${res.status}` };
+
+    return {
+      ok: false,
+      message: `Gateway HTTP ${res.status}\n${url}\n耗时 ${elapsed}ms`,
+    };
   } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    const message = e instanceof Error ? e.message : String(e);
+
+    console.log("[gateway-test] error:", {
+      url,
+      message,
+      stack: e instanceof Error ? e.stack : undefined,
+    });
+
+    return {
+      ok: false,
+      message: `无法连接 Gateway\n${url}\n${message}`,
+    };
   }
 }
 
+/** 测试 Web/BFF 连接，区分 Web 不可达和 Gateway 不可达 */
 /** 测试 Web/BFF 连接，区分 Web 不可达和 Gateway 不可达 */
 export async function testWebBffConnection(): Promise<{
   ok: boolean;
   message: string;
 }> {
+  const url = `${WEB_URL}/api/live-book/books`;
+  console.log("[web-bff-test] request url:", url);
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(`${WEB_URL}/api/live-book/books`, {
-      signal: controller.signal,
+    const startedAt = Date.now();
+
+    const res = await fetch(url, {
       headers: WEB_TUNNEL_HEADERS,
     });
-    clearTimeout(timeoutId);
+
+    const elapsed = Date.now() - startedAt;
+
+    console.log("[web-bff-test] response:", {
+      url,
+      status: res.status,
+      ok: res.ok,
+      elapsed,
+    });
 
     if (res.ok) {
-      return { ok: true, message: `连接成功: Web/BFF 可访问 (${WEB_URL})` };
+      return {
+        ok: true,
+        message: `连接成功: Web/BFF 可访问\n${url}\nHTTP ${res.status}\n耗时 ${elapsed}ms`,
+      };
     }
 
     if (res.status === 502) {
       return {
         ok: false,
-        message: `Web/BFF 可访问，但它连接不到 Python Gateway。\nWeb/BFF: ${WEB_URL}\n请检查 Web 端 ANOTHERME2_GATEWAY_BASE_URL。`,
+        message: `Web/BFF 可访问，但它连接不到 Python Gateway。\n${url}`,
       };
     }
 
-    return { ok: false, message: `Web/BFF HTTP ${res.status}: ${WEB_URL}` };
-  } catch (e) {
     return {
       ok: false,
-      message: `无法连接 Web/BFF：${WEB_URL}\n${e instanceof Error ? e.message : String(e)}`,
+      message: `Web/BFF HTTP ${res.status}\n${url}\n耗时 ${elapsed}ms`,
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+
+    console.log("[web-bff-test] error:", {
+      url,
+      message,
+      stack: e instanceof Error ? e.stack : undefined,
+    });
+
+    return {
+      ok: false,
+      message: `无法连接 Web/BFF\n${url}\n${message}`,
     };
   }
 }

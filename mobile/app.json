@@ -36,10 +36,11 @@
         }
       ],
       [
-        "expo-speech-recognition",
+        "expo-audio",
         {
           "microphonePermission": "允许镜我使用麦克风进行语音输入",
-          "speechRecognitionPermission": "允许镜我使用语音识别功能"
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
         }
       ]
     ]

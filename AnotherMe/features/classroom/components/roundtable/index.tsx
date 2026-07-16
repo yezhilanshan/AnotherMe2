@@ -1,6 +1,12 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import {
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Mic,
@@ -327,6 +333,7 @@ export function Roundtable({
   // Safety net: clear cooldown when streaming transitions from active → ended
   // (not when isStreaming was already false — that would clear cooldown immediately)
   const prevStreamingRef = useRef(false);
+  const voicePressActiveRef = useRef(false);
   useEffect(() => {
     if (prevStreamingRef.current && !isStreaming && isSendCooldown) {
       setIsSendCooldown(false);
@@ -414,6 +421,48 @@ export function Roundtable({
     startRecording,
     stopRecording,
   ]);
+
+  const handleVoicePressStart = useCallback(() => {
+    if (voicePressActiveRef.current || isSendCooldown || isProcessing) return;
+    voicePressActiveRef.current = true;
+    onInputActivate?.();
+    setIsVoiceOpen(true);
+    setIsInputOpen(false);
+    void startRecording();
+  }, [isProcessing, isSendCooldown, onInputActivate, startRecording]);
+
+  const handleVoicePressEnd = useCallback(() => {
+    if (!voicePressActiveRef.current) return;
+    voicePressActiveRef.current = false;
+    stopRecording();
+  }, [stopRecording]);
+
+  const handleVoicePressCancel = useCallback(() => {
+    if (!voicePressActiveRef.current) return;
+    voicePressActiveRef.current = false;
+    cancelRecording();
+    setIsVoiceOpen(false);
+  }, [cancelRecording]);
+
+  const handleVoiceKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) {
+        event.preventDefault();
+        handleVoicePressStart();
+      }
+    },
+    [handleVoicePressStart],
+  );
+
+  const handleVoiceKeyUp = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handleVoicePressEnd();
+      }
+    },
+    [handleVoicePressEnd],
+  );
 
   // Keyboard shortcuts for roundtable interaction (#255)
   // T = toggle text input, V = toggle voice input, Escape = dismiss panels,
@@ -842,7 +891,19 @@ export function Roundtable({
                       isRecording ? t('roundtable.stopRecording') : t('roundtable.startRecording')
                     }
                     className="relative group cursor-pointer bg-transparent border-none p-0"
-                    onClick={handleToggleVoice}
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                      handleVoicePressStart();
+                    }}
+                    onPointerUp={(event) => {
+                      event.preventDefault();
+                      handleVoicePressEnd();
+                    }}
+                    onPointerCancel={handleVoicePressCancel}
+                    onContextMenu={(event) => event.preventDefault()}
+                    onKeyDown={handleVoiceKeyDown}
+                    onKeyUp={handleVoiceKeyUp}
                   >
                     <div className="relative w-12 h-12 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 shadow-[0_4px_20px_rgba(147,51,234,0.3)] flex items-center justify-center group-hover:scale-105 transition-transform duration-300 border border-white/20">
                       <Mic className="w-5 h-5 text-white" />
@@ -866,7 +927,24 @@ export function Roundtable({
                 className="pointer-events-auto"
               >
                 <button
-                  onClick={() => (asrEnabled ? handleToggleVoice() : handleToggleInput())}
+                  onClick={() => {
+                    if (!asrEnabled) handleToggleInput();
+                  }}
+                  onPointerDown={(event) => {
+                    if (!asrEnabled) return;
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture?.(event.pointerId);
+                    handleVoicePressStart();
+                  }}
+                  onPointerUp={(event) => {
+                    if (!asrEnabled) return;
+                    event.preventDefault();
+                    handleVoicePressEnd();
+                  }}
+                  onPointerCancel={handleVoicePressCancel}
+                  onContextMenu={(event) => event.preventDefault()}
+                  onKeyDown={handleVoiceKeyDown}
+                  onKeyUp={handleVoiceKeyUp}
                   className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/70 dark:bg-black/50 backdrop-blur-xl border border-amber-400/50 dark:border-amber-500/50 shadow-[0_0_16px_rgba(245,158,11,0.2),0_8px_32px_rgba(0,0,0,0.06)] dark:shadow-[0_0_16px_rgba(245,158,11,0.25),0_8px_32px_rgba(0,0,0,0.4)] text-amber-600 dark:text-amber-400 text-sm font-semibold tracking-wide hover:bg-gray-100/80 dark:hover:bg-black/60 hover:border-amber-500/70 dark:hover:border-amber-400/70 hover:shadow-[0_0_24px_rgba(245,158,11,0.25)] dark:hover:shadow-[0_0_24px_rgba(245,158,11,0.35)] transition-all active:scale-95 animate-pulse"
                 >
                   {asrEnabled ? <Mic className="w-4 h-4" /> : <MessageSquare className="w-4 h-4" />}
@@ -994,11 +1072,23 @@ export function Roundtable({
                             ? t('roundtable.voiceInput')
                             : t('roundtable.voiceInputDisabled')
                         }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (asrEnabled) handleToggleVoice();
+                        onPointerDown={(event) => {
+                          event.stopPropagation();
+                          if (!asrEnabled) return;
+                          event.preventDefault();
+                          event.currentTarget.setPointerCapture?.(event.pointerId);
+                          handleVoicePressStart();
                         }}
-                        disabled={!asrEnabled}
+                        onPointerUp={(event) => {
+                          event.stopPropagation();
+                          event.preventDefault();
+                          handleVoicePressEnd();
+                        }}
+                        onPointerCancel={handleVoicePressCancel}
+                        onContextMenu={(event) => event.preventDefault()}
+                        onKeyDown={handleVoiceKeyDown}
+                        onKeyUp={handleVoiceKeyUp}
+                        disabled={!asrEnabled || isProcessing}
                         className={cn(
                           'w-8 h-8 rounded-full flex items-center justify-center transition-all active:scale-95',
                           !asrEnabled
@@ -1374,9 +1464,23 @@ export function Roundtable({
                     </motion.div>
                   </div>
 
-                  <div
-                    className="pointer-events-auto relative group cursor-pointer"
-                    onClick={handleToggleVoice}
+                  <button
+                    type="button"
+                    aria-label="按住说话，松开结束"
+                    className="pointer-events-auto relative group cursor-pointer border-none bg-transparent p-0"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                      handleVoicePressStart();
+                    }}
+                    onPointerUp={(event) => {
+                      event.preventDefault();
+                      handleVoicePressEnd();
+                    }}
+                    onPointerCancel={handleVoicePressCancel}
+                    onContextMenu={(event) => event.preventDefault()}
+                    onKeyDown={handleVoiceKeyDown}
+                    onKeyUp={handleVoiceKeyUp}
                   >
                     <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 dark:from-purple-500 dark:to-indigo-600 shadow-[0_4px_20px_rgba(147,51,234,0.3)] flex items-center justify-center z-20 group-hover:scale-105 transition-transform duration-300 border border-white/20 dark:border-white/10">
                       <Mic className="w-6 h-6 text-white" />
@@ -1384,7 +1488,7 @@ export function Roundtable({
                     <div className="absolute inset-0 rounded-full border-2 border-purple-500 dark:border-purple-400 opacity-40 animate-[ping_2s_ease-in-out_infinite] z-10" />
                     <div className="absolute inset-0 rounded-full border border-indigo-400 dark:border-indigo-300 opacity-20 animate-[ping_3s_ease-in-out_infinite_0.5s] z-10" />
                     <div className="absolute inset-0 bg-purple-600 dark:bg-purple-500 blur-2xl opacity-20 group-hover:opacity-40 transition-opacity z-0" />
-                  </div>
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1490,11 +1594,27 @@ export function Roundtable({
 
                     {/* Action circle — voice (ASR on) or text input (ASR off) */}
                     <motion.button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (asrEnabled) handleToggleVoice();
-                        else handleToggleInput();
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (!asrEnabled) handleToggleInput();
                       }}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        if (!asrEnabled) return;
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture?.(event.pointerId);
+                        handleVoicePressStart();
+                      }}
+                      onPointerUp={(event) => {
+                        if (!asrEnabled) return;
+                        event.stopPropagation();
+                        event.preventDefault();
+                        handleVoicePressEnd();
+                      }}
+                      onPointerCancel={handleVoicePressCancel}
+                      onContextMenu={(event) => event.preventDefault()}
+                      onKeyDown={handleVoiceKeyDown}
+                      onKeyUp={handleVoiceKeyUp}
                       animate={{ scale: [1, 1.05, 1] }}
                       transition={{
                         repeat: Infinity,
@@ -2051,11 +2171,23 @@ export function Roundtable({
               ) : (
                 <>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (asrEnabled) handleToggleVoice();
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      if (!asrEnabled) return;
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture?.(event.pointerId);
+                      handleVoicePressStart();
                     }}
-                    disabled={!asrEnabled}
+                    onPointerUp={(event) => {
+                      event.stopPropagation();
+                      event.preventDefault();
+                      handleVoicePressEnd();
+                    }}
+                    onPointerCancel={handleVoicePressCancel}
+                    onContextMenu={(event) => event.preventDefault()}
+                    onKeyDown={handleVoiceKeyDown}
+                    onKeyUp={handleVoiceKeyUp}
+                    disabled={!asrEnabled || isProcessing}
                     className={cn(
                       'w-9 h-9 rounded-full border flex items-center justify-center transition-all active:scale-95 shadow-sm md:w-8 md:h-8',
                       !asrEnabled

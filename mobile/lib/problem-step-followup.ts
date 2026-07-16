@@ -1,13 +1,10 @@
 import { getSafeStorage } from "./safeStorage";
-import { deriveStepGoal } from "../../AnotherMe/packages/teaching-core/src/index";
+import { deriveStepGoal } from "@anotherme/teaching-core";
 
 const FOLLOWUP_PREFIX = "@anotherme/problem-step-followup/";
 
 export type ProblemStepFollowupIntent =
-  | "socratic"
-  | "explain"
-  | "reframe"
-  | "practice";
+  "socratic" | "explain" | "reframe" | "practice";
 
 export interface ProblemStepFollowupContext {
   id: string;
@@ -53,7 +50,9 @@ export function createProblemStepFollowupContext(input: {
   const targetKnowledgePointIds =
     input.step.knowledgePointIds?.filter(
       (item, index, array) =>
-        typeof item === "string" && item.trim() && array.indexOf(item) === index,
+        typeof item === "string" &&
+        item.trim() &&
+        array.indexOf(item) === index,
     ) || [];
   return {
     id: `step-followup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -91,7 +90,9 @@ export async function loadProblemStepFollowupContext(
   }
 }
 
-export async function removeProblemStepFollowupContext(id: string): Promise<void> {
+export async function removeProblemStepFollowupContext(
+  id: string,
+): Promise<void> {
   await getSafeStorage().removeItem(`${FOLLOWUP_PREFIX}${id}`);
 }
 
@@ -137,15 +138,13 @@ function buildStepChainContext(context: ProblemStepFollowupContext): string[] {
     const marker = item.id === context.step.id ? "（当前追问）" : "";
     const title = item.title.trim() || `第 ${item.id} 步`;
     const narration = compactText(item.narration || "", 180);
-    const knowledgePoints =
-      item.knowledgePointIds?.length ? `；知识点：${item.knowledgePointIds.join("、")}` : "";
+    const knowledgePoints = item.knowledgePointIds?.length
+      ? `；知识点：${item.knowledgePointIds.join("、")}`
+      : "";
     return `- 步骤 ${item.id}${marker}：${title}${narration ? `。${narration}` : ""}${knowledgePoints}`;
   });
 
-  return [
-    "整题解题链快照（由拍题任务生成，优先用于理解原图信息）：",
-    ...lines,
-  ];
+  return ["整题解题链快照（由拍题任务生成，优先用于理解原图信息）：", ...lines];
 }
 
 export function buildProblemStepFollowupPrompt(
@@ -166,12 +165,15 @@ export function buildProblemStepFollowupPrompt(
     `题目补充信息：${problemText}`,
     ...(snapshotSummary ? [`拍题任务题面摘要：${snapshotSummary}`] : []),
     `当前步骤：${stepTitle}`,
-    `当前步骤目标：${context.stepGoal || deriveStepGoal({
-      title: context.step.title,
-      description: context.step.description,
-      narration: context.step.narration,
-      knowledgePointIds: context.targetKnowledgePointIds,
-    })}`,
+    `当前步骤目标：${
+      context.stepGoal ||
+      deriveStepGoal({
+        title: context.step.title,
+        description: context.step.description,
+        narration: context.step.narration,
+        knowledgePointIds: context.targetKnowledgePointIds,
+      })
+    }`,
     `当前步骤知识点：${knowledgePointText}`,
     `当前步骤讲解：${stepNarration}`,
     ...stepChainContext,

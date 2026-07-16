@@ -14,22 +14,23 @@ import {
   Image,
   ScrollView,
   ActivityIndicator,
-  Linking,
   Alert,
   TextInput,
   Dimensions,
   Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as ScreenOrientation from "expo-screen-orientation";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons } from "@expo/vector-icons";
-import { WebView } from "react-native-webview";
 import { useRouter } from "expo-router";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { api } from "../../lib/api";
 import {
   GATEWAY_URL,
+  WEB_URL,
   BEARER_TOKEN,
   TUNNEL_HEADERS,
   USER_ID,
@@ -64,7 +65,8 @@ const GLASS_BG = "rgba(255, 252, 249, 0.88)";
 const GLASS_BORDER = "rgba(255, 255, 255, 0.6)";
 
 // 示例视频（与 web 端 question-explanation 页保持一致）
-const EXAMPLE_VIDEO_URL = "/videos/final_from_template_with_audio_custom_raw.mp4";
+const EXAMPLE_VIDEO_URL =
+  "/videos/final_from_template_with_audio_custom_raw.mp4";
 const EXAMPLE_VIDEO_TITLE = "菱形折叠坐标法讲解（示例）";
 
 const CARD_SHADOW = {
@@ -512,6 +514,27 @@ const HISTORY_STATUS_LABEL: Record<JobStatus, { text: string; color: string }> =
     needs_confirmation: { text: "需确认", color: "#FF9500" },
   };
 
+function VideoModalPlayer({
+  uri,
+  style,
+}: {
+  uri: string;
+  style: { flex: number; backgroundColor: string };
+}) {
+  const player = useVideoPlayer(uri, (instance) => {
+    instance.loop = false;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={style}
+      nativeControls
+      contentFit="contain"
+    />
+  );
+}
+
 export default function CameraScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -532,11 +555,32 @@ export default function CameraScreen() {
   const currentJobIdRef = useRef<string | null>(null);
   const jobStartedAtRef = useRef<number>(0);
 
+  const resolvedVideoUrl = useMemo(() => {
+    if (!videoModalUrl) return null;
+    // 示例视频等静态文件由 Web 服务器提供，API 产物的 URL 由 Gateway 提供
+    if (videoModalUrl.startsWith("/videos/")) {
+      return `${WEB_URL}${videoModalUrl}`;
+    }
+    return resolveUrl(videoModalUrl);
+  }, [videoModalUrl]);
+
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
+
+  // 视频播放时锁定横屏，关闭时恢复
+  useEffect(() => {
+    if (videoModalUrl) {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    } else {
+      ScreenOrientation.unlockAsync();
+    }
+    return () => {
+      ScreenOrientation.unlockAsync();
+    };
+  }, [videoModalUrl]);
 
   const pickImage = async (useCamera: boolean) => {
     const permission = useCamera
@@ -1140,10 +1184,7 @@ export default function CameraScreen() {
     [],
   );
 
-  const completedVideoHistory = useMemo(
-    () => [EXAMPLE_VIDEO_HISTORY_ITEM],
-    [],
-  );
+  const completedVideoHistory = useMemo(() => [EXAMPLE_VIDEO_HISTORY_ITEM], []);
 
   /*
   const completedVizHistory = useMemo(
@@ -1714,48 +1755,21 @@ export default function CameraScreen() {
         presentationStyle="fullScreen"
         onRequestClose={() => setVideoModalUrl(null)}
       >
-        <View style={[styles.videoModalContainer, { paddingTop: insets.top }]}>
-          <View style={styles.videoModalHeader}>
-            <TouchableOpacity
-              style={styles.videoModalIconButton}
-              onPress={() => setVideoModalUrl(null)}
-            >
-              <Ionicons name="close" size={24} color="#FFF" />
-            </TouchableOpacity>
-            <Text style={styles.videoModalTitle}>{videoModalTitle}</Text>
-            <TouchableOpacity
-              style={styles.videoModalIconButton}
-              onPress={() => {
-                if (!videoModalUrl) return;
-                Linking.openURL(resolveUrl(videoModalUrl)).catch(() => {
-                  setJob((prev) => ({ ...prev, error: "无法打开视频链接" }));
-                });
-              }}
-            >
-              <Ionicons name="open-outline" size={22} color="#FFF" />
-            </TouchableOpacity>
-          </View>
-          {videoModalUrl && (
-            <WebView
-              source={{
-                uri: resolveUrl(videoModalUrl),
-                headers: TUNNEL_HEADERS,
-              }}
+        <View style={styles.videoModalContainer}>
+          {resolvedVideoUrl && (
+            <VideoModalPlayer
+              uri={resolvedVideoUrl}
               style={styles.videoWebView}
-              allowsFullscreenVideo
-              mediaPlaybackRequiresUserAction={false}
-              javaScriptEnabled
-              startInLoadingState
-              renderLoading={() => (
-                <View style={styles.videoModalLoading}>
-                  <ActivityIndicator color="#FFF" />
-                  <Text style={styles.videoModalLoadingText}>
-                    正在加载{videoModalTitle}...
-                  </Text>
-                </View>
-              )}
             />
           )}
+          <TouchableOpacity
+            style={[styles.videoCloseOverlay, { top: insets.top + 12 }]}
+            onPress={() => setVideoModalUrl(null)}
+          >
+            <View style={styles.videoCloseCircle}>
+              <Ionicons name="close" size={22} color="#FFF" />
+            </View>
+          </TouchableOpacity>
         </View>
       </Modal>
     </View>
@@ -1772,22 +1786,20 @@ const styles = StyleSheet.create({
   headerSub: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   content: { flex: 1 },
   videoModalContainer: { flex: 1, backgroundColor: "#000" },
-  videoModalHeader: {
-    height: 56,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 12,
-    backgroundColor: "#111",
+  videoWebView: { flex: 1, backgroundColor: "#000" },
+  videoCloseOverlay: {
+    position: "absolute",
+    left: 16,
+    zIndex: 10,
   },
-  videoModalIconButton: {
-    width: 44,
-    height: 44,
+  videoCloseCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.55)",
     alignItems: "center",
     justifyContent: "center",
   },
-  videoModalTitle: { color: "#FFF", fontSize: 16, fontWeight: "600" },
-  videoWebView: { flex: 1, backgroundColor: "#000" },
   videoModalLoading: {
     ...StyleSheet.absoluteFill,
     alignItems: "center",
@@ -1969,7 +1981,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 4,
   },
-  albumCardTitle: { fontSize: 16, fontWeight: "700", color: colors.textPrimary },
+  albumCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
   albumCardSub: { fontSize: 13, color: colors.textMuted },
 
   // ─── Preview Section ───
@@ -2038,7 +2054,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  progressHeaderTitle: { fontSize: 14, fontWeight: "700", color: colors.textPrimary },
+  progressHeaderTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
   progressHeaderPercent: { fontSize: 14, fontWeight: "800", color: PURPLE },
   progressBar: {
     height: 6,
@@ -2105,7 +2125,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   stepNumberText: { fontSize: 13, fontWeight: "700", color: "#FFF" },
-  stepTitle: { fontSize: 14, fontWeight: "700", color: colors.textPrimary, flex: 1 },
+  stepTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    flex: 1,
+  },
   stepNarrationWrap: {
     marginTop: 8,
     marginLeft: 36,
@@ -2168,7 +2193,11 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   videoPreviewTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  videoPreviewTitle: { fontSize: 15, fontWeight: "700", color: colors.textPrimary },
+  videoPreviewTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
   videoPreviewSub: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   completedNoVideo: { alignItems: "center", paddingVertical: 28 },
   completedText: {

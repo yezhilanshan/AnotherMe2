@@ -11,13 +11,17 @@ import {
   type SocraticTeachingActionRecord,
   type SocraticVariantEvaluation,
   type SocraticPhase,
-} from "../../AnotherMe/packages/teaching-core/src/index";
+} from "@anotherme/teaching-core";
 import { getSafeStorage } from "./safeStorage";
 import type { ProblemStepFollowupContext } from "./problem-step-followup";
 
 const SOCRATIC_STATE_PREFIX = "@anotherme/socratic-followup/";
 
-export type { SocraticPhase, SocraticAttemptEvaluation, SocraticVariantEvaluation };
+export type {
+  SocraticPhase,
+  SocraticAttemptEvaluation,
+  SocraticVariantEvaluation,
+};
 
 export interface SocraticFollowupState extends SocraticProgressState {
   sessionId: string;
@@ -71,7 +75,9 @@ function uniqueStrings(values: string[] | undefined): string[] {
   return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
 }
 
-function normalizeLoadedState(state: SocraticFollowupState): SocraticFollowupState {
+function normalizeLoadedState(
+  state: SocraticFollowupState,
+): SocraticFollowupState {
   return {
     ...state,
     stepGoal:
@@ -82,18 +88,26 @@ function normalizeLoadedState(state: SocraticFollowupState): SocraticFollowupSta
         knowledgePointIds: state.targetKnowledgePointIds,
       }),
     targetKnowledgePointIds: uniqueStrings(state.targetKnowledgePointIds),
-    teachingActions: Array.isArray(state.teachingActions) ? state.teachingActions : [],
+    teachingActions: Array.isArray(state.teachingActions)
+      ? state.teachingActions
+      : [],
     evaluations: Array.isArray(state.evaluations) ? state.evaluations : [],
     phase: state.phase || "hint_level_0",
     hintLevel: Number.isFinite(state.hintLevel) ? state.hintLevel : 0,
     hintsGiven: Number.isFinite(state.hintsGiven) ? state.hintsGiven : 0,
     turnsInPhase: Number.isFinite(state.turnsInPhase) ? state.turnsInPhase : 0,
-    studentAttempts: Number.isFinite(state.studentAttempts) ? state.studentAttempts : 0,
-    revealedConcepts: Array.isArray(state.revealedConcepts) ? state.revealedConcepts : [],
+    studentAttempts: Number.isFinite(state.studentAttempts)
+      ? state.studentAttempts
+      : 0,
+    revealedConcepts: Array.isArray(state.revealedConcepts)
+      ? state.revealedConcepts
+      : [],
     stillMisunderstands: Array.isArray(state.stillMisunderstands)
       ? state.stillMisunderstands
       : [],
-    previousAnswers: Array.isArray(state.previousAnswers) ? state.previousAnswers : [],
+    previousAnswers: Array.isArray(state.previousAnswers)
+      ? state.previousAnswers
+      : [],
   };
 }
 
@@ -101,9 +115,11 @@ export function createSocraticFollowupState(input: {
   sessionId: string;
   context: ProblemStepFollowupContext;
 }): SocraticFollowupState {
-  const title = input.context.step.title.trim() || `第 ${input.context.step.id} 步`;
+  const title =
+    input.context.step.title.trim() || `第 ${input.context.step.id} 步`;
   const targetKnowledgePointIds = uniqueStrings(
-    input.context.targetKnowledgePointIds || input.context.step.knowledgePointIds,
+    input.context.targetKnowledgePointIds ||
+      input.context.step.knowledgePointIds,
   );
   const stepGoal =
     input.context.stepGoal ||
@@ -151,7 +167,9 @@ export async function loadSocraticFollowupState(
   sessionId: string | null | undefined,
 ): Promise<SocraticFollowupState | null> {
   if (!sessionId) return null;
-  const raw = await getSafeStorage().getItem(`${SOCRATIC_STATE_PREFIX}${sessionId}`);
+  const raw = await getSafeStorage().getItem(
+    `${SOCRATIC_STATE_PREFIX}${sessionId}`,
+  );
   if (!raw) return null;
   try {
     return normalizeLoadedState(JSON.parse(raw) as SocraticFollowupState);
@@ -160,7 +178,9 @@ export async function loadSocraticFollowupState(
   }
 }
 
-export async function removeSocraticFollowupState(sessionId: string): Promise<void> {
+export async function removeSocraticFollowupState(
+  sessionId: string,
+): Promise<void> {
   await getSafeStorage().removeItem(`${SOCRATIC_STATE_PREFIX}${sessionId}`);
 }
 
@@ -209,7 +229,10 @@ export function buildSocraticSystemPrompt(
   if (!state) return undefined;
 
   const previousAnswers = state.previousAnswers.length
-    ? state.previousAnswers.slice(-3).map((item) => `- ${item}`).join("\n")
+    ? state.previousAnswers
+        .slice(-3)
+        .map((item) => `- ${item}`)
+        .join("\n")
     : "暂无";
   const misunderstandings = state.stillMisunderstands.length
     ? state.stillMisunderstands.slice(-3).join("、")
@@ -304,12 +327,17 @@ export function advanceSocraticStateAfterTurn(
     turnsInPhase,
     studentAttempts,
     stillMisunderstands: stillMisunderstands.slice(-5),
-    previousAnswers: [...state.previousAnswers, compactText(normalizedUser, 120)]
+    previousAnswers: [
+      ...state.previousAnswers,
+      compactText(normalizedUser, 120),
+    ]
       .filter(Boolean)
       .slice(-5),
     revealedConcepts:
       phase === "confirm_understanding"
-        ? Array.from(new Set([...state.revealedConcepts, state.targetConcept])).slice(-5)
+        ? Array.from(
+            new Set([...state.revealedConcepts, state.targetConcept]),
+          ).slice(-5)
         : state.revealedConcepts,
     variantQuestion:
       phase === "confirm_understanding"
@@ -445,7 +473,8 @@ export function buildSocraticLearningSignal(input: {
     return {
       eventType: "socratic_followup_confirmed",
       weight: 1.0,
-      isCorrectEvidence: knowledgePointIds.length > 0 && nextState.variantVerdict === "correct",
+      isCorrectEvidence:
+        knowledgePointIds.length > 0 && nextState.variantVerdict === "correct",
       knowledgePointIds,
       primaryKnowledgePointId,
       payload: {

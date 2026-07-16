@@ -66,6 +66,81 @@ def _resolve_dimensions(width: int, height: int, aspect_ratio: Optional[str]) ->
     return 1024, 1024
 
 
+def _detect_audio_mime_type(content: bytes, declared_type: str | None = None) -> str:
+    """Resolve the real audio type instead of declaring every upload as WAV/MP3."""
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WAVE":
+        return "audio/wav"
+    if content[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio/webm"
+    if content[:4] == b"OggS":
+        return "audio/ogg"
+    if len(content) >= 2 and content[0] == 0xFF and content[1] & 0xF6 == 0xF0:
+        return "audio/aac"
+    if content[:3] == b"ID3" or (
+        len(content) >= 2 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0
+    ):
+        return "audio/mpeg"
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        return "audio/mp4"
+    if declared_type and declared_type.startswith("audio/"):
+        return declared_type.split(";", 1)[0]
+    return "application/octet-stream"
+
+
+def _qwen_asr_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if not normalized.endswith("/api/v1"):
+        normalized = f"{normalized}/api/v1"
+    return f"{normalized}/services/aigc/multimodal-generation/generation"
+
+
+async def _transcribe_qwen_audio(
+    *,
+    api_key: str,
+    base_url: str,
+    audio_content: bytes,
+    content_type: str | None,
+    language: str,
+) -> str:
+    mime_type = _detect_audio_mime_type(audio_content, content_type)
+    audio_base64 = base64.b64encode(audio_content).decode("ascii")
+    request_body: dict = {
+        "model": os.getenv("ASR_QWEN_MODEL", "qwen3-asr-flash"),
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"audio": f"data:{mime_type};base64,{audio_base64}"},
+                    ],
+                },
+            ],
+        },
+    }
+    if language and language != "auto":
+        request_body["parameters"] = {"asr_options": {"language": language}}
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            _qwen_asr_url(base_url),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json=request_body,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    choices = data.get("output", {}).get("choices", [])
+    if not choices:
+        return ""
+    content = choices[0].get("message", {}).get("content", [])
+    if not content:
+        return ""
+    return str(content[0].get("text", "")).strip()
+
+
 # ── Provider: Seedream (火山引擎) ────────────────────────────────────────────
 
 
@@ -477,22 +552,14 @@ def create_media_router(settings: Settings) -> APIRouter:
             if not api_key:
                 raise HTTPException(401, detail={"error_code": "MISSING_API_KEY", "message": "Qwen API key not configured"})
 
-            # Qwen ASR uses a different API format
-            url = f"{base_url}/api/v1/services/audio/asr/transcription"
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "audio/mpeg",
-                    },
-                    content=audio_content,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
             return {
-                "text": data.get("output", {}).get("transcription", ""),
+                "text": await _transcribe_qwen_audio(
+                    api_key=api_key,
+                    base_url=base_url,
+                    audio_content=audio_content,
+                    content_type=file.content_type,
+                    language=language,
+                ),
                 "language": language,
             }
 

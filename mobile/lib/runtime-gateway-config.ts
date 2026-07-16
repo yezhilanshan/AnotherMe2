@@ -1,3 +1,18 @@
+function buildRuntimeUrl(host: string, port: string): string {
+  const cleanHost = host.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const cleanPort = String(port || "").trim();
+
+  if (cleanPort === "443") {
+    return normalizeUrl(`https://${cleanHost}`);
+  }
+
+  if (cleanPort === "80") {
+    return normalizeUrl(`http://${cleanHost}`);
+  }
+
+  return normalizeUrl(`http://${cleanHost}:${cleanPort}`);
+}
+
 /**
  * Runtime Gateway 配置
  *
@@ -12,7 +27,15 @@ import { getSafeStorage } from "./safeStorage";
 
 const STORAGE_KEY = "@anotherme/gateway-config";
 
-const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "");
+const normalizeUrl = (url: string) => {
+  let result = url.trim().replace(/\/+$/, "");
+  // Convert http://host:443 → https://host and https://host:443 → https://host
+  result = result.replace(/^http:\/\/(.+):443(\/.*)?$/, "https://$1$2");
+  result = result.replace(/^https:\/\/(.+):443(\/.*)?$/, "https://$1$2");
+  // Convert http://host:80 → http://host and https://host:80 → http://host
+  result = result.replace(/^https?:\/\/(.+):80(\/.*)?$/, "http://$1$2");
+  return result;
+};
 
 // ── 默认值（来自 .env 编译期变量） ──
 const DEFAULT_HOST =
@@ -30,7 +53,11 @@ const _listeners = new Set<() => void>();
 
 function notify() {
   _listeners.forEach((fn) => {
-    try { fn(); } catch { /* 防止一个监听器异常影响其他 */ }
+    try {
+      fn();
+    } catch {
+      /* 防止一个监听器异常影响其他 */
+    }
   });
 }
 
@@ -49,11 +76,11 @@ export function getWebPort(): string {
 }
 
 export function getGatewayUrl(): string {
-  return normalizeUrl(`http://${_host}:${_gatewayPort}`);
+  return buildRuntimeUrl(_host, _gatewayPort);
 }
 
 export function getWebUrl(): string {
-  return normalizeUrl(`http://${_host}:${_webPort}`);
+  return buildRuntimeUrl(_host, _webPort);
 }
 
 // ── 订阅配置变更 ──
@@ -64,7 +91,9 @@ export function getWebUrl(): string {
  */
 export function onGatewayConfigChange(listener: () => void): () => void {
   _listeners.add(listener);
-  return () => { _listeners.delete(listener); };
+  return () => {
+    _listeners.delete(listener);
+  };
 }
 
 // ── 持久化 & 初始化 ──
@@ -74,7 +103,11 @@ async function persist(): Promise<void> {
     const storage = getSafeStorage();
     await storage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ host: _host, gatewayPort: _gatewayPort, webPort: _webPort }),
+      JSON.stringify({
+        host: _host,
+        gatewayPort: _gatewayPort,
+        webPort: _webPort,
+      }),
     );
   } catch {
     // 静默失败，不影响使用

@@ -1,13 +1,55 @@
-// 语音输入 hook — 使用 expo-speech-recognition（原生语音识别，Android/iOS 均可用）
-import { useCallback, useRef, useState } from "react";
+// 语音输入 hook：使用 expo-audio 录音，再交给 Web/BFF 的 ASR 服务转写。
+// 不依赖 Android 系统 SpeechRecognizer，避免设备未配置识别服务时持续报 busy。
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from "expo-speech-recognition";
+  AudioQuality,
+  IOSOutputFormat,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder as useExpoAudioRecorder,
+  type RecordingOptions,
+} from "expo-audio";
+import { File, UploadType } from "expo-file-system";
 import { Alert } from "react-native";
+import {
+  BEARER_TOKEN,
+  GATEWAY_URL,
+  TUNNEL_HEADERS,
+} from "../lib/config";
 
 export const VOICE_RECOGNITION_BUSY_MESSAGE =
-  "系统识别服务繁忙，暂时不可使用，请稍后再试";
+  "语音识别服务暂时不可用，请稍后再试";
+
+const ASR_PROVIDER_ID =
+  process.env.EXPO_PUBLIC_ASR_PROVIDER_ID?.trim() || "qwen-asr";
+const MIN_RECORDING_DURATION_MS = 250;
+const TRANSCRIPTION_TIMEOUT_MS = 60_000;
+
+// Qwen3-ASR 支持 AAC/WAV；使用单声道、16 kHz 能减小上传体积并贴合语音场景。
+const ASR_RECORDING_OPTIONS: RecordingOptions = {
+  extension: ".aac",
+  sampleRate: 16_000,
+  numberOfChannels: 1,
+  bitRate: 64_000,
+  android: {
+    extension: ".aac",
+    outputFormat: "aac_adts",
+    audioEncoder: "aac",
+    audioSource: "voice_recognition",
+  },
+  ios: {
+    extension: ".wav",
+    outputFormat: IOSOutputFormat.LINEARPCM,
+    audioQuality: AudioQuality.HIGH,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: "audio/webm",
+    bitsPerSecond: 64_000,
+  },
+};
 
 interface UseVoiceInputOptions {
   lang?: string;
@@ -15,83 +57,71 @@ interface UseVoiceInputOptions {
   onError?: (error: string) => void;
 }
 
-type PendingStart = {
-  resolve: (started: boolean) => void;
-  reject: (error: unknown) => void;
-  retries: number;
-  timeout: ReturnType<typeof setTimeout> | null;
-  cancelled: boolean;
-  settled: boolean;
+type ActiveVoiceSession = {
+  owner: symbol;
+  abort: () => Promise<void>;
 };
 
-type RecognitionState = "inactive" | "starting" | "recognizing" | "stopping";
+let activeVoiceSession: ActiveVoiceSession | null = null;
 
-const BUSY_RETRY_DELAYS_MS = [240, 520, 900];
-const START_EVENT_TIMEOUT_MS = 1800;
-const NATIVE_IDLE_TIMEOUT_MS = 1200;
-
-let activeVoiceOwner: symbol | null = null;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isBusyError(error: unknown): boolean {
-  if (error instanceof Error) {
-    return error.message.toLowerCase().includes("busy");
+function getAudioUploadMetadata(uri: string): { name: string; mimeType: string } {
+  const normalized = uri.toLowerCase().split(/[?#]/, 1)[0];
+  if (normalized.endsWith(".wav")) {
+    return { name: "recording.wav", mimeType: "audio/wav" };
   }
-  return String(error).toLowerCase().includes("busy");
+  if (normalized.endsWith(".webm")) {
+    return { name: "recording.webm", mimeType: "audio/webm" };
+  }
+  return { name: "recording.aac", mimeType: "audio/aac" };
 }
 
-function isSystemRecognitionUnavailable(error: string, message?: string) {
-  const normalized = `${error} ${message ?? ""}`.toLowerCase();
-  return (
-    normalized.includes("busy") ||
-    normalized.includes("service-not-allowed") ||
-    normalized.includes("recognizer is unavailable") ||
-    normalized.includes("recognitionservice busy") ||
-    normalized.includes("system recognition service")
-  );
+function normalizeLanguage(lang: string): string {
+  const normalized = lang.trim().toLowerCase();
+  if (normalized.startsWith("zh")) return "zh";
+  return normalized.split(/[-_]/, 1)[0] || "auto";
 }
 
-function canUseSystemRecognition(): boolean {
+function parseTranscriptionResponse(body: string): string {
+  let payload: {
+    text?: unknown;
+    error?: unknown;
+    details?: unknown;
+  };
   try {
-    return ExpoSpeechRecognitionModule.isRecognitionAvailable();
+    payload = JSON.parse(body) as typeof payload;
   } catch {
-    // Older/native edge cases should still attempt start and surface its error.
-    return true;
+    throw new Error("语音识别服务返回了无法解析的数据");
   }
+
+  if (typeof payload.text === "string") return payload.text.trim();
+  const reason =
+    typeof payload.details === "string"
+      ? payload.details
+      : typeof payload.error === "string"
+        ? payload.error
+        : "语音识别失败，请重试";
+  throw new Error(reason);
 }
 
-function buildRecognitionOptions(lang: string) {
-  return {
-    lang,
-    interimResults: true,
-    // Android 原生 SpeechRecognizer 不支持连续识别，设 true 容易报 busy
-    continuous: false,
-    androidIntentOptions: {
-      // 对短句/短词更稳，库文档也建议 Android 单句场景用 web_search。
-      EXTRA_LANGUAGE_MODEL: "web_search",
-    },
-  } as const;
-}
+function toVoiceErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
 
-async function getRecognitionState(): Promise<RecognitionState | null> {
-  try {
-    return await ExpoSpeechRecognitionModule.getStateAsync();
-  } catch {
-    return null;
+  if (
+    normalized.includes("network request failed") ||
+    normalized.includes("failed to fetch") ||
+    normalized.includes("timeout") ||
+    normalized.includes("aborted")
+  ) {
+    return "无法连接语音识别服务，请检查网络和 Gateway 设置";
   }
-}
-
-async function waitForNativeIdle(timeoutMs = NATIVE_IDLE_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    const state = await getRecognitionState();
-    if (!state || state === "inactive") return;
-    await sleep(80);
+  if (normalized.includes("missing api key") || normalized.includes("api key required")) {
+    return "语音识别服务尚未配置，请检查 ASR 提供商设置";
   }
+  if (normalized.includes("microphone") || normalized.includes("record")) {
+    return "无法使用麦克风，请检查系统权限或其他录音应用";
+  }
+  return message || "语音识别失败，请重试";
 }
 
 export function useVoiceInput({
@@ -99,351 +129,212 @@ export function useVoiceInput({
   onTranscript,
   onError,
 }: UseVoiceInputOptions) {
+  const recorder = useExpoAudioRecorder(ASR_RECORDING_OPTIONS);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const ownerRef = useRef<symbol>(Symbol("voice-input"));
-  // 用于存储最新的 partial 结果，停止时取最终值
-  const lastPartialRef = useRef("");
-  // 避免回调闭包陈旧
-  const onTranscriptRef = useRef(onTranscript);
-  onTranscriptRef.current = onTranscript;
-  const onErrorRef = useRef(onError);
-  onErrorRef.current = onError;
-  // 防止重复启动
-  const listeningRef = useRef(false);
-  const startingRef = useRef(false);
+  const ownerRef = useRef(Symbol("voice-input"));
+  const mountedRef = useRef(true);
+  const recordingRef = useRef(false);
+  const processingRef = useRef(false);
+  const recordingStartedAtRef = useRef(0);
+  const operationIdRef = useRef(0);
   const startPromiseRef = useRef<Promise<boolean> | null>(null);
-  const suppressAbortErrorRef = useRef(false);
-  const retryingAfterBusyRef = useRef(false);
-  const pendingStartRef = useRef<PendingStart | null>(null);
-  const startNativeAttemptRef = useRef<() => void>(() => {});
-  const scheduleBusyRetryRef = useRef<() => Promise<void>>(async () => {});
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const abortListeningRef = useRef<() => Promise<void>>(async () => {});
+  const onTranscriptRef = useRef(onTranscript);
+  const onErrorRef = useRef(onError);
+  onTranscriptRef.current = onTranscript;
+  onErrorRef.current = onError;
 
-  const isActiveOwner = useCallback(
-    () => activeVoiceOwner === ownerRef.current,
-    [],
-  );
+  const setListeningState = useCallback((listening: boolean, processing: boolean) => {
+    recordingRef.current = listening;
+    processingRef.current = processing;
+    if (!mountedRef.current) return;
+    setIsListening(listening);
+    setIsProcessing(processing);
+  }, []);
 
-  const clearPendingStartTimeout = useCallback(() => {
-    const pending = pendingStartRef.current;
-    if (pending?.timeout) {
-      clearTimeout(pending.timeout);
-      pending.timeout = null;
+  const releaseOwnership = useCallback(() => {
+    if (activeVoiceSession?.owner === ownerRef.current) {
+      activeVoiceSession = null;
     }
   }, []);
 
-  const settlePendingStart = useCallback(
-    (started: boolean) => {
-      const pending = pendingStartRef.current;
-      if (!pending || pending.settled) return;
-
-      clearPendingStartTimeout();
-      pending.settled = true;
-      pendingStartRef.current = null;
-      pending.resolve(started);
-    },
-    [clearPendingStartTimeout],
-  );
-
-  const rejectPendingStart = useCallback(
-    (error: unknown) => {
-      const pending = pendingStartRef.current;
-      if (!pending || pending.settled) return;
-
-      clearPendingStartTimeout();
-      pending.settled = true;
-      pendingStartRef.current = null;
-      pending.reject(error);
-    },
-    [clearPendingStartTimeout],
-  );
-
-  const resetLocalState = useCallback(() => {
-    listeningRef.current = false;
-    startingRef.current = false;
-    retryingAfterBusyRef.current = false;
-    setIsListening(false);
-    setIsProcessing(false);
-  }, []);
-
-  const startNativeAttempt = useCallback(() => {
-    const pending = pendingStartRef.current;
-    if (!pending || pending.cancelled || pending.settled) return;
-
-    clearPendingStartTimeout();
-    pending.timeout = setTimeout(() => {
-      if (!pendingStartRef.current || pending.cancelled || pending.settled) {
-        return;
-      }
-      // 部分 Android 服务不会可靠派发 start；超时后按已启动处理，避免松手时卡住。
-      listeningRef.current = true;
-      startingRef.current = false;
-      retryingAfterBusyRef.current = false;
-      setIsListening(true);
-      setIsProcessing(false);
-      settlePendingStart(true);
-    }, START_EVENT_TIMEOUT_MS);
-
-    try {
-      ExpoSpeechRecognitionModule.start(buildRecognitionOptions(lang));
-    } catch (error) {
-      if (isBusyError(error)) {
-        void scheduleBusyRetryRef.current();
-        return;
-      }
-      rejectPendingStart(error);
-    }
-  }, [clearPendingStartTimeout, lang, rejectPendingStart, settlePendingStart]);
-  startNativeAttemptRef.current = startNativeAttempt;
-
-  const scheduleBusyRetry = useCallback(async () => {
-    const pending = pendingStartRef.current;
-    if (!pending || pending.cancelled || pending.settled) return;
-
-    clearPendingStartTimeout();
-
-    if (pending.retries >= BUSY_RETRY_DELAYS_MS.length) {
-      activeVoiceOwner = null;
-      resetLocalState();
-      settlePendingStart(false);
-      onErrorRef.current?.(VOICE_RECOGNITION_BUSY_MESSAGE);
-      return;
-    }
-
-    const delayMs = BUSY_RETRY_DELAYS_MS[pending.retries];
-    pending.retries += 1;
-    retryingAfterBusyRef.current = true;
-    suppressAbortErrorRef.current = true;
-    listeningRef.current = false;
-    startingRef.current = true;
-    setIsListening(false);
-    setIsProcessing(true);
-
-    try {
-      ExpoSpeechRecognitionModule.abort();
-    } catch {
-      // 忽略清理失败，后续等待 idle 会兜底。
-    }
-
-    await sleep(delayMs);
-    await waitForNativeIdle();
-
-    if (
-      !pendingStartRef.current ||
-      pending.cancelled ||
-      pending.settled ||
-      !isActiveOwner()
-    ) {
-      retryingAfterBusyRef.current = false;
-      return;
-    }
-
-    startNativeAttemptRef.current();
-  }, [
-    clearPendingStartTimeout,
-    isActiveOwner,
-    resetLocalState,
-    settlePendingStart,
-  ]);
-  scheduleBusyRetryRef.current = scheduleBusyRetry;
-
-  // 监听识别结果（partial + final）
-  useSpeechRecognitionEvent("result", (event) => {
-    if (!isActiveOwner()) return;
-
-    const segments = event.results;
-    if (segments.length > 0) {
-      // 合并所有 segments 的 transcript（某些平台返回多个 segment）
-      const transcript = segments.map((seg) => seg.transcript).join("");
-      lastPartialRef.current = transcript;
-      onTranscriptRef.current(transcript, event.isFinal);
-    }
-  });
-
-  // 监听识别开始
-  useSpeechRecognitionEvent("start", () => {
-    if (!isActiveOwner()) return;
-
-    listeningRef.current = true;
-    startingRef.current = false;
-    retryingAfterBusyRef.current = false;
-    setIsListening(true);
-    setIsProcessing(false);
-    settlePendingStart(true);
-  });
-
-  // 监听识别结束
-  useSpeechRecognitionEvent("end", () => {
-    if (!isActiveOwner()) return;
-
-    if (retryingAfterBusyRef.current) {
-      listeningRef.current = false;
-      setIsListening(false);
-      setIsProcessing(true);
-      return;
-    }
-
-    listeningRef.current = false;
-    startingRef.current = false;
-    retryingAfterBusyRef.current = false;
-    setIsListening(false);
-    setIsProcessing(false);
-    activeVoiceOwner = null;
-    settlePendingStart(false);
-  });
-
-  // 监听错误
-  useSpeechRecognitionEvent("error", (event) => {
-    if (!isActiveOwner()) return;
-
-    if (event.error === "busy" && pendingStartRef.current) {
-      void scheduleBusyRetry();
-      return;
-    }
-
-    listeningRef.current = false;
-    startingRef.current = false;
-    setIsListening(false);
-    setIsProcessing(false);
-    console.warn("[useVoiceInput] recognition error:", JSON.stringify(event));
-    if (event.error === "aborted" && suppressAbortErrorRef.current) {
-      suppressAbortErrorRef.current = false;
-      return;
-    }
-    const errorMsg = mapErrorMessage(event.error, event.message);
-    activeVoiceOwner = null;
-    settlePendingStart(false);
-    onErrorRef.current?.(errorMsg);
-  });
-
-  const startListening = useCallback(async (): Promise<boolean> => {
-    // 防止重复启动
-    if (listeningRef.current) return true;
-    if (startingRef.current && startPromiseRef.current) {
-      return startPromiseRef.current;
-    }
-
-    const startPromise = (async () => {
-      startingRef.current = true;
-      activeVoiceOwner = ownerRef.current;
-      // 请求权限
-      const permission =
-        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!permission.granted) {
-        startingRef.current = false;
-        activeVoiceOwner = null;
-        setIsProcessing(false);
-        onErrorRef.current?.("麦克风权限被拒绝，请在设置中开启");
-        Alert.alert("权限不足", "请在系统设置中允许麦克风和语音识别权限");
-        return false;
-      }
-
-      if (!canUseSystemRecognition()) {
-        activeVoiceOwner = null;
-        resetLocalState();
-        onErrorRef.current?.(VOICE_RECOGNITION_BUSY_MESSAGE);
-        return false;
-      }
-
-      lastPartialRef.current = "";
-      setIsProcessing(true);
-      retryingAfterBusyRef.current = false;
+  const transcribeRecording = useCallback(
+    async (uri: string, operationId: number): Promise<string> => {
+      const controller = new AbortController();
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = controller;
+      const timeoutId = setTimeout(() => controller.abort(), TRANSCRIPTION_TIMEOUT_MS);
+      const { name, mimeType } = getAudioUploadMetadata(uri);
+      const headers = {
+        ...(BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}),
+        ...TUNNEL_HEADERS,
+      };
 
       try {
-        const nativeState = await getRecognitionState();
-        if (nativeState && nativeState !== "inactive") {
-          suppressAbortErrorRef.current = true;
-          ExpoSpeechRecognitionModule.abort();
-          await waitForNativeIdle();
+        const result = await new File(uri).upload(`${GATEWAY_URL}/v1/transcription`, {
+          httpMethod: "POST",
+          uploadType: UploadType.MULTIPART,
+          fieldName: "file",
+          mimeType,
+          headers,
+          parameters: {
+            provider_id: ASR_PROVIDER_ID,
+            language: normalizeLanguage(lang),
+            filename: name,
+          },
+          signal: controller.signal,
+          sessionType: "foreground",
+        });
+
+        if (operationId !== operationIdRef.current) return "";
+        if (result.status < 200 || result.status >= 300) {
+          return parseTranscriptionResponse(result.body || "");
         }
-      } catch (e) {
-        if (!isBusyError(e)) {
-          throw e;
+        return parseTranscriptionResponse(result.body || "");
+      } finally {
+        clearTimeout(timeoutId);
+        if (transcriptionAbortRef.current === controller) {
+          transcriptionAbortRef.current = null;
+        }
+        try {
+          const audioFile = new File(uri);
+          if (audioFile.exists) audioFile.delete();
+        } catch {
+          // 缓存文件删除失败不影响本次识别结果。
         }
       }
+    },
+    [lang],
+  );
 
-      activeVoiceOwner = ownerRef.current;
-      const started = await new Promise<boolean>((resolve, reject) => {
-        pendingStartRef.current = {
-          resolve,
-          reject,
-          retries: 0,
-          timeout: null,
-          cancelled: false,
-          settled: false,
+  const startListening = useCallback(async (): Promise<boolean> => {
+    if (recordingRef.current) return true;
+    if (startPromiseRef.current) return startPromiseRef.current;
+    if (processingRef.current) return false;
+
+    const operationId = ++operationIdRef.current;
+    const promise = (async () => {
+      setListeningState(false, true);
+      try {
+        if (activeVoiceSession && activeVoiceSession.owner !== ownerRef.current) {
+          await activeVoiceSession.abort();
+        }
+        activeVoiceSession = {
+          owner: ownerRef.current,
+          abort: () => abortListeningRef.current(),
         };
-        startNativeAttempt();
-      });
 
-      if (!started) {
-        activeVoiceOwner = null;
-        resetLocalState();
+        const permission = await requestRecordingPermissionsAsync();
+        if (operationId !== operationIdRef.current) return false;
+        if (!permission.granted) {
+          releaseOwnership();
+          setListeningState(false, false);
+          onErrorRef.current?.("麦克风权限被拒绝，请在设置中开启");
+          Alert.alert("权限不足", "请在系统设置中允许麦克风权限");
+          return false;
+        }
+
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          allowsRecording: true,
+          interruptionMode: "doNotMix",
+        });
+        await recorder.prepareToRecordAsync();
+        if (operationId !== operationIdRef.current) {
+          await recorder.stop().catch(() => undefined);
+          return false;
+        }
+
+        recorder.record({ forDuration: 60 });
+        recordingStartedAtRef.current = Date.now();
+        setListeningState(true, false);
+        return true;
+      } catch (error) {
+        if (operationId === operationIdRef.current) {
+          releaseOwnership();
+          setListeningState(false, false);
+          onErrorRef.current?.(toVoiceErrorMessage(error));
+        }
+        return false;
       }
-      return started;
     })();
 
-    startPromiseRef.current = startPromise;
+    startPromiseRef.current = promise;
     try {
-      return await startPromise;
-    } catch (e) {
-      listeningRef.current = false;
-      startingRef.current = false;
-      setIsListening(false);
-      setIsProcessing(false);
-      activeVoiceOwner = null;
-      rejectPendingStart(e);
-      console.warn("[useVoiceInput] start failed:", e);
-      const fallbackMessage =
-        e instanceof Error && isSystemRecognitionUnavailable("unknown", e.message)
-          ? VOICE_RECOGNITION_BUSY_MESSAGE
-          : e instanceof Error
-            ? e.message
-            : "启动语音识别失败";
-      onErrorRef.current?.(fallbackMessage);
-      return false;
+      return await promise;
     } finally {
-      startPromiseRef.current = null;
-      startingRef.current = false;
+      if (startPromiseRef.current === promise) startPromiseRef.current = null;
     }
-  }, [lang]);
+  }, [recorder, releaseOwnership, setListeningState]);
 
   const stopListening = useCallback(async (): Promise<string> => {
-    if (startPromiseRef.current) {
-      const started = await startPromiseRef.current;
-      if (!started) return lastPartialRef.current;
-    }
+    const pendingStart = startPromiseRef.current;
+    if (pendingStart && !(await pendingStart)) return "";
+    if (!recordingRef.current) return "";
 
+    const operationId = operationIdRef.current;
+    setListeningState(false, true);
     try {
-      await ExpoSpeechRecognitionModule.stop();
-    } catch {
-      // 如果已经停止或未在录音，忽略错误
+      await recorder.stop();
+      await setAudioModeAsync({
+        allowsRecording: false,
+        interruptionMode: "mixWithOthers",
+      }).catch(() => undefined);
+      releaseOwnership();
+
+      const uri = recorder.uri;
+      const duration = Date.now() - recordingStartedAtRef.current;
+      if (!uri || duration < MIN_RECORDING_DURATION_MS) {
+        return "";
+      }
+
+      const transcript = await transcribeRecording(uri, operationId);
+      if (operationId === operationIdRef.current && transcript) {
+        onTranscriptRef.current(transcript, true);
+      }
+      return transcript;
+    } catch (error) {
+      if (operationId === operationIdRef.current) {
+        onErrorRef.current?.(toVoiceErrorMessage(error));
+      }
+      return "";
+    } finally {
+      if (operationId === operationIdRef.current) {
+        setListeningState(false, false);
+      }
+      releaseOwnership();
     }
-    // 等待一小段时间让最终的 result 事件触发
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    return lastPartialRef.current;
-  }, []);
+  }, [recorder, releaseOwnership, setListeningState, transcribeRecording]);
 
   const abortListening = useCallback(async () => {
-    if (pendingStartRef.current) {
-      pendingStartRef.current.cancelled = true;
-    }
-    settlePendingStart(false);
-    suppressAbortErrorRef.current = true;
+    ++operationIdRef.current;
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
     try {
-      await ExpoSpeechRecognitionModule.abort();
+      if (recordingRef.current || recorder.isRecording) {
+        await recorder.stop();
+      }
     } catch {
-      // 忽略
+      // 录音器可能已自动停止或尚未完成 prepare。
     }
-    listeningRef.current = false;
-    startingRef.current = false;
-    retryingAfterBusyRef.current = false;
-    setIsListening(false);
-    setIsProcessing(false);
-    lastPartialRef.current = "";
-    if (isActiveOwner()) {
-      activeVoiceOwner = null;
-    }
-  }, [isActiveOwner, settlePendingStart]);
+    await setAudioModeAsync({
+      allowsRecording: false,
+      interruptionMode: "mixWithOthers",
+    }).catch(() => undefined);
+    releaseOwnership();
+    setListeningState(false, false);
+  }, [recorder, releaseOwnership, setListeningState]);
+  abortListeningRef.current = abortListening;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      void abortListeningRef.current();
+    };
+  }, []);
 
   return {
     isListening,
@@ -452,32 +343,4 @@ export function useVoiceInput({
     stopListening,
     abortListening,
   };
-}
-
-/** 将原生错误码映射为中文提示 */
-function mapErrorMessage(error: string, message?: string): string {
-  if (isSystemRecognitionUnavailable(error, message)) {
-    return VOICE_RECOGNITION_BUSY_MESSAGE;
-  }
-
-  switch (error) {
-    case "not-allowed":
-      return "麦克风权限被拒绝，请在设置中开启";
-    case "audio-capture":
-      return "无法访问麦克风";
-    case "no-speech":
-      return "未检测到语音输入";
-    case "network":
-      return "网络错误，语音识别需要网络连接";
-    case "service-not-allowed":
-      return "语音识别服务不可用";
-    case "busy":
-      return "语音识别服务繁忙，请稍后再试";
-    case "language-not-supported":
-      return "当前设备不支持该语言的语音识别";
-    case "aborted":
-      return "语音识别已取消";
-    default:
-      return "语音识别失败";
-  }
 }

@@ -20,6 +20,7 @@ import { createLogger } from '@/lib/logger';
 import type { QuizQuestion } from '@/lib/types/stage';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/features/ai-tutor/components/audio/speech-button';
+import type { SpeechRecognitionStatus } from '@/features/ai-tutor/components/audio/speech-button';
 import { recordLearningEvent } from '@/lib/learning-events/client';
 import { useStageStore } from '@/lib/store/stage';
 import { useIsMobileLandscape } from '@/hooks/use-landscape';
@@ -443,6 +444,7 @@ function ShortAnswerQuestion({
 }) {
   const isReview = !!result;
   const { t } = useI18n();
+  const [voiceStatus, setVoiceStatus] = useState<SpeechRecognitionStatus>('idle');
   // Ref to track latest value for voice transcription append
   const valueRef = useRef(value);
   useEffect(() => {
@@ -452,18 +454,34 @@ function ShortAnswerQuestion({
   return (
     <QuestionCard question={question} index={index} result={result}>
       {!isReview ? (
-        <div className="relative">
+        <div
+          className={cn(
+            'relative rounded-xl transition-all',
+            voiceStatus !== 'idle' &&
+              'ring-2 ring-violet-400/60 shadow-[0_0_0_4px_rgba(139,92,246,0.08)]',
+          )}
+        >
           <textarea
             value={value ?? ''}
             onChange={(e) => onChange(e.target.value)}
             disabled={disabled}
-            placeholder={t('quiz.inputPlaceholder')}
-            className="w-full min-h-[100px] p-3 pb-10 rounded-xl border border-gray-200 dark:border-gray-600 text-sm resize-none focus:outline-none focus:border-violet-300 dark:focus:border-violet-600 focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/50 transition-all disabled:bg-gray-50 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:bg-gray-800/50 dark:text-gray-200 dark:placeholder:text-gray-500"
+            placeholder={
+              voiceStatus === 'listening'
+                ? '正在聆听，松开后识别…'
+                : voiceStatus === 'processing'
+                  ? '正在识别语音，请稍候…'
+                  : t('quiz.inputPlaceholder')
+            }
+            className={cn(
+              'w-full min-h-[100px] p-3 pb-10 rounded-xl border border-gray-200 dark:border-gray-600 text-sm resize-none focus:outline-none focus:border-violet-300 dark:focus:border-violet-600 focus:ring-2 focus:ring-violet-100 dark:focus:ring-violet-900/50 transition-all disabled:bg-gray-50 dark:disabled:bg-gray-800 disabled:text-gray-500 dark:bg-gray-800/50 dark:text-gray-200 dark:placeholder:text-gray-500',
+              voiceStatus !== 'idle' && 'border-violet-400 bg-violet-50/70 text-violet-800 dark:bg-violet-950/30 dark:text-violet-100',
+            )}
           />
           <SpeechButton
             size="sm"
             disabled={disabled}
             className="absolute bottom-3 left-3"
+            onStatusChange={setVoiceStatus}
             onTranscription={(text) => {
               const cur = valueRef.current ?? '';
               onChange(cur + (cur ? ' ' : '') + text);

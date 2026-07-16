@@ -70,7 +70,13 @@ if (-not $env:EXPO_PUBLIC_GATEWAY_URL) {
   $gatewayHost = Get-LanIPv4Address
   if ($gatewayHost) {
     $gatewayPort = if ($env:EXPO_PUBLIC_GATEWAY_PORT) { $env:EXPO_PUBLIC_GATEWAY_PORT } else { "8083" }
-    $env:EXPO_PUBLIC_GATEWAY_URL = "http://${gatewayHost}:${gatewayPort}"
+    if ($gatewayPort -eq "443") {
+      $env:EXPO_PUBLIC_GATEWAY_URL = "https://${gatewayHost}"
+    } elseif ($gatewayPort -eq "80") {
+      $env:EXPO_PUBLIC_GATEWAY_URL = "http://${gatewayHost}"
+    } else {
+      $env:EXPO_PUBLIC_GATEWAY_URL = "http://${gatewayHost}:${gatewayPort}"
+    }
     $env:EXPO_PUBLIC_DEV_SERVER_HOST = $gatewayHost
   } else {
     Write-Warning "Could not detect LAN IPv4 address. Set EXPO_PUBLIC_GATEWAY_URL before building."

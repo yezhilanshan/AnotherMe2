@@ -88,6 +88,7 @@ OpenMAIC/anotherme2_engine/.cache/
 diff.txt
 output_test/
 tmp_template_frames/
+*.bak.api-test
 .pytest-run-tmp-*/
 **/.dbg/
 **/.gradle-ascii-home/

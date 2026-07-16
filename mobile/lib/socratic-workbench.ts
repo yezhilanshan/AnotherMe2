@@ -12,7 +12,7 @@ import {
   type SocraticAttemptVerdict,
   type SocraticVariantEvaluation,
   type SocraticPhase,
-} from "../../AnotherMe/packages/teaching-core/src/index";
+} from "@anotherme/teaching-core";
 import { streamChatWithRetry } from "./streaming";
 import { DEFAULT_MODEL, USER_ID } from "./config";
 export type {
@@ -52,7 +52,10 @@ function normalizeConfidence(value: unknown): number {
 
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item).trim()).filter(Boolean).slice(0, 6);
+  return value
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+    .slice(0, 6);
 }
 
 function coerceVariantVerdict(
@@ -70,7 +73,10 @@ function extractJsonObject(text: string): Record<string, unknown> | null {
   const end = candidate.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
   try {
-    return JSON.parse(candidate.slice(start, end + 1)) as Record<string, unknown>;
+    return JSON.parse(candidate.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
   } catch {
     return null;
   }
@@ -109,7 +115,9 @@ function coerceVerdict(value: unknown): SocraticAttemptVerdict {
     : "partial";
 }
 
-function coerceMisconception(value: unknown): SocraticMisconceptionType | undefined {
+function coerceMisconception(
+  value: unknown,
+): SocraticMisconceptionType | undefined {
   const raw = String(value || "");
   const allowed: SocraticMisconceptionType[] = [
     "concept_gap",
@@ -131,7 +139,8 @@ export function inferStepGoal(context: ProblemStepFollowupContext): string {
       title: context.step.title,
       description: context.step.description,
       narration: context.step.narration,
-      knowledgePointIds: context.targetKnowledgePointIds || context.step.knowledgePointIds,
+      knowledgePointIds:
+        context.targetKnowledgePointIds || context.step.knowledgePointIds,
     })
   );
 }
@@ -148,9 +157,14 @@ function buildContextLines(context: ProblemStepFollowupContext): string[] {
   const allSteps = context.problemSnapshot?.allSteps || [];
   if (allSteps.length) {
     lines.push("相邻步骤：");
-    const currentIndex = allSteps.findIndex((item) => item.id === context.step.id);
+    const currentIndex = allSteps.findIndex(
+      (item) => item.id === context.step.id,
+    );
     const start = Math.max(0, currentIndex - 1);
-    const end = currentIndex >= 0 ? Math.min(allSteps.length, currentIndex + 2) : allSteps.length;
+    const end =
+      currentIndex >= 0
+        ? Math.min(allSteps.length, currentIndex + 2)
+        : allSteps.length;
     for (const step of allSteps.slice(start, end)) {
       lines.push(
         `- ${step.id === context.step.id ? "当前" : "参考"}：${step.title}。${compactText(step.narration || "", 160)}`,
@@ -240,7 +254,8 @@ function fallbackEvaluation(input: {
       shouldIncreaseHintLevel: false,
       shouldAskVariant: false,
       extractedKnowledgePointIds: [],
-      tutorReply: "先不用急着看答案。你能先说说，这一步最像是在用哪个已知条件吗？",
+      tutorReply:
+        "先不用急着看答案。你能先说说，这一步最像是在用哪个已知条件吗？",
     };
   }
 
@@ -249,7 +264,8 @@ function fallbackEvaluation(input: {
       verdict: "no_attempt",
       confidence: 0.75,
       conciseDiagnosis: "学生表达了卡住，但还没有形成尝试。",
-      nextAction: input.state.hintLevel >= 1 ? "give_structured_hint" : "give_light_hint",
+      nextAction:
+        input.state.hintLevel >= 1 ? "give_structured_hint" : "give_light_hint",
       shouldIncreaseHintLevel: true,
       shouldAskVariant: false,
       extractedKnowledgePointIds: [],
@@ -264,11 +280,12 @@ function fallbackEvaluation(input: {
     verdict: "partial",
     confidence: 0.55,
     conciseDiagnosis: "学生给出了尝试，但还需要进一步确认依据。",
-      nextAction: "give_light_hint",
-      shouldIncreaseHintLevel: false,
-      shouldAskVariant: false,
+    nextAction: "give_light_hint",
+    shouldIncreaseHintLevel: false,
+    shouldAskVariant: false,
     extractedKnowledgePointIds: [],
-    tutorReply: "你已经有方向了。再补一句：这个判断依赖的是哪个定义、定理或已知条件？",
+    tutorReply:
+      "你已经有方向了。再补一句：这个判断依赖的是哪个定义、定理或已知条件？",
   };
 }
 
@@ -314,22 +331,28 @@ export async function evaluateSocraticAttempt(input: {
   });
 
   const parsed = extractJsonObject(raw);
-  if (!parsed) return fallbackEvaluation({ attempt: input.attempt, state: input.state });
+  if (!parsed)
+    return fallbackEvaluation({ attempt: input.attempt, state: input.state });
 
   const verdict = coerceVerdict(parsed.verdict);
   const nextAction = coerceAction(parsed.nextAction);
   const tutorReply = String(parsed.tutorReply || "").trim();
-  if (!tutorReply) return fallbackEvaluation({ attempt: input.attempt, state: input.state });
+  if (!tutorReply)
+    return fallbackEvaluation({ attempt: input.attempt, state: input.state });
 
   return {
     verdict,
     confidence: normalizeConfidence(parsed.confidence),
     misconceptionType: coerceMisconception(parsed.misconceptionType),
-    conciseDiagnosis: String(parsed.conciseDiagnosis || "已完成一次作答诊断。").slice(0, 120),
+    conciseDiagnosis: String(
+      parsed.conciseDiagnosis || "已完成一次作答诊断。",
+    ).slice(0, 120),
     nextAction,
     shouldIncreaseHintLevel: Boolean(parsed.shouldIncreaseHintLevel),
     shouldAskVariant: Boolean(parsed.shouldAskVariant),
-    extractedKnowledgePointIds: asStringArray(parsed.extractedKnowledgePointIds),
+    extractedKnowledgePointIds: asStringArray(
+      parsed.extractedKnowledgePointIds,
+    ),
     tutorReply: compactText(tutorReply, 220),
     variantQuestion: String(parsed.variantQuestion || "").trim() || undefined,
   };
@@ -342,7 +365,8 @@ function fallbackVariantEvaluation(answer: string): SocraticVariantEvaluation {
       verdict: "incorrect",
       confidence: 0.8,
       conciseDiagnosis: "学生没有提交可用于验收的变式回答。",
-      tutorReply: "先别跳到下一步。你先用一句话说说，这个变式里你会先抓哪条关系？",
+      tutorReply:
+        "先别跳到下一步。你先用一句话说说，这个变式里你会先抓哪条关系？",
       extractedKnowledgePointIds: [],
     };
   }
@@ -352,7 +376,8 @@ function fallbackVariantEvaluation(answer: string): SocraticVariantEvaluation {
       verdict: "incorrect",
       confidence: 0.75,
       conciseDiagnosis: "学生在变式题上没有形成迁移性回答。",
-      tutorReply: "说明这一步还没真正稳住。先回到原题：你能重说一次这一步依赖的关键依据吗？",
+      tutorReply:
+        "说明这一步还没真正稳住。先回到原题：你能重说一次这一步依赖的关键依据吗？",
       extractedKnowledgePointIds: [],
     };
   }
@@ -361,7 +386,8 @@ function fallbackVariantEvaluation(answer: string): SocraticVariantEvaluation {
     verdict: "partial",
     confidence: 0.55,
     conciseDiagnosis: "学生做了变式作答，但迁移依据还不够清楚。",
-    tutorReply: "方向还差一点。别只给结论，再补一句：你为什么先抓这个条件或关系？",
+    tutorReply:
+      "方向还差一点。别只给结论，再补一句：你为什么先抓这个条件或关系？",
     extractedKnowledgePointIds: [],
   };
 }
@@ -373,8 +399,7 @@ export async function evaluateVariantAnswer(input: {
   signal?: AbortSignal;
 }): Promise<SocraticVariantEvaluation> {
   const variantQuestion =
-    input.state.variantQuestion ||
-    "请回答一个与当前步骤同构的更小变式问题。";
+    input.state.variantQuestion || "请回答一个与当前步骤同构的更小变式问题。";
   const raw = await callTutorText({
     conversationId: `socratic-variant-${input.context.id}-${Date.now()}`,
     signal: input.signal,
@@ -413,9 +438,13 @@ export async function evaluateVariantAnswer(input: {
   return {
     verdict: coerceVariantVerdict(parsed.verdict),
     confidence: normalizeConfidence(parsed.confidence),
-    conciseDiagnosis: String(parsed.conciseDiagnosis || "已完成一次变式验收。").slice(0, 120),
+    conciseDiagnosis: String(
+      parsed.conciseDiagnosis || "已完成一次变式验收。",
+    ).slice(0, 120),
     tutorReply: compactText(tutorReply, 180),
-    extractedKnowledgePointIds: asStringArray(parsed.extractedKnowledgePointIds),
+    extractedKnowledgePointIds: asStringArray(
+      parsed.extractedKnowledgePointIds,
+    ),
   };
 }
 

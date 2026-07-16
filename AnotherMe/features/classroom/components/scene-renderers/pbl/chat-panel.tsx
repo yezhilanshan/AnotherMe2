@@ -7,6 +7,8 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { MessageResponse } from '@/features/ai-tutor/components/ai-elements/message';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/features/ai-tutor/components/audio/speech-button';
+import type { SpeechRecognitionStatus } from '@/features/ai-tutor/components/audio/speech-button';
+import { cn } from '@/lib/utils';
 
 interface ChatPanelProps {
   readonly messages: PBLChatMessage[];
@@ -25,6 +27,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const { t } = useI18n();
   const [input, setInput] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState<SpeechRecognitionStatus>('idle');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -109,7 +112,14 @@ export function ChatPanel({
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-2">
           <span>{t('pbl.chat.mentionHint')}</span>
         </div>
-        <div className="flex gap-2 items-center">
+        <div
+          className={cn(
+            'flex gap-2 items-center rounded-xl border transition-all',
+            voiceStatus === 'idle'
+              ? 'border-transparent'
+              : 'border-violet-400/70 bg-violet-50/80 p-1 dark:border-violet-500/50 dark:bg-violet-950/30 shadow-[0_0_0_3px_rgba(139,92,246,0.08)]',
+          )}
+        >
           <textarea
             ref={inputRef}
             value={input}
@@ -121,14 +131,24 @@ export function ChatPanel({
             onCompositionEnd={() => {
               composingRef.current = false;
             }}
-            placeholder={t('pbl.chat.placeholder')}
+            placeholder={
+              voiceStatus === 'listening'
+                ? '正在聆听，松开后识别…'
+                : voiceStatus === 'processing'
+                  ? '正在识别语音，请稍候…'
+                  : t('pbl.chat.placeholder')
+            }
             disabled={isLoading}
             rows={1}
-            className="flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+            className={cn(
+              'flex-1 resize-none rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 transition-colors',
+              voiceStatus !== 'idle' && 'border-violet-300 text-violet-700 dark:border-violet-700 dark:text-violet-200',
+            )}
           />
           <SpeechButton
             size="md"
             disabled={isLoading}
+            onStatusChange={setVoiceStatus}
             onTranscription={(text) => {
               setInput((prev) => {
                 const next = prev + (prev ? ' ' : '') + text;

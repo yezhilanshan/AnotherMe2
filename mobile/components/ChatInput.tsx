@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Image,
   Alert,
+  ActivityIndicator,
   ScrollView,
   Keyboard,
 } from "react-native";
@@ -29,6 +30,7 @@ const MAX_TOTAL_ATTACHMENTS = 5;
 const IMAGE_UPLOAD_QUALITY = 0.78;
 const SAFE_IMAGE_LONG_EDGE = 1400;
 const SAFE_IMAGE_COMPRESS = 0.72;
+const VOICE_BARS = [8, 14, 20, 12, 17, 10] as const;
 
 interface ChatInputProps {
   onSend: (
@@ -259,6 +261,8 @@ export const ChatInput = React.memo(function ChatInput({
   const textRef = useRef("");
   // 语音启动前的已有文字（语音结束后恢复/追加）
   const textBeforeVoiceRef = useRef("");
+  const voicePressActiveRef = useRef(false);
+  const voiceErrorRef = useRef(false);
 
   const handleVoiceTranscript = useCallback(
     (transcript: string, _isFinal: boolean) => {
@@ -276,6 +280,9 @@ export const ChatInput = React.memo(function ChatInput({
     Alert.alert("语音识别", error);
     // 出错时恢复之前的文字
     setText(textBeforeVoiceRef.current);
+    textRef.current = textBeforeVoiceRef.current;
+    voiceErrorRef.current = true;
+    voicePressActiveRef.current = false;
   }, []);
 
   const {
@@ -344,18 +351,31 @@ export const ChatInput = React.memo(function ChatInput({
 
   // 语音开始：保存已有文字，清空输入框准备展示识别结果
   const handleVoiceStart = useCallback(async () => {
+    if (voicePressActiveRef.current || isProcessing) return;
+    voicePressActiveRef.current = true;
+    voiceErrorRef.current = false;
     textBeforeVoiceRef.current = textRef.current;
     const started = await startListening();
     if (!started) {
       setText(textBeforeVoiceRef.current);
       textRef.current = textBeforeVoiceRef.current;
       textBeforeVoiceRef.current = "";
+      voicePressActiveRef.current = false;
     }
-  }, [startListening]);
+  }, [isProcessing, startListening]);
 
   // 录音结束后，获取最终识别文字并发送
   const handleVoiceStop = useCallback(async () => {
+    if (!voicePressActiveRef.current) return;
+    voicePressActiveRef.current = false;
     const finalText = await stopListening();
+    if (voiceErrorRef.current) {
+      voiceErrorRef.current = false;
+      setText(textBeforeVoiceRef.current);
+      textRef.current = textBeforeVoiceRef.current;
+      textBeforeVoiceRef.current = "";
+      return;
+    }
     const mergedText = textBeforeVoiceRef.current
       ? `${textBeforeVoiceRef.current} ${finalText}`.trim()
       : finalText;
@@ -586,7 +606,13 @@ export const ChatInput = React.memo(function ChatInput({
 
       {/* 输入框 */}
       <View style={styles.container}>
-        <View style={styles.inputRow}>
+        <View
+          style={[
+            styles.inputRow,
+            isListening && styles.inputRowListening,
+            isProcessing && styles.inputRowProcessing,
+          ]}
+        >
           {/* 语音按钮：按住说话，松开发送 */}
           <TouchableOpacity
             style={[
@@ -613,25 +639,54 @@ export const ChatInput = React.memo(function ChatInput({
             />
           </TouchableOpacity>
 
-          {/* 文本输入 */}
-          <TextInput
-            ref={inputRef}
-            style={[styles.input, isListening && { color: colors.error }]}
-            value={text}
-            onChangeText={(t) => {
-              textRef.current = t;
-              setText(t);
-            }}
-            placeholder="发消息或按住说话..."
-            placeholderTextColor={colors.textMuted}
-            multiline
-            maxLength={2000}
-            editable={!disabled}
-            onSubmitEditing={handleSend}
-            returnKeyType="send"
-            onFocus={handleFocus}
-            onBlur={handleBlur}
-          />
+          {/* 录音/识别期间，用明确状态替代普通文本框。 */}
+          {isListening || isProcessing ? (
+            <View
+              style={styles.voiceStatus}
+              accessibilityRole="text"
+              accessibilityLiveRegion="polite"
+            >
+              <View style={styles.voiceStatusCopy}>
+                <Text style={styles.voiceStatusTitle}>
+                  {isListening ? "正在聆听" : "正在识别语音"}
+                </Text>
+                <Text style={styles.voiceStatusHint}>
+                  {isListening ? "松开结束并识别" : "请稍候，识别结果将自动发送"}
+                </Text>
+              </View>
+              {isListening ? (
+                <View style={styles.voiceBars}>
+                  {VOICE_BARS.map((height, index) => (
+                    <View
+                      key={`${height}-${index}`}
+                      style={[styles.voiceBar, { height }]}
+                    />
+                  ))}
+                </View>
+              ) : (
+                <ActivityIndicator size="small" color={colors.primary} />
+              )}
+            </View>
+          ) : (
+            <TextInput
+              ref={inputRef}
+              style={styles.input}
+              value={text}
+              onChangeText={(t) => {
+                textRef.current = t;
+                setText(t);
+              }}
+              placeholder="发消息或按住说话..."
+              placeholderTextColor={colors.textMuted}
+              multiline
+              maxLength={2000}
+              editable={!disabled}
+              onSubmitEditing={handleSend}
+              returnKeyType="send"
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+            />
+          )}
 
           {/* 相机按钮 */}
           <TouchableOpacity
@@ -777,6 +832,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 4,
     gap: 2,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  inputRowListening: {
+    backgroundColor: colors.errorLight,
+    borderColor: colors.error,
+  },
+  inputRowProcessing: {
+    backgroundColor: colors.primaryLight,
+    borderColor: colors.primary,
   },
   iconButton: {
     padding: 8,
@@ -789,6 +854,38 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: 6,
     paddingHorizontal: 4,
+  },
+  voiceStatus: {
+    flex: 1,
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    gap: 10,
+  },
+  voiceStatusCopy: {
+    flex: 1,
+  },
+  voiceStatusTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  voiceStatusHint: {
+    marginTop: 1,
+    fontSize: 11,
+    color: colors.textSecondary,
+  },
+  voiceBars: {
+    height: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  voiceBar: {
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: colors.error,
   },
   iconButtonActive: {
     backgroundColor: colors.errorLight,

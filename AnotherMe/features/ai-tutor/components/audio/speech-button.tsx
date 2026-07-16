@@ -10,13 +10,17 @@ import { toast } from 'sonner';
 
 interface SpeechButtonProps {
   onTranscription: (text: string) => void;
+  onStatusChange?: (status: SpeechRecognitionStatus) => void;
   className?: string;
   disabled?: boolean;
   size?: 'sm' | 'md';
 }
 
+export type SpeechRecognitionStatus = 'idle' | 'listening' | 'processing';
+
 export function SpeechButton({
   onTranscription,
+  onStatusChange,
   className,
   disabled,
   size = 'sm',
@@ -37,20 +41,35 @@ export function SpeechButton({
     toast.error(error);
   }, []);
 
-  const { isRecording, isProcessing, startRecording, stopRecording } = useAudioRecorder({
-    onTranscription: stableOnTranscription,
-    onError: handleError,
-  });
+  const { isRecording, isProcessing, startRecording, stopRecording, cancelRecording } =
+    useAudioRecorder({
+      onTranscription: stableOnTranscription,
+      onError: handleError,
+    });
 
   const active = isRecording || isProcessing;
+  const pressActiveRef = useRef(false);
 
-  const handleClick = () => {
-    if (isRecording) {
-      stopRecording();
-    } else if (!isProcessing) {
-      startRecording();
-    }
-  };
+  useEffect(() => {
+    onStatusChange?.(isProcessing ? 'processing' : isRecording ? 'listening' : 'idle');
+  }, [isProcessing, isRecording, onStatusChange]);
+
+  const startHold = useCallback(() => {
+    if (disabled || isProcessing || pressActiveRef.current) return;
+    pressActiveRef.current = true;
+    void startRecording();
+  }, [disabled, isProcessing, startRecording]);
+
+  const endHold = useCallback(() => {
+    if (!pressActiveRef.current) return;
+    pressActiveRef.current = false;
+    stopRecording();
+  }, [stopRecording]);
+
+  const cancelHold = useCallback(() => {
+    pressActiveRef.current = false;
+    cancelRecording();
+  }, [cancelRecording]);
 
   const isMd = size === 'md';
   const sizeClasses = isMd ? 'h-8 w-8' : 'h-6 w-6';
@@ -63,7 +82,29 @@ export function SpeechButton({
         <button
           type="button"
           disabled={disabled || isProcessing}
-          onClick={handleClick}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            startHold();
+          }}
+          onPointerUp={(event) => {
+            event.preventDefault();
+            endHold();
+          }}
+          onPointerCancel={cancelHold}
+          onKeyDown={(event) => {
+            if ((event.key === 'Enter' || event.key === ' ') && !event.repeat) {
+              event.preventDefault();
+              startHold();
+            }
+          }}
+          onKeyUp={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              endHold();
+            }
+          }}
+          onContextMenu={(event) => event.preventDefault()}
           className={cn(
             'relative flex items-center justify-center rounded-lg transition-all duration-200 shrink-0 cursor-pointer',
             sizeClasses,
@@ -133,8 +174,8 @@ export function SpeechButton({
         {isProcessing
           ? t('roundtable.processing')
           : isRecording
-            ? t('voice.stopListening')
-            : t('voice.startListening')}
+            ? '松开结束'
+            : '按住说话'}
       </TooltipContent>
     </Tooltip>
   );
