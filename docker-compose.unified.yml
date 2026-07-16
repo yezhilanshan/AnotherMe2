@@ -61,8 +61,6 @@ services:
     build:
       context: ./AnotherMe
     container_name: anotherme-core
-    ports:
-      - "3000:3000"
     working_dir: /app
     env_file:
       - ./AnotherMe/.env.local
@@ -112,10 +110,14 @@ services:
         condition: service_completed_successfully
       anotherme-core:
         condition: service_started
-    ports:
-      - "8080:8080"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5).read()"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5).read()",
+        ]
       interval: 15s
       timeout: 5s
       retries: 5

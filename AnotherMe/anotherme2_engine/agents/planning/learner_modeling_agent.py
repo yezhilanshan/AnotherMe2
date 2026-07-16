@@ -78,6 +78,9 @@ class LearnerModelingAgent(BaseAgent):
                 existing_kp = metadata.get("required_knowledge") or []
                 if not existing_kp:
                     metadata["required_knowledge"] = list(weak_kp)
+            step_personalization = learner_memory.get("step_personalization")
+            if isinstance(step_personalization, dict) and step_personalization:
+                metadata["step_personalization"] = step_personalization
 
         required_knowledge = self._resolve_required_knowledge(project, metadata, knowledge_map)
         learner_profile = self._resolve_or_cold_start_profile(metadata, knowledge_map, required_knowledge)
@@ -232,6 +235,14 @@ class LearnerModelingAgent(BaseAgent):
 
         explicit_mastery = metadata.get("learner_mastery") if isinstance(metadata.get("learner_mastery"), dict) else {}
         for key, value in explicit_mastery.items():
+            point = str(key).strip()
+            if not point:
+                continue
+            base_mastery[point] = self._clamp01(value)
+
+        # BKT mastery: prefer persisted BKT states over cold-start defaults
+        bkt_mastery = learner_memory.get("bkt_mastery") if isinstance(learner_memory.get("bkt_mastery"), dict) else {}
+        for key, value in bkt_mastery.items():
             point = str(key).strip()
             if not point:
                 continue
@@ -420,6 +431,11 @@ class LearnerModelingAgent(BaseAgent):
             "visual_profile": visual_profile,
             "required_mastery_avg": required_avg,
             "prerequisite_mastery_avg": prerequisite_avg,
+            **(
+                {"step_personalization": metadata["step_personalization"]}
+                if isinstance(metadata.get("step_personalization"), dict)
+                else {}
+            ),
         }
 
     def _expand_prerequisites(

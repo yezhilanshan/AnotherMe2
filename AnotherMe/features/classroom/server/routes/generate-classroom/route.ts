@@ -10,6 +10,7 @@ import { createDefaultRuntime } from '@/lib/orchestration/capability-runtime';
 import { createLearningContext } from '@/lib/types/learning-context';
 import { globalStreamBus } from '@/lib/orchestration/stream-bus';
 import { classroomGenerateHandler } from '@/lib/orchestration/handlers/classroom-generation-handler';
+import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('GenerateClassroom API');
@@ -28,6 +29,26 @@ export async function POST(req: NextRequest) {
   try {
     const rawBody = (await req.json()) as Partial<GenerateClassroomInput>;
     requirementSnippet = rawBody.requirement?.substring(0, 60);
+    // Resolve model config from headers when not provided in body.
+    // The client sends x-model / x-api-key / x-base-url / x-provider-type
+    // headers but not modelConfig in the JSON body.
+    const modelConfig =
+      rawBody.modelConfig ||
+      (() => {
+        try {
+          const resolved = resolveModelFromHeaders(req);
+          if (resolved.modelString) {
+            return {
+              modelString: resolved.modelString,
+              apiKey: resolved.apiKey,
+            };
+          }
+        } catch {
+          // Headers may not be present; fall through to env/default.
+        }
+        return undefined;
+      })();
+
     const body: GenerateClassroomInput = {
       requirement: rawBody.requirement || '',
       ...(rawBody.pdfContent ? { pdfContent: rawBody.pdfContent } : {}),
@@ -39,10 +60,12 @@ export async function POST(req: NextRequest) {
       ...(rawBody.enableVideoGeneration != null
         ? { enableVideoGeneration: rawBody.enableVideoGeneration }
         : {}),
-      ...(rawBody.enableTTS != null ? { enableTTS: rawBody.enableTTS } : {}),
+      // Default enableTTS to true so classrooms always have audio.
+      // If the user explicitly sets enableTTS to false, respect that.
+      enableTTS: rawBody.enableTTS !== false,
       ...(rawBody.agentMode ? { agentMode: rawBody.agentMode } : {}),
       ...(rawBody.pedagogy_profile ? { pedagogy_profile: rawBody.pedagogy_profile } : {}),
-      ...(rawBody.modelConfig ? { modelConfig: rawBody.modelConfig } : {}),
+      ...(modelConfig ? { modelConfig } : {}),
     };
     const { requirement } = body;
 

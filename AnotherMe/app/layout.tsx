@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { I18nProvider } from '@/lib/hooks/use-i18n';
 import { Toaster } from '@/components/ui/sonner';
 import { ServerProvidersInit } from '@/components/layout/server-providers-init';
+import { MigrationsInit } from '@/components/layout/migrations-init';
 import { AuthProvider } from '@/features/auth/components/auth-provider';
 import { PwaRuntime } from '@/components/pwa/pwa-runtime';
 import { KeyboardProvider } from '@/lib/contexts/keyboard-context';
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <KeyboardProvider>
             <AuthProvider>
               <I18nProvider>
+                <MigrationsInit />
                 <ServerProvidersInit />
                 {children}
                 <PwaRuntime />

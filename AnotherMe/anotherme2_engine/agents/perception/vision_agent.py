@@ -14,8 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..foundation.base_agent import BaseAgent
 from .coordinate_scene import CoordinateSceneCompiler, CoordinateSceneError
 from .geometry_fact_compiler import GeometryFactCompiler
+from .layout_contract import build_layout_contract
+from .layout_ir import scene_payload_from_layout_ir
+from .geometry_normalizer import GeometryNormalizer
 from .graph_builder import GeometryGraph
+from .image_preprocess import preprocess_problem_image
+from .pixel_anchor import normalize_point_pixel_anchor
 from .scene_graph import SceneGraph
+
 try:
     from output_paths import DEFAULT_OUTPUT_DIR
 except ModuleNotFoundError:
@@ -43,6 +49,20 @@ class VisionAgent(BaseAgent):
         self.output_dir = config.get("output_dir", str(DEFAULT_OUTPUT_DIR))
         self.export_ggb = bool(config.get("export_ggb", True))
         self.debug_exceptions = bool(config.get("debug_exceptions", False))
+        self.scan_preprocess_enabled = bool(config.get("scan_preprocess_enabled", True))
+        self.scan_preprocess_target_min_side = int(
+            config.get("scan_preprocess_target_min_side", 1400)
+        )
+        self.scan_preprocess_max_output_side = int(
+            config.get("scan_preprocess_max_output_side", 2200)
+        )
+        self.scan_preprocess_remove_colored_ink = bool(
+            config.get("scan_preprocess_remove_colored_ink", True)
+        )
+        self.prefer_soft_sketch_reconstruction = bool(
+            config.get("prefer_soft_sketch_reconstruction", True)
+        )
+        self.geometry_normalizer = GeometryNormalizer()
         self.geometry_fact_compiler = GeometryFactCompiler()
         self.coordinate_scene_compiler = CoordinateSceneCompiler()
         self._init_paddleocr(config)
@@ -71,15 +91,26 @@ class VisionAgent(BaseAgent):
             project.error_message = "Problem image does not exist."
             state["project"] = project
             state["current_step"] = "vision_failed"
-            state["messages"].append({"role": "assistant", "content": project.error_message})
+            state["messages"].append(
+                {"role": "assistant", "content": project.error_message}
+            )
             return state
 
         metadata = state.setdefault("metadata", {})
+        preprocess_report = self._preprocess_problem_image(image_path)
+        metadata["image_preprocess"] = preprocess_report
+        if preprocess_report.get("used_processed_image"):
+            metadata["original_problem_image"] = image_path
+            image_path = str(preprocess_report.get("processed_path") or image_path)
+            project.problem_image = image_path
+
         geometry_file = project.geometry_file or metadata.get("geometry_file")
         export_ggb = bool(
             metadata.get(
                 "export_ggb",
-                project.export_ggb if project.export_ggb is not None else self.export_ggb,
+                project.export_ggb
+                if project.export_ggb is not None
+                else self.export_ggb,
             )
         )
 
@@ -90,11 +121,29 @@ class VisionAgent(BaseAgent):
         bundle = extract_payload["bundle"]
         problem_text = extract_payload["problem_text"]
         geometry_facts = extract_payload["geometry_facts"]
+        scene_draft = (
+            extract_payload.get("scene_draft")
+            if isinstance(extract_payload.get("scene_draft"), dict)
+            else self.geometry_normalizer.build_scene_draft(
+                geometry_facts,
+                problem_text=problem_text,
+            )
+        )
+        geometry_ir = (
+            extract_payload.get("geometry_ir")
+            if isinstance(extract_payload.get("geometry_ir"), dict)
+            else self.geometry_normalizer.build_geometry_ir(
+                geometry_facts,
+                problem_text=problem_text,
+                scene_draft=scene_draft,
+            )
+        )
         vision_quality = extract_payload["vision_quality"]
 
         compile_payload = self._compile_and_infer(
             problem_text=problem_text,
             geometry_facts=geometry_facts,
+            geometry_ir=geometry_ir,
         )
         geometry_spec = compile_payload["geometry_spec"]
         semantic_signals = compile_payload["semantic_signals"]
@@ -108,15 +157,21 @@ class VisionAgent(BaseAgent):
                 "Please verify the input image or provide --problem text."
             )
             metadata["problem_bundle"] = bundle
+            metadata["scene_draft"] = scene_draft
+            metadata["geometry_ir"] = geometry_ir
             metadata["geometry_facts"] = geometry_facts
             metadata["geometry_spec"] = geometry_spec
             metadata["vision_quality"] = vision_quality
             state["project"] = project
             state["current_step"] = "vision_failed"
-            state["messages"].append({"role": "assistant", "content": project.error_message})
+            state["messages"].append(
+                {"role": "assistant", "content": project.error_message}
+            )
             return state
         project.problem_text = problem_text
         metadata["problem_bundle"] = bundle
+        metadata["scene_draft"] = scene_draft
+        metadata["geometry_ir"] = geometry_ir
         metadata["geometry_facts"] = geometry_facts
         metadata["geometry_spec"] = geometry_spec
         metadata["vision_semantic_signals"] = semantic_signals
@@ -131,17 +186,23 @@ class VisionAgent(BaseAgent):
         }
         coordinate_scene: Optional[Dict[str, Any]] = None
         coordinate_scene_validation: Optional[Dict[str, Any]] = None
+        layout_bundle: Optional[Dict[str, Any]] = None
 
         try:
             if geometry_file:
-                coordinate_scene = self.coordinate_scene_compiler.load_from_file(geometry_file)
-                coordinate_scene_validation = self.coordinate_scene_compiler.validate_coordinate_scene(
-                    coordinate_scene
+                layout_bundle = self.coordinate_scene_compiler.compile_layout_bundle(
+                    geometry_file=geometry_file,
+                )
+                coordinate_scene = layout_bundle.get("coordinate_scene")
+                coordinate_scene_validation = layout_bundle.get(
+                    "coordinate_scene_validation"
                 )
                 metadata["auto_geometry_status"] = "success"
             else:
-                normalized_spec = self.coordinate_scene_compiler.normalize_geometry_spec(
-                    geometry_spec
+                normalized_spec = (
+                    self.coordinate_scene_compiler.normalize_geometry_spec(
+                        geometry_spec
+                    )
                 )
                 geometry_spec_validation = {
                     "is_valid": bool(normalized_spec.get("points"))
@@ -151,27 +212,24 @@ class VisionAgent(BaseAgent):
                     "unsupported_relations": [],
                     "solver_trace": [],
                 }
-                coordinate_scene = self.coordinate_scene_compiler.solve_coordinate_scene(
+                layout_bundle = self.coordinate_scene_compiler.solve_layout_bundle(
                     normalized_spec
                 )
-                coordinate_scene_validation = self.coordinate_scene_compiler.validate_coordinate_scene(
-                    coordinate_scene,
-                    normalized_spec,
+                coordinate_scene = layout_bundle.get("coordinate_scene")
+                coordinate_scene_validation = layout_bundle.get(
+                    "coordinate_scene_validation"
                 )
                 metadata["auto_geometry_status"] = (
                     "success" if coordinate_scene_validation["is_valid"] else "invalid"
                 )
-                if not coordinate_scene_validation["is_valid"]:
-                    raise CoordinateSceneError(
-                        self.coordinate_scene_compiler._validation_error_message(
-                            coordinate_scene_validation
-                        )
-                    )
         except CoordinateSceneError as exc:
             if not geometry_file:
                 try:
-                    normalized_spec = normalized_spec or self.coordinate_scene_compiler.normalize_geometry_spec(
-                        geometry_spec
+                    normalized_spec = (
+                        normalized_spec
+                        or self.coordinate_scene_compiler.normalize_geometry_spec(
+                            geometry_spec
+                        )
                     )
                 except Exception:
                     normalized_spec = None
@@ -185,20 +243,28 @@ class VisionAgent(BaseAgent):
                 "unsupported_relations": [],
                 "solver_trace": [],
             }
-            metadata["auto_geometry_status"] = metadata.get("auto_geometry_status", "unsupported")
-            metadata["debug_exports"] = self.coordinate_scene_compiler.write_debug_exports(
-                coordinate_scene=None,
-                output_dir=self.output_dir,
-                export_ggb=export_ggb,
-                extra_payloads={
-                    "problem_bundle": bundle,
-                    "geometry_facts": geometry_facts,
-                    "geometry_spec": geometry_spec,
-                    "vision_semantic_signals": semantic_signals,
-                    "normalized_geometry_spec": normalized_spec,
-                    "geometry_spec_validation": geometry_spec_validation,
-                    "coordinate_scene_validation": metadata["coordinate_scene_validation"],
-                },
+            metadata["auto_geometry_status"] = metadata.get(
+                "auto_geometry_status", "unsupported"
+            )
+            metadata["debug_exports"] = (
+                self.coordinate_scene_compiler.write_debug_exports(
+                    coordinate_scene=None,
+                    output_dir=self.output_dir,
+                    export_ggb=export_ggb,
+                    extra_payloads={
+                        "problem_bundle": bundle,
+                        "scene_draft": scene_draft,
+                        "geometry_ir": geometry_ir,
+                        "geometry_facts": geometry_facts,
+                        "geometry_spec": geometry_spec,
+                        "vision_semantic_signals": semantic_signals,
+                        "normalized_geometry_spec": normalized_spec,
+                        "geometry_spec_validation": geometry_spec_validation,
+                        "coordinate_scene_validation": metadata[
+                            "coordinate_scene_validation"
+                        ],
+                    },
+                )
             )
 
             if geometry_file:
@@ -212,71 +278,112 @@ class VisionAgent(BaseAgent):
                 metadata["vision_quality"] = vision_quality
                 state["project"] = project
                 state["current_step"] = "vision_failed"
-                state["messages"].append({"role": "assistant", "content": project.error_message})
+                state["messages"].append(
+                    {"role": "assistant", "content": project.error_message}
+                )
                 return state
 
             vision_quality["fallback_events"].append("coordinate_scene_fallback")
-            fold_solver_failed = self._fold_solver_failed(metadata["coordinate_scene_validation"])
+            fold_solver_failed = self._fold_solver_failed(
+                metadata["coordinate_scene_validation"]
+            )
             if fold_solver_failed:
-                vision_quality["fallback_events"].append("fold_solver_failed_safe_fallback")
+                vision_quality["fallback_events"].append(
+                    "fold_solver_failed_soft_sketch"
+                )
+            fallback_geometry = normalized_spec or geometry_spec
             fallback_policy = self._assess_schematic_scene_policy(
                 problem_text=problem_text,
                 semantic_signals=semantic_signals,
             )
-            if fold_solver_failed:
+            has_pixel_anchor_fallback = self._has_sufficient_pixel_anchor_coverage(
+                fallback_geometry
+            )
+            if (
+                fold_solver_failed
+                or str(fallback_policy.get("mode", "")).strip() == "limited"
+                or has_pixel_anchor_fallback
+            ):
+                if has_pixel_anchor_fallback and not fold_solver_failed:
+                    vision_quality["fallback_events"].append(
+                        "pixel_anchor_soft_sketch_fallback"
+                    )
                 fallback_policy = {
-                    "mode": "limited",
+                    "mode": "soft_sketch",
                     "allow_solver_fallback": False,
-                    "animation_mode": "weak_graph_strong_explanation",
+                    "animation_mode": "soft_graph_strong_explanation",
                 }
             semantic_signals = self._downgrade_semantic_signals_for_schematic(
                 semantic_signals,
                 policy=fallback_policy,
             )
             bundle["semantic_signals"] = semantic_signals
-            fallback_geometry = normalized_spec or geometry_spec
-            used_safe_fallback = False
-            if str(fallback_policy.get("mode", "")).strip() == "limited":
-                fallback_geometry = self._prune_fold_reflection_artifacts(fallback_geometry)
-                used_safe_fallback = True
-                vision_quality["fallback_events"].append("fold_safe_fallback_pruned")
-            semantic_graph = self._build_semantic_graph(
-                fallback_geometry
-            )
-            drawable_scene = self._build_schematic_drawable_scene(
-                fallback_geometry,
-                allow_solver_fallback=bool(fallback_policy.get("allow_solver_fallback", True)),
-            )
-            if str(fallback_policy.get("mode", "")).strip() == "limited":
-                drawable_scene["layout_mode"] = (
-                    "schematic_safe_fallback" if used_safe_fallback else "schematic_limited_fallback"
+            semantic_graph = self._build_semantic_graph(fallback_geometry)
+            if str(fallback_policy.get("mode", "")).strip() == "soft_sketch":
+                vision_quality["fallback_events"].append("soft_sketch_reconstruction")
+                drawable_scene = self._build_soft_sketch_drawable_scene(
+                    fallback_geometry,
+                    geometry_facts=geometry_facts,
+                    scene_error=str(exc),
+                    policy=fallback_policy,
                 )
-            fallback_geometry_graph = self._build_geometry_graph_payload(
-                drawable_scene
-            )
+            else:
+                drawable_scene = self._build_schematic_drawable_scene(
+                    fallback_geometry,
+                    allow_solver_fallback=bool(
+                        fallback_policy.get("allow_solver_fallback", True)
+                    ),
+                )
+            fallback_geometry_graph = self._build_geometry_graph_payload(drawable_scene)
 
             metadata["coordinate_scene"] = None
-            metadata["coordinate_scene_validation"] = metadata["coordinate_scene_validation"]
+            metadata["coordinate_scene_validation"] = metadata[
+                "coordinate_scene_validation"
+            ]
+            drawable_scene_source = (
+                "soft_sketch_from_normalized_geometry_spec"
+                if str(drawable_scene.get("layout_mode", "")).strip()
+                == "soft_sketch_reconstruction"
+                else "schematic_from_normalized_geometry_spec"
+            )
+            layout_bundle = self.coordinate_scene_compiler.derive_layout_bundle(
+                drawable_scene=drawable_scene,
+                coordinate_scene=None,
+                coordinate_scene_validation=metadata["coordinate_scene_validation"],
+                drawable_scene_source=drawable_scene_source,
+            )
+            metadata["layout_ir"] = layout_bundle["layout_ir"]
             metadata["semantic_graph"] = semantic_graph
             metadata["semantic_graph_json"] = json.dumps(
                 semantic_graph, ensure_ascii=False
             )
-            metadata["drawable_scene"] = drawable_scene
+            metadata["drawable_scene"] = (
+                layout_bundle.get("drawable_scene") or drawable_scene
+            )
             metadata["drawable_scene_json"] = json.dumps(
-                drawable_scene, ensure_ascii=False
+                metadata["drawable_scene"], ensure_ascii=False
             )
             metadata["scene_graph"] = semantic_graph
             metadata["scene_graph_json"] = metadata["semantic_graph_json"]
+            metadata["drawable_scene_source"] = drawable_scene_source
+            fallback_geometry_graph = self._build_geometry_graph_payload(
+                metadata["drawable_scene"]
+            )
             metadata["geometry_graph"] = fallback_geometry_graph
             metadata["geometry_graph_json"] = json.dumps(
                 fallback_geometry_graph, ensure_ascii=False
             )
+            metadata["layout_contract"] = build_layout_contract(metadata)
+            metadata["layout_ir_json"] = json.dumps(
+                metadata.get("layout_ir", {}), ensure_ascii=False
+            )
             metadata["semantic_graph_source"] = "normalized_geometry_spec_fallback"
-            metadata["drawable_scene_source"] = "schematic_from_normalized_geometry_spec"
             metadata["scene_graph_source"] = metadata["semantic_graph_source"]
             metadata["vision_semantic_signals"] = semantic_signals
 
-            vision_quality["scene_source"] = str(drawable_scene.get("layout_mode", "schematic_fallback"))
+            vision_quality["scene_source"] = str(
+                drawable_scene.get("layout_mode", "schematic_fallback")
+            )
             vision_quality["vision_quality_level"] = self._compute_vision_quality_level(
                 text_source=str(vision_quality.get("text_source", "")),
                 geometry_source=str(vision_quality.get("geometry_source", "")),
@@ -296,8 +403,11 @@ class VisionAgent(BaseAgent):
                         "fallback_policy": fallback_policy,
                         "scene_error": str(exc),
                         "compile_error": compile_payload.get("compile_error"),
-                        "coordinate_scene_validation": metadata["coordinate_scene_validation"],
+                        "coordinate_scene_validation": metadata[
+                            "coordinate_scene_validation"
+                        ],
                         "geometry_spec_validation": geometry_spec_validation,
+                        "soft_sketch_report": drawable_scene.get("soft_sketch_report"),
                         "recommended_geometry_actions": semantic_signals.get(
                             "recommended_geometry_actions",
                             [],
@@ -311,6 +421,15 @@ class VisionAgent(BaseAgent):
                     indent=2,
                 ),
             )
+            if drawable_scene.get("soft_sketch_report"):
+                self._write_debug_text(
+                    "soft_sketch_report.json",
+                    json.dumps(
+                        drawable_scene.get("soft_sketch_report"),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
 
             state["project"] = project
             state["current_step"] = "vision_completed"
@@ -323,50 +442,122 @@ class VisionAgent(BaseAgent):
                     ),
                 }
             )
+
+            # Add user-visible fallback notification
+            fallback_notification = self._build_fallback_notification(vision_quality)
+            if fallback_notification:
+                state["messages"].append(fallback_notification)
+
             return state
 
-        semantic_graph = self.coordinate_scene_compiler.derive_semantic_graph(coordinate_scene)
-        drawable_scene = self.coordinate_scene_compiler.derive_drawable_scene(coordinate_scene)
-        geometry_graph_payload = self._build_geometry_graph_payload(drawable_scene)
-        ggb_commands = self.coordinate_scene_compiler.export_ggb_commands(coordinate_scene)
+        semantic_graph = self.coordinate_scene_compiler.derive_semantic_graph(
+            coordinate_scene
+        )
+        drawable_scene = (
+            layout_bundle.get("drawable_scene")
+            if isinstance(layout_bundle, dict)
+            and isinstance(layout_bundle.get("drawable_scene"), dict)
+            else self.coordinate_scene_compiler.derive_drawable_scene(coordinate_scene)
+        )
+        drawable_scene_source = "derived_from_coordinate_scene"
+        if (
+            self.prefer_soft_sketch_reconstruction
+            and not geometry_file
+            and isinstance(normalized_spec, dict)
+            and normalized_spec.get("points")
+            and normalized_spec.get("primitives")
+            and self._allow_soft_sketch_priority(
+                normalized_spec=normalized_spec,
+                geometry_facts=geometry_facts,
+                coordinate_scene_validation=coordinate_scene_validation,
+            )
+        ):
+            soft_drawable_scene = self._build_soft_sketch_drawable_scene(
+                normalized_spec,
+                geometry_facts=geometry_facts,
+                scene_error="coordinate_scene_succeeded_soft_sketch_priority",
+                policy={
+                    "mode": "soft_sketch_priority",
+                    "allow_solver_fallback": False,
+                    "animation_mode": "soft_graph_strong_explanation",
+                },
+            )
+            if self._semantic_graph_has_drawable_geometry(soft_drawable_scene):
+                drawable_scene = soft_drawable_scene
+                drawable_scene_source = (
+                    "soft_sketch_priority_from_normalized_geometry_spec"
+                )
+        if (
+            not isinstance(layout_bundle, dict)
+            or drawable_scene_source != "derived_from_coordinate_scene"
+        ):
+            layout_bundle = self.coordinate_scene_compiler.derive_layout_bundle(
+                drawable_scene=drawable_scene,
+                coordinate_scene=coordinate_scene,
+                coordinate_scene_validation=coordinate_scene_validation,
+                drawable_scene_source=drawable_scene_source,
+            )
+        ggb_commands = self.coordinate_scene_compiler.export_ggb_commands(
+            coordinate_scene
+        )
         debug_exports = self.coordinate_scene_compiler.write_debug_exports(
             coordinate_scene=coordinate_scene,
             output_dir=self.output_dir,
             export_ggb=export_ggb,
-                extra_payloads={
-                    "problem_bundle": bundle,
-                    "geometry_facts": geometry_facts,
-                    "geometry_spec": geometry_spec,
-                    "vision_semantic_signals": semantic_signals,
-                    "normalized_geometry_spec": normalized_spec,
-                    "geometry_spec_validation": geometry_spec_validation,
+            extra_payloads={
+                "problem_bundle": bundle,
+                "scene_draft": scene_draft,
+                "geometry_ir": geometry_ir,
+                "geometry_facts": geometry_facts,
+                "geometry_spec": geometry_spec,
+                "vision_semantic_signals": semantic_signals,
+                "normalized_geometry_spec": normalized_spec,
+                "geometry_spec_validation": geometry_spec_validation,
                 "coordinate_scene_validation": coordinate_scene_validation,
             },
         )
 
         metadata["normalized_geometry_spec"] = normalized_spec
         metadata["geometry_spec_validation"] = geometry_spec_validation
-        metadata["coordinate_scene"] = coordinate_scene
-        metadata["coordinate_scene_json"] = json.dumps(coordinate_scene, ensure_ascii=False)
+        metadata["layout_ir"] = layout_bundle["layout_ir"]
+        metadata["coordinate_scene"] = (
+            layout_bundle.get("coordinate_scene") or coordinate_scene
+        )
+        metadata["coordinate_scene_json"] = json.dumps(
+            metadata["coordinate_scene"], ensure_ascii=False
+        )
         metadata["coordinate_scene_validation"] = coordinate_scene_validation
         metadata["ggb_commands"] = ggb_commands
         metadata["semantic_graph"] = semantic_graph
         metadata["semantic_graph_json"] = json.dumps(semantic_graph, ensure_ascii=False)
-        metadata["drawable_scene"] = drawable_scene
-        metadata["drawable_scene_json"] = json.dumps(drawable_scene, ensure_ascii=False)
+        metadata["drawable_scene"] = layout_bundle.get("drawable_scene") or drawable_scene
+        metadata["drawable_scene_json"] = json.dumps(
+            metadata["drawable_scene"], ensure_ascii=False
+        )
         metadata["scene_graph"] = semantic_graph
         metadata["scene_graph_json"] = metadata["semantic_graph_json"]
+        geometry_graph_payload = self._build_geometry_graph_payload(
+            metadata["drawable_scene"]
+        )
         metadata["geometry_graph"] = geometry_graph_payload
         metadata["geometry_graph_json"] = json.dumps(
             geometry_graph_payload, ensure_ascii=False
         )
+        metadata["drawable_scene_source"] = drawable_scene_source
+        metadata["layout_contract"] = build_layout_contract(metadata)
+        metadata["layout_ir_json"] = json.dumps(
+            metadata.get("layout_ir", {}), ensure_ascii=False
+        )
         metadata["semantic_graph_source"] = "derived_from_coordinate_scene"
-        metadata["drawable_scene_source"] = "derived_from_coordinate_scene"
         metadata["scene_graph_source"] = metadata["semantic_graph_source"]
         metadata["debug_exports"] = debug_exports
         metadata["vision_semantic_signals"] = semantic_signals
 
-        vision_quality["scene_source"] = "coordinate_scene"
+        vision_quality["scene_source"] = (
+            str(drawable_scene.get("layout_mode", "soft_sketch_reconstruction"))
+            if drawable_scene_source.startswith("soft_sketch")
+            else "coordinate_scene"
+        )
         vision_quality["vision_quality_level"] = self._compute_vision_quality_level(
             text_source=str(vision_quality.get("text_source", "")),
             geometry_source=str(vision_quality.get("geometry_source", "")),
@@ -386,6 +577,7 @@ class VisionAgent(BaseAgent):
                     "compile_error": compile_payload.get("compile_error"),
                     "geometry_spec_validation": geometry_spec_validation,
                     "coordinate_scene_validation": coordinate_scene_validation,
+                    "soft_sketch_report": drawable_scene.get("soft_sketch_report"),
                     "recommended_geometry_actions": semantic_signals.get(
                         "recommended_geometry_actions",
                         [],
@@ -399,6 +591,15 @@ class VisionAgent(BaseAgent):
                 indent=2,
             ),
         )
+        if drawable_scene.get("soft_sketch_report"):
+            self._write_debug_text(
+                "soft_sketch_report.json",
+                json.dumps(
+                    drawable_scene.get("soft_sketch_report"),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
 
         state["project"] = project
         state["current_step"] = "vision_completed"
@@ -408,7 +609,124 @@ class VisionAgent(BaseAgent):
                 "content": f"Problem recognition completed: {problem_text[:50]}...",
             }
         )
+
+        # Add user-visible fallback notification if quality is degraded
+        fallback_notification = self._build_fallback_notification(vision_quality)
+        if fallback_notification:
+            state["messages"].append(fallback_notification)
+
         return state
+
+    def _preprocess_problem_image(self, image_path: str) -> Dict[str, Any]:
+        report = preprocess_problem_image(
+            image_path,
+            output_dir=self.output_dir,
+            enabled=self.scan_preprocess_enabled,
+            target_min_side=self.scan_preprocess_target_min_side,
+            max_output_side=self.scan_preprocess_max_output_side,
+            remove_colored_ink=self.scan_preprocess_remove_colored_ink,
+        )
+        try:
+            self._write_debug_text(
+                "vision_image_preprocess.json",
+                json.dumps(report, ensure_ascii=False, indent=2),
+            )
+        except Exception as exc:
+            self._record_debug_issue("write_image_preprocess_report", exc)
+        return report
+
+    def _allow_soft_sketch_priority(
+        self,
+        *,
+        normalized_spec: Dict[str, Any],
+        geometry_facts: Dict[str, Any],
+        coordinate_scene_validation: Optional[Dict[str, Any]],
+    ) -> bool:
+        if not isinstance(coordinate_scene_validation, dict) or not bool(
+            coordinate_scene_validation.get("is_valid")
+        ):
+            return True
+        return not self._has_hard_geometry_constraints(
+            normalized_spec=normalized_spec,
+            geometry_facts=geometry_facts,
+        )
+
+    def _has_sufficient_pixel_anchor_coverage(
+        self,
+        geometry_data: Optional[Dict[str, Any]],
+        *,
+        min_anchors: int = 3,
+        min_ratio: float = 0.5,
+    ) -> bool:
+        if not isinstance(geometry_data, dict):
+            return False
+        points = geometry_data.get("points") or []
+        if not isinstance(points, list) or not points:
+            return False
+
+        point_count = 0
+        anchor_count = 0
+        for item in points:
+            if not isinstance(item, dict):
+                continue
+            point_id = str(item.get("id", "")).strip()
+            if not point_id:
+                continue
+            point_count += 1
+            payload = copy.deepcopy(item)
+            normalize_point_pixel_anchor(payload)
+            coord = payload.get("pixel_coord")
+            if not isinstance(coord, dict):
+                continue
+            try:
+                x = float(coord.get("x"))
+                y = float(coord.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                anchor_count += 1
+
+        if anchor_count < min_anchors or point_count <= 0:
+            return False
+        coverage = anchor_count / point_count
+        return coverage >= min_ratio or anchor_count >= 4
+
+    def _has_hard_geometry_constraints(
+        self,
+        *,
+        normalized_spec: Dict[str, Any],
+        geometry_facts: Dict[str, Any],
+    ) -> bool:
+        hard_types = {
+            "angle",
+            "collinear",
+            "equal_length",
+            "length",
+            "midpoint",
+            "parallel",
+            "perpendicular",
+            "point_on_segment",
+            "ratio",
+        }
+        for bucket in (
+            geometry_facts.get("text_explicit_relations"),
+            geometry_facts.get("text_explicit_measurements"),
+        ):
+            for item in bucket or []:
+                if (
+                    isinstance(item, dict)
+                    and str(item.get("type", "")).strip().lower() in hard_types
+                ):
+                    return True
+        if isinstance(normalized_spec, dict):
+            for bucket_name in ("constraints", "measurements"):
+                for item in normalized_spec.get(bucket_name) or []:
+                    if (
+                        isinstance(item, dict)
+                        and str(item.get("type", "")).strip().lower() in hard_types
+                    ):
+                        return True
+        return False
 
     def _extract_and_stabilize_bundle(
         self,
@@ -423,9 +741,10 @@ class VisionAgent(BaseAgent):
             bundle = self._recover_problem_bundle(image_path, bundle)
         bundle = self._stabilize_problem_bundle(bundle, image_path=image_path)
 
-        problem_text = str(project_problem_text or "").strip() or str(
-            bundle.get("problem_text", "")
-        ).strip()
+        problem_text = (
+            str(project_problem_text or "").strip()
+            or str(bundle.get("problem_text", "")).strip()
+        )
         if str(project_problem_text or "").strip():
             text_source = "manual_override"
         else:
@@ -442,6 +761,23 @@ class VisionAgent(BaseAgent):
             if isinstance(legacy_geometry_spec, dict)
             else {}
         )
+        scene_draft = (
+            bundle.get("scene_draft")
+            if isinstance(bundle.get("scene_draft"), dict)
+            else self.geometry_normalizer.build_scene_draft(
+                geometry_facts,
+                problem_text=problem_text,
+            )
+        )
+        geometry_ir = (
+            bundle.get("geometry_ir")
+            if isinstance(bundle.get("geometry_ir"), dict)
+            else self.geometry_normalizer.build_geometry_ir(
+                geometry_facts,
+                problem_text=problem_text,
+                scene_draft=scene_draft,
+            )
+        )
         vision_quality = {
             "text_source": text_source,
             "geometry_source": geometry_source,
@@ -453,7 +789,64 @@ class VisionAgent(BaseAgent):
             "bundle": bundle,
             "problem_text": problem_text,
             "geometry_facts": geometry_facts,
+            "scene_draft": scene_draft,
+            "geometry_ir": geometry_ir,
             "vision_quality": vision_quality,
+        }
+
+    def _build_fallback_notification(
+        self,
+        vision_quality: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Build a user-visible notification when fallback/degradation occurred."""
+        quality_level = vision_quality.get("vision_quality_level", "unknown")
+        fallback_events = list(vision_quality.get("fallback_events") or [])
+
+        if quality_level == "exact" or not fallback_events:
+            return None
+
+        severity_map = {
+            "recovered": "info",
+            "schematic": "warning",
+            "degraded": "warning",
+        }
+        severity = severity_map.get(quality_level, "info")
+
+        descriptions = {
+            "recover_problem_bundle": "题目内容识别不完整，已使用备用方案恢复",
+            "ocr_fallback": "主要识别方式失败，已切换到 OCR 文字提取",
+            "recover_problem_text_fallback": "题目文本提取失败，已使用备用 OCR",
+            "recover_geometry_facts_fallback": "几何信息提取失败，已使用备用方案",
+            "problem_text_fallback": "题目文本提取失败，已使用备用方案",
+            "problem_text_upgrade": "题目文本质量较低，已尝试优化",
+            "geometry_facts_fallback": "几何信息提取失败，已使用备用方案",
+            "geometry_spec_compile_fallback": "几何规格编译失败，已使用空规格继续",
+            "coordinate_scene_fallback": "坐标系构建失败，已使用示意图模式",
+            "fold_solver_failed_safe_fallback": "折叠类题目处理失败，已使用安全降级模式",
+            "fold_solver_failed_soft_sketch": "折叠类坐标精确求解失败，已使用软草图重建",
+            "soft_sketch_reconstruction": "已按视觉锚点和软约束重建线框草图",
+            "fold_safe_fallback_pruned": "已裁剪不可靠的折叠反射数据",
+        }
+
+        triggered = []
+        for event in fallback_events:
+            desc = descriptions.get(event, event)
+            if desc not in triggered:
+                triggered.append(desc)
+
+        return {
+            "role": "assistant",
+            "content": (
+                f"⚠️ 题目识别使用了降级模式（{quality_level}）。"
+                f"以下环节使用了备用方案：{'；'.join(triggered)}。"
+                "结果可能不够精确，建议核实题目内容。"
+            ),
+            "metadata": {
+                "type": "vision_fallback_warning",
+                "severity": severity,
+                "quality_level": quality_level,
+                "fallback_events": fallback_events,
+            },
         }
 
     def _compile_and_infer(
@@ -461,10 +854,12 @@ class VisionAgent(BaseAgent):
         *,
         problem_text: str,
         geometry_facts: Dict[str, Any],
+        geometry_ir: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         geometry_spec, compile_error = self._compile_geometry_spec_with_diagnostics(
             geometry_facts,
             problem_text=problem_text,
+            geometry_ir=geometry_ir,
         )
         semantic_signals = self._infer_semantic_signals(
             problem_text=problem_text,
@@ -485,7 +880,9 @@ class VisionAgent(BaseAgent):
     ) -> Dict[str, Any]:
         merged = copy.deepcopy(geometry_facts or {})
         has_fold_semantics = self._contains_fold_semantics(problem_text)
-        has_explicit_midpoint = bool(re.search(r"中点|midpoint", str(problem_text or ""), re.IGNORECASE))
+        has_explicit_midpoint = bool(
+            re.search(r"中点|midpoint", str(problem_text or ""), re.IGNORECASE)
+        )
         has_high_risk_semantics = bool(
             re.search(
                 r"折叠|翻折|对折|切线|圆幂|轨迹|圆|⊙|○|locus|fold|reflect|tangent|circle|dynamic|moving",
@@ -493,11 +890,24 @@ class VisionAgent(BaseAgent):
                 re.IGNORECASE,
             )
         )
-        allow_derived_for_compiler = bool(self.config.get("allow_derived_facts_for_compiler", False))
-        allow_derived_for_compiler = allow_derived_for_compiler and not has_high_risk_semantics
+        allow_derived_for_compiler = bool(
+            self.config.get("allow_derived_facts_for_compiler", False)
+        )
+        allow_derived_for_compiler = (
+            allow_derived_for_compiler and not has_high_risk_semantics
+        )
 
         def keep_inferred_relation(item: Any) -> bool:
             if not isinstance(item, dict):
+                return False
+            status = str(item.get("status", "")).strip().lower()
+            role = str(item.get("role", "")).strip().lower()
+            source = str(item.get("source", "")).strip().lower()
+            if status in {"goal", "proof_goal", "to_prove", "conclusion"}:
+                return False
+            if role in {"goal", "proof_goal", "to_prove", "conclusion"}:
+                return False
+            if source in {"problem_text_goal", "proof_goal"}:
                 return False
             confidence = item.get("confidence")
             if confidence is not None:
@@ -507,7 +917,11 @@ class VisionAgent(BaseAgent):
                 except (TypeError, ValueError):
                     pass
             relation_type = str(item.get("type", "")).strip().lower()
-            if has_fold_semantics and relation_type == "midpoint" and not has_explicit_midpoint:
+            if (
+                has_fold_semantics
+                and relation_type == "midpoint"
+                and not has_explicit_midpoint
+            ):
                 return False
             return True
 
@@ -523,13 +937,25 @@ class VisionAgent(BaseAgent):
                     pass
             return True
 
-        observed_relations = list(merged.get("observed_relations") or merged.get("relations") or [])
+        observed_relations = list(
+            merged.get("observed_relations") or merged.get("relations") or []
+        )
         text_explicit_relations = list(merged.get("text_explicit_relations") or [])
-        derived_relations = list(merged.get("derived_relations") or merged.get("inferred_relations") or [])
+        derived_relations = list(
+            merged.get("derived_relations") or merged.get("inferred_relations") or []
+        )
 
-        observed_measurements = list(merged.get("observed_measurements") or merged.get("measurements") or [])
-        text_explicit_measurements = list(merged.get("text_explicit_measurements") or [])
-        derived_measurements = list(merged.get("derived_measurements") or merged.get("inferred_measurements") or [])
+        observed_measurements = list(
+            merged.get("observed_measurements") or merged.get("measurements") or []
+        )
+        text_explicit_measurements = list(
+            merged.get("text_explicit_measurements") or []
+        )
+        derived_measurements = list(
+            merged.get("derived_measurements")
+            or merged.get("inferred_measurements")
+            or []
+        )
 
         compiler_relations = self._dedupe_fact_dicts(
             [*observed_relations, *text_explicit_relations]
@@ -578,7 +1004,10 @@ class VisionAgent(BaseAgent):
         geometry_facts: Optional[Dict[str, Any]],
         *,
         problem_text: str,
+        geometry_ir: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Optional[str]]:
+        if isinstance(geometry_ir, dict):
+            geometry_facts = self.geometry_normalizer.compiler_facts(geometry_ir)
         merged_facts = self._compose_compiler_geometry_facts(
             geometry_facts,
             problem_text=problem_text,
@@ -619,7 +1048,11 @@ class VisionAgent(BaseAgent):
             if str(text_source) == "model" and str(geometry_source) == "model":
                 return "exact"
             return "recovered"
-        if "solver_fallback" in normalized_scene_source or "safe_fallback" in normalized_scene_source:
+        if (
+            "solver_fallback" in normalized_scene_source
+            or "safe_fallback" in normalized_scene_source
+            or "soft_sketch" in normalized_scene_source
+        ):
             return "schematic"
         return "degraded"
 
@@ -637,11 +1070,16 @@ class VisionAgent(BaseAgent):
             return False
         solver_trace = validation_report.get("solver_trace") or []
         for item in solver_trace:
-            if "template fold failed" in str(item).lower() or "unsupported template: fold" in str(item).lower():
+            if (
+                "template fold failed" in str(item).lower()
+                or "unsupported template: fold" in str(item).lower()
+            ):
                 return True
         return False
 
-    def _prune_fold_reflection_artifacts(self, geometry_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _prune_fold_reflection_artifacts(
+        self, geometry_data: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         payload = copy.deepcopy(geometry_data or {})
         if not isinstance(payload, dict):
             return {}
@@ -655,7 +1093,8 @@ class VisionAgent(BaseAgent):
                     filtered_points.append(item)
                     continue
                 point_id = str(item.get("id", "")).strip()
-                derived = item.get("derived") if isinstance(item.get("derived"), dict) else {}
+                raw_derived = item.get("derived")
+                derived = raw_derived if isinstance(raw_derived, dict) else {}
                 if str(derived.get("type", "")).strip().lower() == "reflect_point":
                     if point_id:
                         reflected_point_ids.add(point_id)
@@ -673,14 +1112,27 @@ class VisionAgent(BaseAgent):
                     continue
                 primitive_id = str(item.get("id", "")).strip()
                 primitive_type = str(item.get("type", "")).strip().lower()
-                refs = [str(ref).strip() for ref in (item.get("points") or []) if str(ref).strip()]
+                refs = [
+                    str(ref).strip()
+                    for ref in (item.get("points") or [])
+                    if str(ref).strip()
+                ]
                 should_drop = False
-                if primitive_type in {"segment", "polygon", "angle", "right_angle", "arc"}:
+                if primitive_type in {
+                    "segment",
+                    "polygon",
+                    "angle",
+                    "right_angle",
+                    "arc",
+                }:
                     should_drop = any(ref in reflected_point_ids for ref in refs)
                 elif primitive_type == "circle":
                     center = str(item.get("center", "")).strip()
                     radius_point = str(item.get("radius_point", "")).strip()
-                    should_drop = center in reflected_point_ids or radius_point in reflected_point_ids
+                    should_drop = (
+                        center in reflected_point_ids
+                        or radius_point in reflected_point_ids
+                    )
                 if should_drop:
                     if primitive_id:
                         removed_primitive_ids.add(primitive_id)
@@ -695,8 +1147,15 @@ class VisionAgent(BaseAgent):
                 if not isinstance(item, dict):
                     filtered_constraints.append(item)
                     continue
-                entities = [str(entity).strip() for entity in (item.get("entities") or []) if str(entity).strip()]
-                if any(entity in reflected_point_ids or entity in removed_primitive_ids for entity in entities):
+                entities = [
+                    str(entity).strip()
+                    for entity in (item.get("entities") or [])
+                    if str(entity).strip()
+                ]
+                if any(
+                    entity in reflected_point_ids or entity in removed_primitive_ids
+                    for entity in entities
+                ):
                     continue
                 filtered_constraints.append(item)
             payload["constraints"] = filtered_constraints
@@ -708,8 +1167,15 @@ class VisionAgent(BaseAgent):
                 if not isinstance(item, dict):
                     filtered_measurements.append(item)
                     continue
-                entities = [str(entity).strip() for entity in (item.get("entities") or []) if str(entity).strip()]
-                if any(entity in reflected_point_ids or entity in removed_primitive_ids for entity in entities):
+                entities = [
+                    str(entity).strip()
+                    for entity in (item.get("entities") or [])
+                    if str(entity).strip()
+                ]
+                if any(
+                    entity in reflected_point_ids or entity in removed_primitive_ids
+                    for entity in entities
+                ):
                     continue
                 filtered_measurements.append(item)
             payload["measurements"] = filtered_measurements
@@ -736,7 +1202,11 @@ class VisionAgent(BaseAgent):
         text = str(problem_text or "")
         signals = semantic_signals if isinstance(semantic_signals, dict) else {}
         inferred_pattern = str(signals.get("inferred_problem_pattern", "")).strip()
-        high_risk_pattern = inferred_pattern in {"fold_transform", "circle_geometry", "dynamic_point"}
+        high_risk_pattern = inferred_pattern in {
+            "fold_transform",
+            "circle_geometry",
+            "dynamic_point",
+        }
         high_risk_text = bool(
             re.search(
                 r"折叠|翻折|对折|切线|圆幂|轨迹|locus|fold|tangent|dynamic|moving",
@@ -763,27 +1233,58 @@ class VisionAgent(BaseAgent):
         policy: Dict[str, Any],
     ) -> Dict[str, Any]:
         adjusted = copy.deepcopy(semantic_signals or {})
-        if str(policy.get("mode", "")).strip() != "limited":
+        mode = str(policy.get("mode", "")).strip()
+        if mode == "soft_sketch":
+            adjusted["fallback_animation_mode"] = str(
+                policy.get("animation_mode", "soft_graph_strong_explanation")
+            )
+            adjusted["uses_soft_sketch_reconstruction"] = True
+            return adjusted
+        if mode != "limited":
             return adjusted
         adjusted["needs_extra_geometry_animation"] = False
         adjusted["recommended_geometry_actions"] = []
         adjusted["recommended_geometry_action_details"] = []
-        adjusted["fallback_animation_mode"] = str(policy.get("animation_mode", "weak_graph_strong_explanation"))
+        adjusted["fallback_animation_mode"] = str(
+            policy.get("animation_mode", "weak_graph_strong_explanation")
+        )
         return adjusted
+
+    def _read_image_size(self, image_path: str) -> Tuple[Optional[int], Optional[int]]:
+        try:
+            from PIL import Image
+
+            with Image.open(image_path) as image:
+                width, height = image.size
+            return int(width), int(height)
+        except Exception as exc:
+            self._record_debug_issue("read_image_size", exc)
+            return None, None
 
     def _analyze_problem_bundle(self, image_path: str) -> Dict[str, Any]:
         with open(image_path, "rb") as file:
             image_data = base64.b64encode(file.read()).decode()
 
+        source_width, source_height = self._read_image_size(image_path)
+        image_size_hint = (
+            f"The uploaded source image size is {source_width}x{source_height} pixels."
+            if source_width and source_height
+            else "The uploaded source image pixel size is unavailable."
+        )
+
         prompt = """
 Analyze this plane-geometry problem image and return JSON only.
+__IMAGE_SIZE_HINT__
 
 Requirements:
 1. `problem_text` must contain the full OCR text.
-2. `geometry_facts` must contain only entities, relations, and known measurements. Do not invent coordinates.
-3. Be conservative. If something is uncertain, leave it out instead of guessing.
-4. Segment or line names such as `AB`, `AC`, `BE` are not point ids. Only labeled points like `A`, `B`, `C`, `O`, `D`, `E`, `M`, `P`, `C1` belong in `points`.
-5. Prefer simple fact buckets instead of final compiler-ready schema:
+2. Treat the visual output as a Scene Draft: visible points, label boxes, visible segments, line style, faces, fold correspondences, and OCR. Do not output final Manim coordinates or abstract math coordinates.
+3. `geometry_facts` must contain only visual facts, text-explicit facts, and known measurements. Do not invent solver-derived topology.
+4. Be conservative. If something is uncertain, leave it out instead of guessing.
+5. For every visible labeled point, include its approximate original uploaded-image pixel anchor in `geometry_facts.points` as an object: `{ "id": "A", "pixel_coord": {"x": 123, "y": 456}, "pixel_coord_space": "source" }`. Pixel origin is the top-left of the uploaded source image; x grows right and y grows down. `pixel_coord` must be the geometric point/dot/vertex, not the center of the text label. If the point is visible but hard to localize, omit only the pixel field, not the point.
+6. If the text label is visible, also include its text bounding box as `label_bbox`: `{ "x1": 100, "y1": 80, "x2": 130, "y2": 105 }`, with `label_bbox_space: "source"`. Use this only for the printed label region; do not substitute it for `pixel_coord`.
+7. Segment or line names such as `AB`, `AC`, `BE` are not point ids. Only labeled points like `A`, `B`, `C`, `O`, `D`, `E`, `M`, `P`, `C1` belong in `points`.
+8. Prefer simple fact buckets instead of final compiler-ready schema:
    - `points`
    - `segments`
    - `polygons`
@@ -793,13 +1294,14 @@ Requirements:
    - `right_angles`
    - `relations`
    - `measurements`
-6. Each relation item must use one of:
+9. Each relation item must use one of:
    `point_on_segment`, `point_on_circle`, `collinear`, `perpendicular`, `parallel`, `midpoint`, `equal_length`, `intersect`.
-7. Each measurement item must use one of:
+10. Each measurement item must use one of:
    `length`, `angle`, `ratio`.
-8. For a circle, include `center`, and if possible include `radius_point` or `points_on_circle`.
-9. For an arc, include `center` and only the two arc endpoints.
-10. If you cannot fit something into the simple fact buckets, omit it instead of inventing a new schema.
+11. For a circle, include `center`, and if possible include `radius_point` or `points_on_circle`.
+12. For an arc, include `center` and only the two arc endpoints.
+13. Put facts directly visible in the diagram in `relations` or `measurements`; put facts explicitly stated in OCR in `text_explicit_relations` or `text_explicit_measurements`; put inferred facts only in `derived_relations` or `derived_measurements`.
+14. If you cannot fit something into the simple fact buckets, omit it instead of inventing a new schema.
 
 Return exactly:
 {
@@ -808,7 +1310,7 @@ Return exactly:
     "confidence": 0.0,
     "ambiguities": [],
     "roles": {},
-    "points": [],
+    "points": [{"id": "A", "pixel_coord": {"x": 0, "y": 0}, "pixel_coord_space": "source", "label_bbox": {"x1": 0, "y1": 0, "x2": 0, "y2": 0}, "label_bbox_space": "source"}],
     "segments": [],
     "polygons": [],
     "circles": [],
@@ -816,10 +1318,14 @@ Return exactly:
     "angles": [],
     "right_angles": [],
     "relations": [],
-    "measurements": []
+    "measurements": [],
+    "text_explicit_relations": [],
+    "text_explicit_measurements": [],
+    "derived_relations": [],
+    "derived_measurements": []
   }
 }
-"""
+""".replace("__IMAGE_SIZE_HINT__", image_size_hint)
 
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -840,7 +1346,9 @@ Return exactly:
             Path(self.output_dir).mkdir(parents=True, exist_ok=True)
             debug_dir = Path(self.output_dir) / "debug"
             debug_dir.mkdir(parents=True, exist_ok=True)
-            (debug_dir / "vision_bundle_raw_response.txt").write_text(result, encoding="utf-8")
+            (debug_dir / "vision_bundle_raw_response.txt").write_text(
+                result, encoding="utf-8"
+            )
         except Exception as exc:
             self._record_debug_issue("analyze_problem_bundle_raw_response", exc)
         parsed_bundle = self._parse_json_like_output(
@@ -907,7 +1415,8 @@ Return exactly:
                     "model_score": round(model_score, 2),
                     "ocr_score": round(ocr_score, 2),
                     "picked": "ocr"
-                    if str(parsed_bundle.get("problem_text", "")).strip() == ocr_problem_text
+                    if str(parsed_bundle.get("problem_text", "")).strip()
+                    == ocr_problem_text
                     else "geometry_bundle",
                 },
                 ensure_ascii=False,
@@ -921,10 +1430,16 @@ Return exactly:
         if not isinstance(bundle, dict):
             return True
         problem_text = str(bundle.get("problem_text", "")).strip()
-        geometry_facts = bundle.get("geometry_facts") or bundle.get("geometry_spec") or {}
-        return (not problem_text) and (not self._geometry_facts_have_content(geometry_facts))
+        geometry_facts = (
+            bundle.get("geometry_facts") or bundle.get("geometry_spec") or {}
+        )
+        return (not problem_text) and (
+            not self._geometry_facts_have_content(geometry_facts)
+        )
 
-    def _geometry_facts_have_content(self, geometry_facts: Optional[Dict[str, Any]]) -> bool:
+    def _geometry_facts_have_content(
+        self, geometry_facts: Optional[Dict[str, Any]]
+    ) -> bool:
         if not isinstance(geometry_facts, dict):
             return False
         buckets = [
@@ -1009,6 +1524,8 @@ Return exactly:
         geometry_facts = stabilized.get("geometry_facts")
         if not isinstance(geometry_facts, dict):
             geometry_facts = {}
+        source_width, source_height = self._read_image_size(image_path)
+        image_size = (source_width, source_height)
         text_source = str(stabilized.get("problem_text_source", "model"))
         geometry_source = str(stabilized.get("geometry_facts_source", "model"))
 
@@ -1017,7 +1534,9 @@ Return exactly:
             text_source = "ocr_fallback"
             fallback_events.append("problem_text_fallback")
         else:
-            upgraded = self._upgrade_problem_text_if_needed(problem_text, image_path=image_path)
+            upgraded = self._upgrade_problem_text_if_needed(
+                problem_text, image_path=image_path
+            )
             if upgraded != problem_text:
                 text_source = "upgraded_ocr"
                 fallback_events.append("problem_text_upgrade")
@@ -1028,7 +1547,9 @@ Return exactly:
             geometry_facts,
             text_facts,
         )
-        geometry_facts = self._sanitize_geometry_facts(geometry_facts, problem_text=problem_text)
+        geometry_facts = self._sanitize_geometry_facts(
+            geometry_facts, problem_text=problem_text, image_size=image_size
+        )
         if (
             geometry_facts.get("text_explicit_relations")
             or geometry_facts.get("text_explicit_measurements")
@@ -1045,19 +1566,32 @@ Return exactly:
                 image_path=image_path,
                 problem_text=problem_text,
             )
-            geometry_facts = self._sanitize_geometry_facts(fallback, problem_text=problem_text)
+            geometry_facts = self._sanitize_geometry_facts(
+                fallback, problem_text=problem_text, image_size=image_size
+            )
             geometry_source = "geometry_fallback"
             fallback_events.append("geometry_facts_fallback")
 
+        normalized = self.geometry_normalizer.normalize(
+            geometry_facts,
+            problem_text=problem_text,
+            image_size=image_size,
+        )
+        scene_draft = normalized["scene_draft"]
+        geometry_ir = normalized["geometry_ir"]
         stabilized["problem_text"] = problem_text
         stabilized["geometry_facts"] = geometry_facts
+        stabilized["scene_draft"] = scene_draft
+        stabilized["geometry_ir"] = geometry_ir
         stabilized["text_facts"] = text_facts
         stabilized["problem_text_source"] = text_source
         stabilized["geometry_facts_source"] = geometry_source
         stabilized["fallback_events"] = list(dict.fromkeys(fallback_events))
         return stabilized
 
-    def _extract_text_facts_from_problem_text(self, problem_text: str) -> Dict[str, Any]:
+    def _extract_text_facts_from_problem_text(
+        self, problem_text: str
+    ) -> Dict[str, Any]:
         normalized = self._normalize_prime_markers(problem_text)
         result: Dict[str, Any] = {
             "points": [],
@@ -1071,7 +1605,7 @@ Return exactly:
             return result
 
         points: List[str] = []
-        for token in re.findall(r"[A-Z]\d*'*", normalized):
+        for token in self._iter_problem_text_point_tokens(normalized):
             point = self._normalize_point_token(token)
             if point:
                 points.append(point)
@@ -1091,23 +1625,77 @@ Return exactly:
         text_measurements: List[Dict[str, Any]] = []
         derived_measurements: List[Dict[str, Any]] = []
 
-        for match in re.finditer(r"([A-Z]\d*'*)\s*是\s*([A-Z]\d*'*[A-Z]\d*'*)\s*的?中点", normalized):
+        for match in re.finditer(
+            r"([A-Z]\d*'*)\s*是\s*([A-Z]\d*'*[A-Z]\d*'*)\s*的?中点", normalized
+        ):
             point_id = self._normalize_point_token(match.group(1))
             segment_id = self._normalize_segment_token(match.group(2))
             if point_id and segment_id:
-                text_relations.append({"type": "midpoint", "point": point_id, "segment": segment_id})
+                text_relations.append(
+                    {"type": "midpoint", "point": point_id, "segment": segment_id}
+                )
 
-        for match in re.finditer(r"([A-Z]\d*'*)\s*(?:在|是)\s*([A-Z]\d*'*[A-Z]\d*'*)\s*(?:上|上一点|上的一点)", normalized):
+        for match in re.finditer(
+            r"([A-Z]\d*'*)\s*(?:在|是)\s*([A-Z]\d*'*[A-Z]\d*'*)\s*(?:上|上一点|上的一点)",
+            normalized,
+        ):
             point_id = self._normalize_point_token(match.group(1))
             segment_id = self._normalize_segment_token(match.group(2))
             if point_id and segment_id:
-                text_relations.append({"type": "point_on_segment", "point": point_id, "segment": segment_id})
+                text_relations.append(
+                    {
+                        "type": "point_on_segment",
+                        "point": point_id,
+                        "segment": segment_id,
+                    }
+                )
 
-        for match in re.finditer(r"([A-Z]\d*'*)\s*(?:在|属于)?\s*[⊙○]\s*([A-Z]\d*'*)\s*(?:上|内)?", normalized):
+        for match in re.finditer(
+            r"([A-Z]\d*'*)\s*(?:在|属于)?\s*[⊙○]\s*([A-Z]\d*'*)\s*(?:上|内)?",
+            normalized,
+        ):
             point_id = self._normalize_point_token(match.group(1))
             center = self._normalize_point_token(match.group(2))
             if point_id and center:
-                text_relations.append({"type": "point_on_circle", "point": point_id, "circle": f"circle_{center}"})
+                text_relations.append(
+                    {
+                        "type": "point_on_circle",
+                        "point": point_id,
+                        "circle": f"circle_{center}",
+                    }
+                )
+
+        segment_pattern = r"([A-Z]\d*['′]?[A-Z]\d*['′]?)"
+        explicit_relation_patterns = [
+            ("parallel", rf"{segment_pattern}\s*(?:∥|//)\s*{segment_pattern}"),
+            (
+                "parallel",
+                rf"{segment_pattern}\s*与\s*{segment_pattern}\s*(?:互相)?平行",
+            ),
+            ("perpendicular", rf"{segment_pattern}\s*(?:⊥|⟂)\s*{segment_pattern}"),
+            (
+                "perpendicular",
+                rf"{segment_pattern}\s*与\s*{segment_pattern}\s*(?:互相)?垂直",
+            ),
+            ("equal_length", rf"{segment_pattern}\s*=\s*{segment_pattern}"),
+        ]
+        for relation_type, pattern in explicit_relation_patterns:
+            for match in re.finditer(pattern, normalized):
+                first = self._normalize_segment_token(match.group(1))
+                second = self._normalize_segment_token(match.group(2))
+                if first and second and first != second:
+                    payload = {"type": relation_type, "segments": [first, second]}
+                    if self._is_problem_text_goal_relation(normalized, match.start()):
+                        payload.update(
+                            {
+                                "source": "problem_text_goal",
+                                "status": "goal",
+                                "confidence": 0.98,
+                            }
+                        )
+                        result["derived_relations"].append(payload)
+                    else:
+                        text_relations.append(payload)
 
         for match in re.finditer(
             r"(?<![A-Z0-9'′])([A-Z]\d*['′]?[A-Z]\d*['′]?)\s*=\s*([-+]?\d+(?:\.\d+)?)",
@@ -1119,21 +1707,42 @@ Return exactly:
             value = self._safe_float(match.group(2), default=None)
             if value is None:
                 continue
-            text_measurements.append({"type": "length", "segment": segment_id, "value": value})
+            text_measurements.append(
+                {"type": "length", "segment": segment_id, "value": value}
+            )
 
-        for match in re.finditer(r"∠\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2})\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized):
+        for match in re.finditer(
+            r"∠\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2})\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized
+        ):
             angle_name = self._normalize_angle_name("∠" + match.group(1))
             value = self._safe_float(match.group(2), default=None)
             if angle_name and value is not None:
-                text_measurements.append({"type": "angle", "angle": angle_name, "value": value})
+                text_measurements.append(
+                    {"type": "angle", "angle": angle_name, "value": value}
+                )
 
-        for match in re.finditer(r"tan\s*([A-Z]\d*'*)\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized, flags=re.IGNORECASE):
+        for match in re.finditer(
+            r"tan\s*([A-Z]\d*'*)\s*=\s*([-+]?\d+(?:\.\d+)?)",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
             angle_name = self._normalize_angle_name("∠" + match.group(1))
             if angle_name:
-                derived_measurements.append({"type": "angle", "angle": angle_name, "value": f"arctan({match.group(2)})"})
+                derived_measurements.append(
+                    {
+                        "type": "angle",
+                        "angle": angle_name,
+                        "value": f"arctan({match.group(2)})",
+                    }
+                )
 
         result["text_explicit_relations"] = self._dedupe_fact_dicts(text_relations)
-        result["text_explicit_measurements"] = self._dedupe_fact_dicts(text_measurements)
+        result["text_explicit_measurements"] = self._dedupe_fact_dicts(
+            text_measurements
+        )
+        result["derived_relations"] = self._dedupe_fact_dicts(
+            result.get("derived_relations") or []
+        )
         result["derived_measurements"] = self._dedupe_fact_dicts(derived_measurements)
         return result
 
@@ -1145,16 +1754,35 @@ Return exactly:
         merged = copy.deepcopy(geometry_facts or {})
         text_payload = text_facts if isinstance(text_facts, dict) else {}
 
-        merged_points = self._ordered_unique_tokens(
+        merged_point_payloads = self._point_payloads_from_raw(merged.get("points"))
+        merged_point_ids = self._ordered_unique_tokens(
             [
-                *[str(item).strip() for item in (merged.get("points") or []) if str(item).strip()],
-                *[str(item).strip() for item in (text_payload.get("points") or []) if str(item).strip()],
+                *list(merged_point_payloads.keys()),
+                *[
+                    str(item).strip()
+                    for item in (text_payload.get("points") or [])
+                    if str(item).strip()
+                ],
             ]
         )
+        merged_points = [
+            copy.deepcopy(merged_point_payloads[point_id])
+            if point_id in merged_point_payloads
+            else point_id
+            for point_id in merged_point_ids
+        ]
         merged_segments = self._ordered_unique_tokens(
             [
-                *[str(item).strip() for item in (merged.get("segments") or []) if str(item).strip()],
-                *[str(item).strip() for item in (text_payload.get("segments") or []) if str(item).strip()],
+                *[
+                    str(item).strip()
+                    for item in (merged.get("segments") or [])
+                    if str(item).strip()
+                ],
+                *[
+                    str(item).strip()
+                    for item in (text_payload.get("segments") or [])
+                    if str(item).strip()
+                ],
             ]
         )
         merged["points"] = merged_points
@@ -1167,14 +1795,24 @@ Return exactly:
             "derived_measurements",
         ):
             combined = [
-                *[item for item in (merged.get(bucket) or []) if isinstance(item, dict)],
-                *[item for item in (text_payload.get(bucket) or []) if isinstance(item, dict)],
+                *[
+                    item
+                    for item in (merged.get(bucket) or [])
+                    if isinstance(item, dict)
+                ],
+                *[
+                    item
+                    for item in (text_payload.get(bucket) or [])
+                    if isinstance(item, dict)
+                ],
             ]
             merged[bucket] = self._dedupe_fact_dicts(combined)
 
         return merged
 
-    def _upgrade_problem_text_if_needed(self, problem_text: str, *, image_path: str) -> str:
+    def _upgrade_problem_text_if_needed(
+        self, problem_text: str, *, image_path: str
+    ) -> str:
         base_text = str(problem_text or "").strip()
         if not self._should_retry_problem_text(base_text):
             return base_text
@@ -1212,12 +1850,19 @@ Return exactly:
             return False
 
         has_blank = bool(re.search(r"（\s*\)|\(\s*\)", text))
-        has_choice_markers = bool(re.search(r"(?:^|\n)\s*[A-DＡ-Ｄ][\.、．\)]\s*", text, re.IGNORECASE))
+        has_choice_markers = bool(
+            re.search(r"(?:^|\n)\s*[A-DＡ-Ｄ][\.、．\)]\s*", text, re.IGNORECASE)
+        )
         has_terminal_punctuation = bool(re.search(r"[。！？?]$", text))
         if has_blank and not has_choice_markers:
             return True
 
-        if len(text) < 80 and (not has_choice_markers) and (not has_terminal_punctuation) and ("\n" not in text):
+        if (
+            len(text) < 80
+            and (not has_choice_markers)
+            and (not has_terminal_punctuation)
+            and ("\n" not in text)
+        ):
             return True
 
         if text.endswith(("，", ",", "、", "；", ";", ":", "：")):
@@ -1245,6 +1890,7 @@ Return exactly:
         geometry_facts: Optional[Dict[str, Any]],
         *,
         problem_text: str,
+        image_size: Optional[Tuple[Optional[int], Optional[int]]] = None,
     ) -> Dict[str, Any]:
         facts = copy.deepcopy(geometry_facts or {})
         sanitized: Dict[str, Any] = {
@@ -1264,6 +1910,7 @@ Return exactly:
             "right_angles": [],
             "relations": [],
             "observed_relations": [],
+            "unverified_observed_relations": [],
             "text_explicit_relations": [],
             "derived_relations": [],
             "inferred_relations": [],
@@ -1272,14 +1919,26 @@ Return exactly:
             "text_explicit_measurements": [],
             "derived_measurements": [],
             "inferred_measurements": [],
+            "display": copy.deepcopy(facts.get("display"))
+            if isinstance(facts.get("display"), dict)
+            else {"points": {}, "primitives": {}},
         }
 
+        point_payloads = self._point_payloads_from_raw(
+            facts.get("points"), image_size=image_size
+        )
         points = self._ordered_unique_tokens(
-            list(self._iter_point_tokens(facts.get("points")))
+            list(point_payloads.keys())
+            + list(self._iter_point_tokens(facts.get("points")))
             + list(self._iter_problem_text_points(problem_text))
         )
         point_set = set(points)
-        sanitized["points"] = points
+        sanitized["points"] = [
+            copy.deepcopy(point_payloads[point_id])
+            if point_id in point_payloads
+            else point_id
+            for point_id in points
+        ]
 
         segments = self._ordered_unique_tokens(
             list(self._iter_segment_tokens(facts.get("segments")))
@@ -1339,7 +1998,9 @@ Return exactly:
             measurements=sanitized["measurements"],
         )
         has_fold_semantics = self._contains_fold_semantics(problem_text)
-        has_explicit_midpoint = bool(re.search(r"中点|midpoint", str(problem_text or ""), re.IGNORECASE))
+        has_explicit_midpoint = bool(
+            re.search(r"中点|midpoint", str(problem_text or ""), re.IGNORECASE)
+        )
 
         sanitized["text_explicit_relations"] = self._sanitize_relation_bucket(
             facts.get("text_explicit_relations"),
@@ -1418,6 +2079,32 @@ Return exactly:
             point_set=point_set,
             segment_set=segment_set,
         )
+        self._prune_conflicting_polygon_topology(
+            sanitized,
+            problem_text=problem_text,
+            point_set=point_set,
+        )
+        segment_set = set(sanitized.get("segments") or [])
+        self._augment_fold_visible_structure(
+            sanitized,
+            problem_text=problem_text,
+            point_set=point_set,
+            segment_set=segment_set,
+        )
+
+        relation_verification = self._verify_observed_relations_against_text(
+            sanitized.get("observed_relations", []),
+            text_relations=[
+                *sanitized.get("text_explicit_relations", []),
+                *sanitized.get("derived_relations", []),
+            ],
+            problem_text=problem_text,
+        )
+        sanitized["observed_relations"] = relation_verification["verified_relations"]
+        sanitized["unverified_observed_relations"] = relation_verification[
+            "unverified_relations"
+        ]
+        sanitized["fact_verification_report"] = relation_verification["report"]
 
         sanitized["relations"] = self._dedupe_fact_dicts(
             [
@@ -1431,39 +2118,450 @@ Return exactly:
                 *sanitized.get("text_explicit_measurements", []),
             ]
         )
-        sanitized["derived_relations"] = self._dedupe_fact_dicts(sanitized.get("derived_relations", []))
-        sanitized["derived_measurements"] = self._dedupe_fact_dicts(sanitized.get("derived_measurements", []))
+        sanitized["derived_relations"] = self._dedupe_fact_dicts(
+            sanitized.get("derived_relations", [])
+        )
+        sanitized["derived_measurements"] = self._dedupe_fact_dicts(
+            sanitized.get("derived_measurements", [])
+        )
         # Backward compatibility for downstream consumers still reading inferred_*.
         sanitized["inferred_relations"] = copy.deepcopy(sanitized["derived_relations"])
-        sanitized["inferred_measurements"] = copy.deepcopy(sanitized["derived_measurements"])
+        sanitized["inferred_measurements"] = copy.deepcopy(
+            sanitized["derived_measurements"]
+        )
         sanitized["points"] = self._merge_ordered_points(sanitized["points"], point_set)
         return sanitized
 
-    def _iter_point_tokens(self, raw: Any):
-        if isinstance(raw, (list, tuple)):
+    def _augment_fold_visible_structure(
+        self,
+        facts: Dict[str, Any],
+        *,
+        problem_text: str,
+        point_set: set,
+        segment_set: set,
+    ) -> None:
+        normalized_text = self._normalize_prime_markers(problem_text)
+        if not re.search(
+            r"折叠|翻折|对折|fold|reflect",
+            str(normalized_text or ""),
+            re.IGNORECASE,
+        ):
+            return
+
+        axis_segment = self._infer_text_fold_axis_segment(normalized_text)
+        image_pairs = self._infer_fold_image_pairs_from_points(point_set)
+        if not axis_segment or not image_pairs:
+            return
+
+        axis_refs = self._segment_endpoints_from_token(axis_segment)
+        if len(axis_refs) != 2:
+            return
+
+        source_to_image = {
+            source: image
+            for source, image in image_pairs
+            if source and image and source != image
+        }
+        if not source_to_image:
+            return
+
+        if axis_segment not in segment_set:
+            facts.setdefault("segments", []).append(axis_segment)
+            segment_set.add(axis_segment)
+
+        display = facts.setdefault("display", {})
+        primitive_display = display.setdefault("primitives", {})
+        primitive_display.setdefault(f"seg_{axis_segment}", {}).update(
+            {"style": "solid", "role": "fold_axis", "source": "fold_transform"}
+        )
+
+        original_segments = self._dedupe_undirected_segments(facts.get("segments") or [])
+        folded_segments: List[str] = []
+        dashed_original_segments: List[str] = []
+        folded_segment_pairs: List[Tuple[str, str]] = []
+        for segment in original_segments:
+            refs = self._segment_endpoints_from_token(segment)
+            if len(refs) != 2:
+                continue
+            mapped_refs = [source_to_image.get(ref, ref) for ref in refs]
+            if mapped_refs == refs:
+                continue
+            folded_segment = self._normalize_segment_token("".join(mapped_refs))
+            if folded_segment:
+                folded_segments.append(folded_segment)
+                folded_segment_pairs.append((segment, folded_segment))
+            if set(refs) != set(axis_refs):
+                dashed_original_segments.append(segment)
+
+        for segment in self._dedupe_undirected_segments(folded_segments):
+            if segment not in segment_set:
+                facts.setdefault("segments", []).append(segment)
+                segment_set.add(segment)
+            primitive_display.setdefault(f"seg_{segment}", {}).update(
+                {
+                    "style": "solid",
+                    "role": "folded_visible",
+                    "source": "fold_transform",
+                }
+            )
+
+        for segment in self._dedupe_undirected_segments(dashed_original_segments):
+            primitive_display.setdefault(f"seg_{segment}", {}).update(
+                {
+                    "style": "dashed",
+                    "role": "pre_fold_reference",
+                    "source": "fold_transform",
+                }
+            )
+
+        polygons = facts.setdefault("polygons", [])
+        folded_polygons: List[str] = []
+        for polygon in list(self._iter_polygon_tokens(polygons)):
+            refs = self._polygon_refs_from_token(polygon)
+            if len(refs) < 3:
+                continue
+            mapped_refs = [source_to_image.get(ref, ref) for ref in refs]
+            if mapped_refs == refs or len(set(mapped_refs)) < 3:
+                continue
+            folded_polygon = self._normalize_polygon_token("".join(mapped_refs))
+            if folded_polygon:
+                folded_polygons.append(folded_polygon)
+
+        for polygon in self._ordered_unique_tokens(folded_polygons):
+            if polygon not in polygons:
+                polygons.append(polygon)
+            primitive_display.setdefault(f"poly_{polygon}", {}).update(
+                {
+                    "role": "folded_visible_outline",
+                    "source": "fold_transform",
+                }
+            )
+
+        seen_relation_pairs: set[frozenset] = set()
+        for original, folded in folded_segment_pairs:
+            if original == folded:
+                continue
+            pair_key = frozenset((original, folded))
+            if pair_key in seen_relation_pairs:
+                continue
+            seen_relation_pairs.add(pair_key)
+            relation = {"type": "equal_length", "segments": [original, folded]}
+            self._append_unique_relation(facts, "derived_relations", relation)
+
+    def _infer_text_fold_axis_segment(self, text: Any) -> str:
+        plain = self._plain_geometry_text(text)
+        patterns = [
+            r"沿([A-Z]\d*'*[A-Z]\d*'*)(?:折叠|翻折|对折)",
+            r"关于(?:直线)?([A-Z]\d*'*[A-Z]\d*'*).{0,6}(?:折叠|翻折|对折|对称)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, plain, re.IGNORECASE)
+            if not match:
+                continue
+            segment = self._normalize_segment_token(match.group(1))
+            if segment:
+                return segment
+        return ""
+
+    def _infer_fold_image_pairs_from_points(self, point_set: set) -> List[Tuple[str, str]]:
+        normalized_points = {
+            self._normalize_point_token(point)
+            for point in point_set or set()
+            if self._normalize_point_token(point)
+        }
+        pairs: List[Tuple[str, str]] = []
+        for point in sorted(normalized_points):
+            if not point.endswith("'"):
+                continue
+            source = point[:-1]
+            if source in normalized_points:
+                pairs.append((source, point))
+        return pairs
+
+    def _plain_geometry_text(self, text: Any) -> str:
+        plain = self._normalize_prime_markers(text)
+        plain = plain.replace("\\(", "").replace("\\)", "")
+        plain = plain.replace("\\[", "").replace("\\]", "")
+        plain = plain.replace("{", "").replace("}", "")
+        plain = plain.replace("\\", "")
+        plain = re.sub(r"\s+", "", plain)
+        return plain
+
+    def _is_problem_text_goal_relation(
+        self, normalized_text: str, match_start: int
+    ) -> bool:
+        text = self._normalize_prime_markers(normalized_text)
+        try:
+            start = int(match_start)
+        except (TypeError, ValueError):
+            return False
+        if start <= 0:
+            return False
+        prefix = text[:start]
+        lower_prefix = prefix.lower()
+        goal_markers = ("求证", "证明", "证：", "证:", "prove", "show that")
+        last_goal = max(
+            (lower_prefix.rfind(marker) for marker in goal_markers),
+            default=-1,
+        )
+        if last_goal < 0:
+            return False
+        last_boundary = max(
+            (
+                prefix.rfind(marker)
+                for marker in ("。", "！", "？", "?", "；", ";", "\n")
+            ),
+            default=-1,
+        )
+        if last_goal < last_boundary:
+            return False
+        last_given = max(
+            (prefix.rfind(marker) for marker in ("已知", "设", "令", "连接", "作")),
+            default=-1,
+        )
+        return last_goal >= last_given
+
+    def _append_unique_relation(
+        self,
+        facts: Dict[str, Any],
+        bucket: str,
+        relation: Dict[str, Any],
+    ) -> None:
+        items = facts.setdefault(bucket, [])
+        candidate = json.dumps(relation, ensure_ascii=False, sort_keys=True)
+        existing = {
+            json.dumps(item, ensure_ascii=False, sort_keys=True)
+            for item in items
+            if isinstance(item, dict)
+        }
+        if candidate not in existing:
+            items.append(relation)
+
+    def _append_unique_angle(
+        self,
+        facts: Dict[str, Any],
+        bucket: str,
+        angle: Dict[str, Any],
+    ) -> None:
+        self._append_unique_relation(facts, bucket, angle)
+
+    def _verify_observed_relations_against_text(
+        self,
+        observed_relations: List[Dict[str, Any]],
+        *,
+        text_relations: List[Dict[str, Any]],
+        problem_text: str,
+    ) -> Dict[str, Any]:
+        gated_types = {
+            "parallel",
+            "perpendicular",
+            "equal_length",
+            "midpoint",
+            "collinear",
+        }
+        verified: List[Dict[str, Any]] = []
+        unverified: List[Dict[str, Any]] = []
+        normalized_text = self._normalize_prime_markers(problem_text)
+        text_signatures = {
+            self._relation_text_signature(item)
+            for item in text_relations
+            if isinstance(item, dict)
+        }
+        text_signatures.discard("")
+
+        for relation in observed_relations or []:
+            if not isinstance(relation, dict):
+                continue
+            relation_type = str(relation.get("type", "")).strip().lower()
+            if (
+                relation_type not in gated_types
+                or not str(normalized_text or "").strip()
+            ):
+                verified.append(copy.deepcopy(relation))
+                continue
+            signature = self._relation_text_signature(relation)
+            has_text_fact = bool(signature and signature in text_signatures)
+            has_keyword_support = self._problem_text_supports_relation_type(
+                relation_type, normalized_text
+            )
+            if has_text_fact or has_keyword_support:
+                item = copy.deepcopy(relation)
+                item.setdefault("source", "vision_geometry_guess")
+                item.setdefault("status", "text_supported")
+                item.setdefault("confidence", 0.8)
+                item["text_verification"] = (
+                    "matched_text_fact" if has_text_fact else "matched_text_keyword"
+                )
+                verified.append(item)
+                continue
+
+            item = copy.deepcopy(relation)
+            item["source"] = str(item.get("source") or "vision_geometry_guess")
+            item["status"] = "unverified_from_text"
+            base_confidence = self._safe_float(item.get("confidence"), default=0.55)
+            item["confidence"] = round(max(0.05, min(1.0, base_confidence * 0.3)), 4)
+            item["text_verification"] = "missing_text_support"
+            evidence = item.get("evidence")
+            if not isinstance(evidence, list):
+                evidence = []
+            evidence.append("problem_text:no supporting explicit or keyword evidence")
+            item["evidence"] = evidence
+            unverified.append(item)
+
+        report = {
+            "version": "v1",
+            "policy": "text_grounded_geometry_relations",
+            "gated_relation_types": sorted(gated_types),
+            "verified_observed_relations": len(verified),
+            "unverified_observed_relations": len(unverified),
+        }
+        return {
+            "verified_relations": self._dedupe_fact_dicts(verified),
+            "unverified_relations": self._dedupe_fact_dicts(unverified),
+            "report": report,
+        }
+
+    def _relation_text_signature(self, relation: Dict[str, Any]) -> str:
+        relation_type = str(relation.get("type", "")).strip().lower()
+        if not relation_type:
+            return ""
+        if relation_type in {"parallel", "perpendicular", "equal_length"}:
+            raw_segments = relation.get("segments") or relation.get("lines") or []
+            segments = [self._normalize_segment_token(item) for item in raw_segments]
+            segments = [item for item in segments if item]
+            if len(segments) < 2:
+                return ""
+            return f"{relation_type}:{'|'.join(sorted(segments[:2]))}"
+        if relation_type == "midpoint":
+            point_id = self._normalize_point_token(
+                relation.get("point") or relation.get("midpoint")
+            )
+            segment_id = self._normalize_segment_token(
+                relation.get("segment") or relation.get("line")
+            )
+            if point_id and segment_id:
+                return f"{relation_type}:{point_id}|{segment_id}"
+        if relation_type == "collinear":
+            points = [
+                self._normalize_point_token(item)
+                for item in (relation.get("points") or relation.get("entities") or [])
+            ]
+            points = [item for item in points if item]
+            if len(points) >= 3:
+                return f"{relation_type}:{'|'.join(sorted(points[:3]))}"
+        return ""
+
+    def _problem_text_supports_relation_type(
+        self,
+        relation_type: str,
+        normalized_text: str,
+    ) -> bool:
+        patterns = {
+            "parallel": r"平行|∥|//|平行四边形|矩形|正方形|菱形|梯形",
+            "perpendicular": r"垂直|直角|⊥|⟂|90\s*°?|矩形|正方形|对角线互相垂直",
+            "equal_length": r"相等|等长|等腰|等边|菱形|正方形|半径|直径|(?<!\d)=[A-Z]",
+            "midpoint": r"中点|平分",
+            "collinear": r"共线|在.+上",
+        }
+        pattern = patterns.get(str(relation_type or "").strip().lower())
+        if not pattern:
+            return False
+        return bool(re.search(pattern, str(normalized_text or ""), re.IGNORECASE))
+
+    def _point_payloads_from_raw(
+        self,
+        raw: Any,
+        *,
+        image_size: Optional[Tuple[Optional[int], Optional[int]]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        payloads: Dict[str, Dict[str, Any]] = {}
+
+        def add_payload(raw_id: Any, payload: Optional[Dict[str, Any]] = None) -> None:
+            point_id = self._normalize_point_token(raw_id)
+            if not point_id:
+                return
+            if not isinstance(payload, dict):
+                return
+            item = copy.deepcopy(payload)
+            item["id"] = point_id
+            normalize_point_pixel_anchor(item, image_size=image_size)
+            payloads[point_id] = item
+
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                add_payload(key, value if isinstance(value, dict) else None)
+        elif isinstance(raw, (list, tuple)):
             for item in raw:
-                token = self._normalize_point_token(item if not isinstance(item, dict) else item.get("id") or item.get("label") or item.get("name"))
+                if isinstance(item, dict):
+                    add_payload(
+                        item.get("id") or item.get("label") or item.get("name"), item
+                    )
+                else:
+                    add_payload(item)
+        else:
+            add_payload(raw)
+        return payloads
+
+    def _iter_point_tokens(self, raw: Any):
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                token = self._normalize_point_token(key)
+                if token:
+                    yield token
+                if isinstance(value, dict):
+                    nested = self._normalize_point_token(
+                        value.get("id") or value.get("label") or value.get("name")
+                    )
+                    if nested:
+                        yield nested
+        elif isinstance(raw, (list, tuple)):
+            for item in raw:
+                token = self._normalize_point_token(
+                    item
+                    if not isinstance(item, dict)
+                    else item.get("id") or item.get("label") or item.get("name")
+                )
                 if token:
                     yield token
 
     def _iter_problem_text_points(self, text: str):
         normalized = self._normalize_prime_markers(text)
-        for token in re.findall(r"[A-Z]\d*'*", normalized):
+        for token in self._iter_problem_text_point_tokens(normalized):
             point = self._normalize_point_token(token)
             if point:
                 yield point
 
+    def _iter_problem_text_point_tokens(self, normalized_text: str):
+        text = str(normalized_text or "")
+        for match in re.finditer(r"[A-Z]\d*['′]?", text):
+            start, end = match.span()
+            prev_char = text[start - 1] if start > 0 else ""
+            next_char = text[end] if end < len(text) else ""
+            if prev_char and re.match(r"[a-z]", prev_char):
+                continue
+            if next_char and re.match(r"[a-z]", next_char):
+                continue
+            yield match.group(0)
+
     def _iter_segment_tokens(self, raw: Any):
         if isinstance(raw, (list, tuple)):
             for item in raw:
-                token = self._normalize_segment_token(item if not isinstance(item, dict) else item.get("id") or item.get("segment") or item.get("label"))
+                token = self._normalize_segment_token(
+                    item
+                    if not isinstance(item, dict)
+                    else item.get("id") or item.get("segment") or item.get("label")
+                )
                 if token:
                     yield token
 
     def _iter_polygon_tokens(self, raw: Any):
         if isinstance(raw, (list, tuple)):
             for item in raw:
-                token = self._normalize_polygon_token(item if not isinstance(item, dict) else item.get("id") or item.get("polygon") or item.get("label"))
+                token = self._normalize_polygon_token(
+                    item
+                    if not isinstance(item, dict)
+                    else item.get("id") or item.get("polygon") or item.get("label")
+                )
                 if token:
                     yield token
 
@@ -1476,7 +2574,7 @@ Return exactly:
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         seen: set = set()
-        for raw in (raw_bucket or []):
+        for raw in raw_bucket or []:
             if not isinstance(raw, dict):
                 continue
             vertex = self._normalize_point_token(raw.get("vertex"))
@@ -1486,7 +2584,9 @@ Return exactly:
                 for side in sides:
                     endpoints = self._segment_endpoints_from_token(side)
                     if len(endpoints) == 2 and vertex in endpoints:
-                        refs.append(endpoints[0] if endpoints[1] == vertex else endpoints[1])
+                        refs.append(
+                            endpoints[0] if endpoints[1] == vertex else endpoints[1]
+                        )
 
             if len(refs) != 2:
                 angle_points = self._extract_angle_points_from_text(
@@ -1505,8 +2605,20 @@ Return exactly:
                 point_set.add(refs[0])
                 point_set.add(refs[1])
 
-            if len(refs) == 2 and vertex and vertex in point_set and refs[0] in point_set and refs[1] in point_set:
-                payload = {"vertex": vertex, "sides": [self._normalize_segment_token(vertex + refs[0]), self._normalize_segment_token(vertex + refs[1])]}
+            if (
+                len(refs) == 2
+                and vertex
+                and vertex in point_set
+                and refs[0] in point_set
+                and refs[1] in point_set
+            ):
+                payload = {
+                    "vertex": vertex,
+                    "sides": [
+                        self._normalize_segment_token(vertex + refs[0]),
+                        self._normalize_segment_token(vertex + refs[1]),
+                    ],
+                }
                 for key in ("name", "label", "description"):
                     if str(raw.get(key, "")).strip():
                         payload[key] = str(raw.get(key)).strip()
@@ -1525,7 +2637,7 @@ Return exactly:
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         seen: set = set()
-        for raw in (raw_bucket or []):
+        for raw in raw_bucket or []:
             circle_id = ""
             center = ""
             radius_point = ""
@@ -1534,11 +2646,19 @@ Return exactly:
             if isinstance(raw, str):
                 center = self._normalize_circle_center_token(raw)
             elif isinstance(raw, dict):
-                circle_id = self._normalize_circle_id(raw.get("id") or raw.get("circle") or raw.get("circle_id"))
-                center = self._normalize_point_token(raw.get("center") or raw.get("origin") or raw.get("o"))
+                circle_id = self._normalize_circle_id(
+                    raw.get("id") or raw.get("circle") or raw.get("circle_id")
+                )
+                center = self._normalize_point_token(
+                    raw.get("center") or raw.get("origin") or raw.get("o")
+                )
                 if not center:
-                    center = self._normalize_circle_center_token(raw.get("label") or raw.get("name") or raw.get("id"))
-                radius_point = self._normalize_point_token(raw.get("radius_point") or raw.get("point"))
+                    center = self._normalize_circle_center_token(
+                        raw.get("label") or raw.get("name") or raw.get("id")
+                    )
+                radius_point = self._normalize_point_token(
+                    raw.get("radius_point") or raw.get("point")
+                )
                 points_on_circle = [
                     self._normalize_point_token(item)
                     for item in self._extract_points_from_any(
@@ -1548,7 +2668,9 @@ Return exactly:
                         or raw.get("entities")
                     )
                 ]
-                points_on_circle = [item for item in points_on_circle if item and item != center]
+                points_on_circle = [
+                    item for item in points_on_circle if item and item != center
+                ]
 
             if not center:
                 continue
@@ -1585,18 +2707,23 @@ Return exactly:
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         seen: set = set()
-        for raw in (raw_bucket or []):
+        for raw in raw_bucket or []:
             arc_id = ""
             center = ""
             circle_ref = ""
             endpoints: List[str] = []
 
             if isinstance(raw, str):
-                refs = [self._normalize_point_token(item) for item in self._extract_points_from_any(raw)]
+                refs = [
+                    self._normalize_point_token(item)
+                    for item in self._extract_points_from_any(raw)
+                ]
                 endpoints = [item for item in refs if item][:2]
             elif isinstance(raw, dict):
                 arc_id = str(raw.get("id") or "").strip().replace(" ", "_")
-                center = self._normalize_point_token(raw.get("center") or raw.get("origin"))
+                center = self._normalize_point_token(
+                    raw.get("center") or raw.get("origin")
+                )
                 circle_ref = self._resolve_circle_ref(
                     raw.get("circle") or raw.get("circle_id"),
                     circle_ref_map,
@@ -1662,20 +2789,34 @@ Return exactly:
         }
         result: List[Dict[str, Any]] = []
         seen: set = set()
-        for raw in (raw_bucket or []):
+        for raw in raw_bucket or []:
             if not isinstance(raw, dict):
                 continue
             relation_type = str(raw.get("type", "")).strip().lower()
             if relation_type not in allowed:
                 continue
             item = None
-            entity_refs = [str(item).strip() for item in (raw.get("entities") or []) if str(item).strip()]
+            entity_refs = [
+                str(item).strip()
+                for item in (raw.get("entities") or [])
+                if str(item).strip()
+            ]
             if relation_type == "point_on_segment":
-                point_id = self._normalize_point_token(raw.get("point") or (entity_refs[0] if entity_refs else ""))
-                segment_raw = raw.get("segment") or raw.get("line") or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                point_id = self._normalize_point_token(
+                    raw.get("point") or (entity_refs[0] if entity_refs else "")
+                )
+                segment_raw = (
+                    raw.get("segment")
+                    or raw.get("line")
+                    or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                )
                 segment_id = self._normalize_segment_token(segment_raw)
                 if point_id and point_id in point_set and segment_id:
-                    item = {"type": relation_type, "point": point_id, "segment": segment_id}
+                    item = {
+                        "type": relation_type,
+                        "point": point_id,
+                        "segment": segment_id,
+                    }
             elif relation_type == "collinear":
                 raw_points = raw.get("points") or entity_refs
                 pts = [self._normalize_point_token(item) for item in raw_points]
@@ -1687,30 +2828,68 @@ Return exactly:
                 segs = [self._normalize_segment_token(item) for item in raw_segments]
                 segs = [item for item in segs if item]
                 if relation_type == "equal_length" and len(segs) >= 2:
-                    item = {"type": relation_type, "segments": list(dict.fromkeys(segs))}
+                    item = {
+                        "type": relation_type,
+                        "segments": list(dict.fromkeys(segs)),
+                    }
                 elif len(dict.fromkeys(segs)) == 2:
-                    item = {"type": relation_type, "segments": list(dict.fromkeys(segs))}
+                    item = {
+                        "type": relation_type,
+                        "segments": list(dict.fromkeys(segs)),
+                    }
             elif relation_type == "midpoint":
-                point_id = self._normalize_point_token(raw.get("point") or raw.get("midpoint") or (entity_refs[0] if entity_refs else ""))
-                segment_raw = raw.get("segment") or raw.get("line") or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                point_id = self._normalize_point_token(
+                    raw.get("point")
+                    or raw.get("midpoint")
+                    or (entity_refs[0] if entity_refs else "")
+                )
+                segment_raw = (
+                    raw.get("segment")
+                    or raw.get("line")
+                    or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                )
                 segment_id = self._normalize_segment_token(segment_raw)
                 if has_fold_semantics and not allow_midpoint:
                     continue
                 if point_id and point_id in point_set and segment_id:
-                    item = {"type": relation_type, "point": point_id, "segment": segment_id}
+                    item = {
+                        "type": relation_type,
+                        "point": point_id,
+                        "segment": segment_id,
+                    }
             elif relation_type == "intersect":
-                point_id = self._normalize_point_token(raw.get("point") or raw.get("intersection") or (entity_refs[0] if entity_refs else ""))
-                raw_segments = raw.get("segments") or raw.get("lines") or entity_refs[1:]
+                point_id = self._normalize_point_token(
+                    raw.get("point")
+                    or raw.get("intersection")
+                    or (entity_refs[0] if entity_refs else "")
+                )
+                raw_segments = (
+                    raw.get("segments") or raw.get("lines") or entity_refs[1:]
+                )
                 segs = [self._normalize_segment_token(item) for item in raw_segments]
                 segs = [item for item in segs if item]
                 if point_id and point_id in point_set and len(dict.fromkeys(segs)) == 2:
-                    item = {"type": relation_type, "point": point_id, "segments": list(dict.fromkeys(segs))}
+                    item = {
+                        "type": relation_type,
+                        "point": point_id,
+                        "segments": list(dict.fromkeys(segs)),
+                    }
             elif relation_type == "point_on_circle":
-                point_id = self._normalize_point_token(raw.get("point") or (entity_refs[0] if entity_refs else ""))
-                circle_raw = raw.get("circle") or raw.get("circle_id") or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                point_id = self._normalize_point_token(
+                    raw.get("point") or (entity_refs[0] if entity_refs else "")
+                )
+                circle_raw = (
+                    raw.get("circle")
+                    or raw.get("circle_id")
+                    or (entity_refs[1] if len(entity_refs) >= 2 else "")
+                )
                 circle_id = self._resolve_circle_ref(circle_raw, circle_ref_map)
                 if point_id and point_id in point_set and circle_id:
-                    item = {"type": relation_type, "point": point_id, "circle": circle_id}
+                    item = {
+                        "type": relation_type,
+                        "point": point_id,
+                        "circle": circle_id,
+                    }
 
             if not item:
                 continue
@@ -1731,15 +2910,21 @@ Return exactly:
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         seen: set = set()
-        for raw in (raw_bucket or []):
+        for raw in raw_bucket or []:
             if not isinstance(raw, dict):
                 continue
             measurement_type = str(raw.get("type", "")).strip().lower()
             item = None
             if measurement_type == "length":
-                segment_id = self._normalize_segment_token(raw.get("segment") or raw.get("line"))
+                segment_id = self._normalize_segment_token(
+                    raw.get("segment") or raw.get("line")
+                )
                 if not segment_id:
-                    entities = [str(item).strip() for item in (raw.get("entities") or []) if str(item).strip()]
+                    entities = [
+                        str(item).strip()
+                        for item in (raw.get("entities") or [])
+                        if str(item).strip()
+                    ]
                     if len(entities) == 2:
                         segment_id = self._normalize_segment_token("".join(entities))
                 value = self._extract_numeric_or_symbolic_value(raw.get("value"))
@@ -1747,7 +2932,9 @@ Return exactly:
                     item = {"type": "length", "segment": segment_id, "value": value}
             elif measurement_type == "angle":
                 value = self._extract_angle_value(raw.get("value"))
-                angle_name = self._normalize_angle_name(raw.get("angle") or raw.get("name") or raw.get("label"))
+                angle_name = self._normalize_angle_name(
+                    raw.get("angle") or raw.get("name") or raw.get("label")
+                )
                 vertex = self._normalize_point_token(raw.get("vertex"))
                 if angle_name and value is not None:
                     item = {"type": "angle", "angle": angle_name, "value": value}
@@ -1766,7 +2953,9 @@ Return exactly:
                         item = {"type": "angle", "entities": entities, "value": value}
             elif measurement_type == "ratio":
                 value = self._extract_numeric_or_symbolic_value(raw.get("value"))
-                raw_segments = raw.get("segments") or raw.get("lines") or raw.get("entities") or []
+                raw_segments = (
+                    raw.get("segments") or raw.get("lines") or raw.get("entities") or []
+                )
                 segs = [self._normalize_segment_token(item) for item in raw_segments]
                 segs = [item for item in segs if item]
                 if len(segs) >= 2 and value is not None:
@@ -1825,8 +3014,12 @@ Return exactly:
         segment_set: set,
     ) -> None:
         normalized = self._normalize_prime_markers(problem_text)
-        facts.setdefault("observed_relations", copy.deepcopy(facts.get("relations") or []))
-        facts.setdefault("observed_measurements", copy.deepcopy(facts.get("measurements") or []))
+        facts.setdefault(
+            "observed_relations", copy.deepcopy(facts.get("relations") or [])
+        )
+        facts.setdefault(
+            "observed_measurements", copy.deepcopy(facts.get("measurements") or [])
+        )
         facts.setdefault("text_explicit_relations", [])
         facts.setdefault("text_explicit_measurements", [])
         facts.setdefault("derived_relations", [])
@@ -1902,7 +3095,10 @@ Return exactly:
             if circle_payload not in facts["circles"]:
                 facts["circles"].append(circle_payload)
 
-        for match in re.finditer(r"([A-Z]\d*'*)\s*(?:在|属于)?\s*[⊙○]\s*([A-Z]\d*'*)\s*(?:上|内)?", normalized):
+        for match in re.finditer(
+            r"([A-Z]\d*'*)\s*(?:在|属于)?\s*[⊙○]\s*([A-Z]\d*'*)\s*(?:上|内)?",
+            normalized,
+        ):
             point_id = self._normalize_point_token(match.group(1))
             center = self._normalize_point_token(match.group(2))
             if not point_id or not center:
@@ -1917,7 +3113,11 @@ Return exactly:
             circle_payload = {"id": circle_id, "center": center}
             if circle_payload not in facts["circles"]:
                 facts["circles"].append(circle_payload)
-            relation_payload = {"type": "point_on_circle", "point": point_id, "circle": circle_id}
+            relation_payload = {
+                "type": "point_on_circle",
+                "point": point_id,
+                "circle": circle_id,
+            }
             push_relation(
                 relation_payload,
                 bucket="text_explicit_relations",
@@ -1927,8 +3127,103 @@ Return exactly:
                 also_primary=True,
             )
 
+        segment_pattern = r"([A-Z]\d*['′]?[A-Z]\d*['′]?)"
+        explicit_relation_patterns = [
+            ("parallel", rf"{segment_pattern}\s*(?:∥|//)\s*{segment_pattern}"),
+            (
+                "parallel",
+                rf"{segment_pattern}\s*与\s*{segment_pattern}\s*(?:互相)?平行",
+            ),
+            ("perpendicular", rf"{segment_pattern}\s*(?:⊥|⟂)\s*{segment_pattern}"),
+            (
+                "perpendicular",
+                rf"{segment_pattern}\s*与\s*{segment_pattern}\s*(?:互相)?垂直",
+            ),
+            ("equal_length", rf"{segment_pattern}\s*=\s*{segment_pattern}"),
+        ]
+        for relation_type, pattern in explicit_relation_patterns:
+            for match in re.finditer(pattern, normalized):
+                first = self._normalize_segment_token(match.group(1))
+                second = self._normalize_segment_token(match.group(2))
+                if not first or not second or first == second:
+                    continue
+                is_goal_relation = self._is_problem_text_goal_relation(
+                    normalized, match.start()
+                )
+                push_relation(
+                    {"type": relation_type, "segments": [first, second]},
+                    bucket=(
+                        "derived_relations"
+                        if is_goal_relation
+                        else "text_explicit_relations"
+                    ),
+                    source=(
+                        "problem_text_goal"
+                        if is_goal_relation
+                        else "problem_text_explicit"
+                    ),
+                    status="goal" if is_goal_relation else "text_explicit",
+                    confidence=0.98,
+                    also_primary=not is_goal_relation,
+                )
+
+        for match in re.finditer(
+            r"正方形\s*([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)",
+            normalized,
+        ):
+            refs = [self._normalize_point_token(token) for token in match.groups()]
+            refs = [item for item in refs if item]
+            if len(refs) != 4 or len(set(refs)) != 4:
+                continue
+            polygon = "".join(refs)
+            if polygon not in facts["polygons"]:
+                facts["polygons"].append(polygon)
+            edges = []
+            for first, second in zip(refs, refs[1:] + refs[:1]):
+                seg = self._normalize_segment_token(first + second)
+                if not seg:
+                    continue
+                edges.append(seg)
+                if seg not in facts["segments"]:
+                    facts["segments"].append(seg)
+            if len(edges) != 4:
+                continue
+            is_goal_shape = self._is_problem_text_goal_relation(
+                normalized, match.start()
+            )
+            square_relations = [
+                {"type": "parallel", "segments": [edges[0], edges[2]]},
+                {"type": "parallel", "segments": [edges[1], edges[3]]},
+                {"type": "perpendicular", "segments": [edges[0], edges[1]]},
+                {"type": "perpendicular", "segments": [edges[1], edges[2]]},
+                {"type": "perpendicular", "segments": [edges[2], edges[3]]},
+                {"type": "perpendicular", "segments": [edges[3], edges[0]]},
+                {"type": "equal_length", "segments": [edges[0], edges[1]]},
+                {"type": "equal_length", "segments": [edges[1], edges[2]]},
+                {"type": "equal_length", "segments": [edges[2], edges[3]]},
+            ]
+            for relation in square_relations:
+                push_relation(
+                    relation,
+                    bucket=(
+                        "derived_relations"
+                        if is_goal_shape
+                        else "text_explicit_relations"
+                    ),
+                    source=(
+                        "problem_text_goal"
+                        if is_goal_shape
+                        else "problem_text_explicit"
+                    ),
+                    status="goal" if is_goal_shape else "text_explicit",
+                    confidence=0.98,
+                    also_primary=not is_goal_shape,
+                )
+
         if "菱形" in normalized:
-            for match in re.finditer(r"菱形\s*([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)", normalized):
+            for match in re.finditer(
+                r"菱形\s*([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)([A-Z]\d*'*)", normalized
+            ):
                 refs = [self._normalize_point_token(token) for token in match.groups()]
                 refs = [item for item in refs if item]
                 if len(refs) != 4:
@@ -1941,11 +3236,41 @@ Return exactly:
                     if seg and seg not in facts["segments"]:
                         facts["segments"].append(seg)
                 parallels = [
-                    {"type": "parallel", "segments": [self._normalize_segment_token(refs[0] + refs[1]), self._normalize_segment_token(refs[2] + refs[3])]},
-                    {"type": "parallel", "segments": [self._normalize_segment_token(refs[1] + refs[2]), self._normalize_segment_token(refs[3] + refs[0])]},
-                    {"type": "equal_length", "segments": [self._normalize_segment_token(refs[0] + refs[1]), self._normalize_segment_token(refs[1] + refs[2])]},
-                    {"type": "equal_length", "segments": [self._normalize_segment_token(refs[1] + refs[2]), self._normalize_segment_token(refs[2] + refs[3])]},
-                    {"type": "equal_length", "segments": [self._normalize_segment_token(refs[2] + refs[3]), self._normalize_segment_token(refs[3] + refs[0])]},
+                    {
+                        "type": "parallel",
+                        "segments": [
+                            self._normalize_segment_token(refs[0] + refs[1]),
+                            self._normalize_segment_token(refs[2] + refs[3]),
+                        ],
+                    },
+                    {
+                        "type": "parallel",
+                        "segments": [
+                            self._normalize_segment_token(refs[1] + refs[2]),
+                            self._normalize_segment_token(refs[3] + refs[0]),
+                        ],
+                    },
+                    {
+                        "type": "equal_length",
+                        "segments": [
+                            self._normalize_segment_token(refs[0] + refs[1]),
+                            self._normalize_segment_token(refs[1] + refs[2]),
+                        ],
+                    },
+                    {
+                        "type": "equal_length",
+                        "segments": [
+                            self._normalize_segment_token(refs[1] + refs[2]),
+                            self._normalize_segment_token(refs[2] + refs[3]),
+                        ],
+                    },
+                    {
+                        "type": "equal_length",
+                        "segments": [
+                            self._normalize_segment_token(refs[2] + refs[3]),
+                            self._normalize_segment_token(refs[3] + refs[0]),
+                        ],
+                    },
                 ]
                 for relation in parallels:
                     push_relation(
@@ -1957,7 +3282,9 @@ Return exactly:
                         also_primary=False,
                     )
 
-        for match in re.finditer(r"沿\s*([A-Z]\d*'*[A-Z]\d*'*)\s*(?:折叠|翻折)", normalized):
+        for match in re.finditer(
+            r"沿\s*([A-Z]\d*'*[A-Z]\d*'*)\s*(?:折叠|翻折)", normalized
+        ):
             seg = self._normalize_segment_token(match.group(1))
             if seg and seg not in facts["segments"]:
                 facts["segments"].append(seg)
@@ -1968,7 +3295,11 @@ Return exactly:
         ):
             token = self._normalize_segment_token(match.group(1))
             if token:
-                payload = {"type": "length", "segment": token, "value": self._safe_float(match.group(2), default=None)}
+                payload = {
+                    "type": "length",
+                    "segment": token,
+                    "value": self._safe_float(match.group(2), default=None),
+                }
                 if payload["value"] is not None:
                     push_measurement(
                         payload,
@@ -1979,10 +3310,18 @@ Return exactly:
                         also_primary=True,
                     )
 
-        for match in re.finditer(r"tan\s*([A-Z]\d*'*)\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized, flags=re.IGNORECASE):
+        for match in re.finditer(
+            r"tan\s*([A-Z]\d*'*)\s*=\s*([-+]?\d+(?:\.\d+)?)",
+            normalized,
+            flags=re.IGNORECASE,
+        ):
             angle_name = self._normalize_angle_name("∠" + match.group(1))
             if angle_name:
-                payload = {"type": "angle", "angle": angle_name, "value": f"arctan({match.group(2)})"}
+                payload = {
+                    "type": "angle",
+                    "angle": angle_name,
+                    "value": f"arctan({match.group(2)})",
+                }
                 push_measurement(
                     payload,
                     bucket="derived_measurements",
@@ -1992,7 +3331,9 @@ Return exactly:
                     also_primary=False,
                 )
 
-        for match in re.finditer(r"∠\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2})\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized):
+        for match in re.finditer(
+            r"∠\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2})\s*=\s*([-+]?\d+(?:\.\d+)?)", normalized
+        ):
             angle_name = self._normalize_angle_name("∠" + match.group(1))
             value = self._safe_float(match.group(2), default=None)
             if angle_name and value is not None:
@@ -2015,8 +3356,10 @@ Return exactly:
             if not segment:
                 continue
             endpoints = self._segment_endpoints_from_token(segment)
-            if len(endpoints) == 2 and point_set and (
-                endpoints[0] not in point_set or endpoints[1] not in point_set
+            if (
+                len(endpoints) == 2
+                and point_set
+                and (endpoints[0] not in point_set or endpoints[1] not in point_set)
             ):
                 continue
             result.append(segment)
@@ -2025,10 +3368,210 @@ Return exactly:
     def _infer_problem_text_polygons(self, text: str, point_set: set) -> List[str]:
         normalized = self._normalize_prime_markers(text)
         result: List[str] = []
-        for match in re.finditer(r"(?:菱形|平行四边形|四边形|△|三角形)?\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2,3})", normalized):
+        for match in re.finditer(
+            r"(?:正方形|矩形|菱形|平行四边形|四边形|△|三角形)?\s*([A-Z]\d*'*(?:[A-Z]\d*'*){2,3})",
+            normalized,
+        ):
             token = self._normalize_polygon_token(match.group(1))
             if token:
                 result.append(token)
+        return result
+
+    def _infer_explicit_text_polygons(self, text: str, point_set: set) -> List[str]:
+        normalized = self._normalize_prime_markers(text)
+        result: List[str] = []
+        shape_patterns = [
+            r"(?:正方形|矩形|菱形|平行四边形|四边形|square|rectangle|rhombus|parallelogram|quadrilateral)\s*([A-Z]\d*'*)\s*([A-Z]\d*'*)\s*([A-Z]\d*'*)\s*([A-Z]\d*'*)",
+            r"(?:△|三角形|triangle)\s*([A-Z]\d*'*)\s*([A-Z]\d*'*)\s*([A-Z]\d*'*)",
+        ]
+        for pattern in shape_patterns:
+            for match in re.finditer(pattern, normalized, re.IGNORECASE):
+                refs = [self._normalize_point_token(token) for token in match.groups()]
+                refs = [item for item in refs if item]
+                if len(refs) < 3 or len(set(refs)) != len(refs):
+                    continue
+                if point_set and any(ref not in point_set for ref in refs):
+                    continue
+                result.append("".join(refs))
+        return self._ordered_unique_tokens(result)
+
+    def _polygon_refs_from_token(self, token: Any) -> List[str]:
+        normalized = self._normalize_polygon_token(token)
+        if not normalized:
+            return []
+        return [
+            self._normalize_point_token(item)
+            for item in self._extract_points_from_any(normalized)
+        ]
+
+    def _polygon_edge_keys(self, polygon: Any) -> List[frozenset]:
+        refs = [item for item in self._polygon_refs_from_token(polygon) if item]
+        if len(refs) < 3:
+            return []
+        edges: List[frozenset] = []
+        for first, second in zip(refs, refs[1:] + refs[:1]):
+            key = self._segment_edge_key(first + second)
+            if key:
+                edges.append(key)
+        return edges
+
+    def _segment_edge_key(self, raw_segment: Any) -> Optional[frozenset]:
+        segment = self._normalize_segment_token(raw_segment)
+        endpoints = self._segment_endpoints_from_token(segment)
+        if len(endpoints) != 2:
+            return None
+        return frozenset(endpoints)
+
+    def _relation_segment_edge_keys(self, relation: Dict[str, Any]) -> List[frozenset]:
+        if not isinstance(relation, dict):
+            return []
+        refs = relation.get("segments") or relation.get("lines") or []
+        if not isinstance(refs, (list, tuple)):
+            refs = [refs]
+        keys: List[frozenset] = []
+        for ref in refs:
+            key = self._segment_edge_key(ref)
+            if key:
+                keys.append(key)
+        segment = relation.get("segment") or relation.get("line")
+        key = self._segment_edge_key(segment)
+        if key:
+            keys.append(key)
+        return keys
+
+    def _prune_conflicting_polygon_topology(
+        self,
+        facts: Dict[str, Any],
+        *,
+        problem_text: str,
+        point_set: set,
+    ) -> None:
+        explicit_polygons = self._infer_explicit_text_polygons(
+            problem_text,
+            point_set,
+        )
+        input_polygons = self._ordered_unique_tokens(
+            list(self._iter_polygon_tokens(facts.get("polygons")))
+        )
+        if not input_polygons and not explicit_polygons:
+            return
+
+        segment_support = {
+            key
+            for key in (self._segment_edge_key(segment) for segment in facts.get("segments") or [])
+            if key
+        }
+        explicit_by_point_set: Dict[frozenset, List[str]] = {}
+        for polygon in explicit_polygons:
+            refs = self._polygon_refs_from_token(polygon)
+            if len(refs) >= 3:
+                explicit_by_point_set.setdefault(frozenset(refs), []).append(polygon)
+
+        candidates_by_point_set: Dict[frozenset, List[str]] = {}
+        candidate_order = self._ordered_unique_tokens(input_polygons + explicit_polygons)
+        for polygon in candidate_order:
+            refs = self._polygon_refs_from_token(polygon)
+            if len(refs) < 3:
+                continue
+            candidates_by_point_set.setdefault(frozenset(refs), []).append(polygon)
+
+        selected_by_point_set: Dict[frozenset, str] = {}
+        removed_polygons: List[str] = []
+        for point_key, candidates in candidates_by_point_set.items():
+            unique_edge_sets = {
+                tuple(sorted(tuple(sorted(edge)) for edge in self._polygon_edge_keys(candidate)))
+                for candidate in candidates
+            }
+            if len(candidates) == 1 or len(unique_edge_sets) <= 1:
+                selected_by_point_set[point_key] = candidates[0]
+                continue
+
+            explicit_candidates = explicit_by_point_set.get(point_key, [])
+
+            def score(candidate: str) -> Tuple[int, int, int]:
+                explicit_score = (
+                    len(explicit_candidates) - explicit_candidates.index(candidate)
+                    if candidate in explicit_candidates
+                    else 0
+                )
+                edge_score = sum(
+                    1 for edge in self._polygon_edge_keys(candidate) if edge in segment_support
+                )
+                order_score = len(candidate_order) - candidate_order.index(candidate)
+                return (explicit_score, edge_score, order_score)
+
+            selected = max(candidates, key=score)
+            selected_by_point_set[point_key] = selected
+            removed_polygons.extend(
+                candidate
+                for candidate in candidates
+                if candidate != selected
+                and set(self._polygon_edge_keys(candidate))
+                != set(self._polygon_edge_keys(selected))
+            )
+
+        kept_polygons: List[str] = []
+        for polygon in candidate_order:
+            refs = self._polygon_refs_from_token(polygon)
+            selected = selected_by_point_set.get(frozenset(refs))
+            if selected == polygon and polygon not in kept_polygons:
+                kept_polygons.append(polygon)
+
+        if not removed_polygons:
+            facts["polygons"] = kept_polygons
+            facts["segments"] = self._dedupe_undirected_segments(
+                facts.get("segments") or []
+            )
+            return
+
+        removed_edges: set[frozenset] = set()
+        for polygon in removed_polygons:
+            removed_edges.update(self._polygon_edge_keys(polygon))
+        protected_edges: set[frozenset] = set()
+        for polygon in kept_polygons:
+            protected_edges.update(self._polygon_edge_keys(polygon))
+        for segment in self._infer_problem_text_segments(problem_text, point_set):
+            key = self._segment_edge_key(segment)
+            if key:
+                protected_edges.add(key)
+
+        pruned_segments: List[str] = []
+        for segment in self._dedupe_undirected_segments(facts.get("segments") or []):
+            key = self._segment_edge_key(segment)
+            if key and key in removed_edges and key not in protected_edges:
+                continue
+            pruned_segments.append(segment)
+
+        def keep_relation(relation: Dict[str, Any]) -> bool:
+            for key in self._relation_segment_edge_keys(relation):
+                if key in removed_edges and key not in protected_edges:
+                    return False
+            return True
+
+        for bucket in (
+            "relations",
+            "observed_relations",
+            "text_explicit_relations",
+            "derived_relations",
+            "inferred_relations",
+        ):
+            facts[bucket] = [
+                item
+                for item in facts.get(bucket, []) or []
+                if keep_relation(item)
+            ]
+        facts["polygons"] = kept_polygons
+        facts["segments"] = pruned_segments
+
+    def _dedupe_undirected_segments(self, values: Any) -> List[str]:
+        result: List[str] = []
+        seen: set[frozenset] = set()
+        for segment in self._iter_segment_tokens(values):
+            key = self._segment_edge_key(segment)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(segment)
         return result
 
     def _normalize_point_token(self, raw: Any) -> str:
@@ -2129,10 +3672,17 @@ Return exactly:
         text = self._normalize_prime_markers(raw).strip()
         if not text:
             return []
-        match = re.search(r"(?:∠|angle)?\s*([A-Za-z]\d*'*(?:[A-Za-z]\d*'*){2})", text, flags=re.IGNORECASE)
+        match = re.search(
+            r"(?:∠|angle)?\s*([A-Za-z]\d*'*(?:[A-Za-z]\d*'*){2})",
+            text,
+            flags=re.IGNORECASE,
+        )
         if not match:
             return []
-        refs = [self._normalize_point_token(item) for item in re.findall(r"[A-Za-z]\d*'*", match.group(1))]
+        refs = [
+            self._normalize_point_token(item)
+            for item in re.findall(r"[A-Za-z]\d*'*", match.group(1))
+        ]
         refs = [item for item in refs if item]
         if len(refs) == 3:
             return refs
@@ -2142,7 +3692,9 @@ Return exactly:
         text = str(raw or "").strip()
         if not text:
             return None
-        arctan_match = re.search(r"arctan\(\s*[-+]?\d+(?:\.\d+)?\s*\)", text, flags=re.IGNORECASE)
+        arctan_match = re.search(
+            r"arctan\(\s*[-+]?\d+(?:\.\d+)?\s*\)", text, flags=re.IGNORECASE
+        )
         if arctan_match:
             return arctan_match.group(0)
         numeric = self._safe_float(text, default=None)
@@ -2207,7 +3759,9 @@ Return exactly:
             normalized.append(item)
         return self._dedupe_fact_dicts(normalized)
 
-    def _carry_fact_metadata(self, *, item: Dict[str, Any], raw: Dict[str, Any]) -> Dict[str, Any]:
+    def _carry_fact_metadata(
+        self, *, item: Dict[str, Any], raw: Dict[str, Any]
+    ) -> Dict[str, Any]:
         merged = copy.deepcopy(item)
         if not isinstance(raw, dict):
             return merged
@@ -2224,15 +3778,34 @@ Return exactly:
 
         evidence = raw.get("evidence")
         if isinstance(evidence, list):
-            merged["evidence"] = [str(item).strip() for item in evidence if str(item).strip()]
+            merged["evidence"] = [
+                str(item).strip() for item in evidence if str(item).strip()
+            ]
         elif str(evidence or "").strip():
             merged["evidence"] = [str(evidence).strip()]
 
         return merged
 
-    def _merge_ordered_points(self, existing_points: List[str], point_set: set) -> List[str]:
-        ordered = self._ordered_unique_tokens(list(existing_points or []))
-        seen = set(ordered)
+    def _merge_ordered_points(
+        self, existing_points: List[Any], point_set: set
+    ) -> List[Any]:
+        ordered: List[Any] = []
+        seen = set()
+        for item in existing_points or []:
+            point_id = self._normalize_point_token(
+                item.get("id") or item.get("label") or item.get("name")
+                if isinstance(item, dict)
+                else item
+            )
+            if not point_id or point_id in seen:
+                continue
+            seen.add(point_id)
+            if isinstance(item, dict):
+                payload = copy.deepcopy(item)
+                payload["id"] = point_id
+                ordered.append(payload)
+            else:
+                ordered.append(point_id)
         extras = sorted(item for item in point_set if item and item not in seen)
         ordered.extend(extras)
         return ordered
@@ -2276,7 +3849,13 @@ Return exactly:
                     continue
                 for item in page:
                     if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        text = str(item[1] if len(item) == 2 else item[1][0] if isinstance(item[1], (list, tuple)) else "").strip()
+                        text = str(
+                            item[1]
+                            if len(item) == 2
+                            else item[1][0]
+                            if isinstance(item[1], (list, tuple))
+                            else ""
+                        ).strip()
                         if text:
                             lines.append(text)
         return "\n".join(lines)
@@ -2330,20 +3909,24 @@ Be conservative. If uncertain, omit instead of guessing.
                 "measurements": [],
             },
         )
-        return parsed if isinstance(parsed, dict) else {
-            "confidence": 0.0,
-            "ambiguities": [],
-            "roles": {},
-            "points": [],
-            "segments": [],
-            "polygons": [],
-            "circles": [],
-            "arcs": [],
-            "angles": [],
-            "right_angles": [],
-            "relations": [],
-            "measurements": [],
-        }
+        return (
+            parsed
+            if isinstance(parsed, dict)
+            else {
+                "confidence": 0.0,
+                "ambiguities": [],
+                "roles": {},
+                "points": [],
+                "segments": [],
+                "polygons": [],
+                "circles": [],
+                "arcs": [],
+                "angles": [],
+                "right_angles": [],
+                "relations": [],
+                "measurements": [],
+            }
+        )
 
     def _infer_semantic_signals(
         self,
@@ -2356,7 +3939,9 @@ Be conservative. If uncertain, omit instead of guessing.
         lower_text = text.lower()
         templates = {
             str(item).strip().lower()
-            for item in (geometry_spec.get("templates") or geometry_facts.get("templates") or [])
+            for item in (
+                geometry_spec.get("templates") or geometry_facts.get("templates") or []
+            )
             if str(item).strip()
         }
         relation_types = {
@@ -2372,13 +3957,23 @@ Be conservative. If uncertain, omit instead of guessing.
             }
         )
 
-        is_fold = bool(re.search(r"折叠|翻折|对折|fold|reflect|镜像", text, re.IGNORECASE)) or ("fold" in templates)
-        is_circle = bool(re.search(r"圆|弧|切线|圆心|circle|tangent|chord", text, re.IGNORECASE)) or any(
-            token in templates for token in {"circle", "arc"}
+        is_fold = bool(
+            re.search(r"折叠|翻折|对折|fold|reflect|镜像", text, re.IGNORECASE)
+        ) or ("fold" in templates)
+        is_circle = bool(
+            re.search(r"圆|弧|切线|圆心|circle|tangent|chord", text, re.IGNORECASE)
+        ) or any(token in templates for token in {"circle", "arc"})
+        is_dynamic = bool(
+            re.search(r"动点|轨迹|变化|locus|moving", text, re.IGNORECASE)
         )
-        is_dynamic = bool(re.search(r"动点|轨迹|变化|locus|moving", text, re.IGNORECASE))
-        has_similarity = bool(re.search(r"相似|全等|similar|congruent", text, re.IGNORECASE))
-        has_distance_goal = bool(re.search(r"距离|distance|最短|shortest|垂线|perpendicular", text, re.IGNORECASE))
+        has_similarity = bool(
+            re.search(r"相似|全等|similar|congruent", text, re.IGNORECASE)
+        )
+        has_distance_goal = bool(
+            re.search(
+                r"距离|distance|最短|shortest|垂线|perpendicular", text, re.IGNORECASE
+            )
+        )
         has_tangent = bool(re.search(r"切线|tangent", text, re.IGNORECASE))
 
         inferred_pattern = "static_proof"
@@ -2412,7 +4007,9 @@ Be conservative. If uncertain, omit instead of guessing.
 
         action_details: List[Dict[str, Any]] = []
 
-        def push_action(action: str, confidence_value: float, evidence: List[str]) -> None:
+        def push_action(
+            action: str, confidence_value: float, evidence: List[str]
+        ) -> None:
             token = str(action or "").strip()
             if not token:
                 return
@@ -2420,13 +4017,27 @@ Be conservative. If uncertain, omit instead of guessing.
                 {
                     "action": token,
                     "confidence": round(float(confidence_value), 2),
-                    "evidence": list(dict.fromkeys([str(item).strip() for item in evidence if str(item).strip()])),
+                    "evidence": list(
+                        dict.fromkeys(
+                            [
+                                str(item).strip()
+                                for item in evidence
+                                if str(item).strip()
+                            ]
+                        )
+                    ),
                 }
             )
 
         if is_fold:
-            push_action("highlight_fold_axis", 0.93, ["text: 折叠关键词", "pattern: fold_transform"])
-            push_action("animate_fold", 0.92, ["text: 折叠关键词", "pattern: fold_transform"])
+            push_action(
+                "highlight_fold_axis",
+                0.93,
+                ["text: 折叠关键词", "pattern: fold_transform"],
+            )
+            push_action(
+                "animate_fold", 0.92, ["text: 折叠关键词", "pattern: fold_transform"]
+            )
             if has_distance_goal or "midpoint" in relation_types:
                 push_action(
                     "draw_perpendicular_auxiliary",
@@ -2441,7 +4052,10 @@ Be conservative. If uncertain, omit instead of guessing.
             )
         if has_similarity:
             push_action("draw_connection_auxiliary", 0.77, ["text: 相似/全等"])
-        elif "parallel" in relation_types and inferred_pattern in {"static_proof", "similarity_congruence"}:
+        elif "parallel" in relation_types and inferred_pattern in {
+            "static_proof",
+            "similarity_congruence",
+        }:
             push_action("draw_connection_auxiliary", 0.66, ["relation: parallel"])
 
         best_action_confidence: Dict[str, float] = {}
@@ -2449,7 +4063,10 @@ Be conservative. If uncertain, omit instead of guessing.
         for item in action_details:
             action = str(item.get("action", "")).strip()
             confidence_value = float(item.get("confidence", 0.0) or 0.0)
-            if action not in best_action_confidence or confidence_value > best_action_confidence[action]:
+            if (
+                action not in best_action_confidence
+                or confidence_value > best_action_confidence[action]
+            ):
                 best_action_confidence[action] = confidence_value
                 best_action_evidence[action] = list(item.get("evidence") or [])
 
@@ -2459,7 +4076,9 @@ Be conservative. If uncertain, omit instead of guessing.
                 "confidence": round(best_action_confidence[action], 2),
                 "evidence": best_action_evidence[action],
             }
-            for action in self._normalize_action_hints(list(best_action_confidence.keys()))
+            for action in self._normalize_action_hints(
+                list(best_action_confidence.keys())
+            )
         ]
         recommended_actions = [
             item["action"]
@@ -2524,15 +4143,65 @@ Be conservative. If uncertain, omit instead of guessing.
         except Exception:
             return
 
-    def _build_geometry_graph_payload(self, scene_graph_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_geometry_graph_payload(
+        self, scene_graph_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         try:
             scene = SceneGraph(scene_graph_data)
             geometry_graph = GeometryGraph(scene)
             return geometry_graph.to_payload()
         except Exception:
-            return {"nodes": [], "edges": [], "stats": {"node_count": 0, "edge_count": 0}}
+            return {
+                "nodes": [],
+                "edges": [],
+                "stats": {"node_count": 0, "edge_count": 0},
+            }
 
-    def _build_semantic_graph(self, geometry_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def _semantic_graph_has_drawable_geometry(
+        self,
+        scene_graph_data: Optional[Dict[str, Any]],
+    ) -> bool:
+        if not isinstance(scene_graph_data, dict):
+            return False
+        points = scene_graph_data.get("points")
+        if isinstance(points, dict):
+            has_points = any(
+                isinstance(payload, dict)
+                and (payload.get("pos") or payload.get("coord"))
+                for payload in points.values()
+            )
+        elif isinstance(points, list):
+            has_points = any(
+                isinstance(payload, dict)
+                and (payload.get("pos") or payload.get("coord"))
+                for payload in points
+            )
+        else:
+            has_points = False
+        if not has_points:
+            return False
+        for primitive in scene_graph_data.get("primitives") or []:
+            if not isinstance(primitive, dict):
+                continue
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            refs = [
+                item for item in (primitive.get("points") or []) if str(item).strip()
+            ]
+            if primitive_type == "segment" and len(refs) == 2:
+                return True
+            if primitive_type == "polygon" and len(refs) >= 3:
+                return True
+            if (
+                primitive_type == "circle"
+                and primitive.get("center")
+                and primitive.get("radius_point")
+            ):
+                return True
+        return False
+
+    def _build_semantic_graph(
+        self, geometry_data: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
         geometry_data = geometry_data or {}
         semantic_graph = {
             "points": {},
@@ -2547,10 +4216,13 @@ Be conservative. If uncertain, omit instead of guessing.
         for point in geometry_data.get("points", []):
             if isinstance(point, dict):
                 point_id = str(point.get("id", "")).strip()
+                point_payload = copy.deepcopy(point)
+                point_payload.pop("id", None)
             else:
                 point_id = str(point).strip()
+                point_payload = {}
             if point_id:
-                semantic_graph["points"][point_id] = {}
+                semantic_graph["points"][point_id] = point_payload
 
         for primitive in geometry_data.get("primitives", []):
             primitive_type = str(primitive.get("type", "")).strip().lower()
@@ -2584,7 +4256,11 @@ Be conservative. If uncertain, omit instead of guessing.
                 )
             elif primitive_type in {"angle", "right_angle"} and len(refs) == 3:
                 semantic_graph["angles"].append(
-                    {"id": primitive_id, "points": refs, "value": primitive.get("value")}
+                    {
+                        "id": primitive_id,
+                        "points": refs,
+                        "value": primitive.get("value"),
+                    }
                 )
 
         for constraint in geometry_data.get("constraints", []):
@@ -2618,8 +4294,18 @@ Be conservative. If uncertain, omit instead of guessing.
             and geometry_data.get("primitives")
         ):
             try:
-                partial_scene = self.coordinate_scene_compiler.solve_coordinate_scene(geometry_data)
-                drawable_scene = self.coordinate_scene_compiler.derive_drawable_scene(partial_scene)
+                layout_bundle = self.coordinate_scene_compiler.solve_layout_bundle(
+                    geometry_data,
+                    drawable_scene_source="schematic_solver_fallback",
+                )
+                drawable_scene = (
+                    layout_bundle.get("drawable_scene")
+                    if isinstance(layout_bundle.get("drawable_scene"), dict)
+                    else scene_payload_from_layout_ir(
+                        layout_bundle.get("layout_ir", {}),
+                        "drawable_scene",
+                    )
+                ) or {}
                 drawable_scene["layout_mode"] = "schematic_solver_fallback"
                 return drawable_scene
             except Exception:
@@ -2628,6 +4314,1077 @@ Be conservative. If uncertain, omit instead of guessing.
         drawable_scene["layout_mode"] = "schematic_fallback"
         self._attach_fallback_positions(drawable_scene, geometry_data or {})
         return drawable_scene
+
+    def _build_soft_sketch_drawable_scene(
+        self,
+        geometry_data: Optional[Dict[str, Any]],
+        *,
+        geometry_facts: Optional[Dict[str, Any]] = None,
+        scene_error: str = "",
+        policy: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a wireframe scene from visual anchors and unverified soft facts.
+
+        This is deliberately not a coordinate-scene substitute. It preserves the
+        model/detector primitives as a teachable sketch, while reporting that the
+        mathematical coordinate solver failed.
+        """
+
+        geometry_data = geometry_data or {}
+        drawable_scene = self._build_semantic_graph(geometry_data)
+        drawable_scene["layout_mode"] = "soft_sketch_reconstruction"
+        drawable_scene["reconstruction_mode"] = "soft_constraints"
+        drawable_scene["coordinate_status"] = "unverified_soft_sketch"
+        drawable_scene["primitives"] = copy.deepcopy(
+            geometry_data.get("primitives", [])
+        )
+
+        anchor_report = self._attach_pixel_anchor_positions(
+            drawable_scene,
+            geometry_data,
+        )
+        self._attach_fallback_positions(drawable_scene, geometry_data)
+
+        soft_constraints, hard_constraints = self._split_soft_sketch_constraints(
+            geometry_data=geometry_data,
+            geometry_facts=geometry_facts or {},
+        )
+        refinement_report = self._refine_soft_sketch_with_hard_constraints(
+            drawable_scene,
+            geometry_data=geometry_data,
+        )
+        self._apply_wireframe_display(drawable_scene)
+
+        drawable_scene["soft_constraints"] = soft_constraints
+        drawable_scene["hard_constraints"] = hard_constraints
+        drawable_scene["soft_refinement_report"] = refinement_report
+        drawable_scene["soft_sketch_report"] = {
+            "mode": "soft_sketch_reconstruction",
+            "reason": scene_error,
+            "policy": copy.deepcopy(policy or {}),
+            "anchor_count": int(anchor_report.get("anchor_count", 0)),
+            "point_count": int(anchor_report.get("point_count", 0)),
+            "anchored_points": list(anchor_report.get("anchored_points", [])),
+            "missing_points": list(anchor_report.get("missing_points", [])),
+            "soft_constraint_count": len(soft_constraints),
+            "hard_constraint_count": len(hard_constraints),
+            "refinement": refinement_report,
+            "notes": [
+                "Pixel anchors initialize sketch layout and remain soft anchors during refinement.",
+                "Hard math facts refine the sketch when they can be applied without a full coordinate solve.",
+                "Unverified visual relations are retained as soft constraints instead of pruning the diagram.",
+            ],
+        }
+        return drawable_scene
+
+    def _attach_pixel_anchor_positions(
+        self,
+        scene_graph: Dict[str, Any],
+        geometry_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        points = scene_graph.get("points") or {}
+        if not isinstance(points, dict) or not points:
+            return {
+                "anchor_count": 0,
+                "point_count": 0,
+                "anchored_points": [],
+                "missing_points": [],
+            }
+
+        anchor_payloads = self._point_payloads_by_id(geometry_data)
+        anchors: Dict[str, Tuple[float, float]] = {}
+        for point_id, payload in points.items():
+            merged_payload: Dict[str, Any] = {}
+            if isinstance(anchor_payloads.get(point_id), dict):
+                merged_payload.update(copy.deepcopy(anchor_payloads[point_id]))
+            if isinstance(payload, dict):
+                merged_payload.update(copy.deepcopy(payload))
+            if not merged_payload:
+                continue
+            normalize_point_pixel_anchor(merged_payload)
+            coord = merged_payload.get("pixel_coord")
+            if not isinstance(coord, dict):
+                continue
+            try:
+                x = float(coord.get("x"))
+                y = float(coord.get("y"))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                anchors[str(point_id)] = (x, y)
+                if isinstance(payload, dict):
+                    payload.setdefault("pixel_coord", copy.deepcopy(coord))
+                    if merged_payload.get("pixel_coord_space"):
+                        payload.setdefault(
+                            "pixel_coord_space",
+                            merged_payload.get("pixel_coord_space"),
+                        )
+                    if merged_payload.get("label_bbox"):
+                        payload.setdefault(
+                            "label_bbox", copy.deepcopy(merged_payload["label_bbox"])
+                        )
+
+        if anchors:
+            xs = [coord[0] for coord in anchors.values()]
+            ys = [coord[1] for coord in anchors.values()]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            width = max(max_x - min_x, 1.0)
+            height = max(max_y - min_y, 1.0)
+            scale = 6.8 / max(width, height)
+            cx = (min_x + max_x) / 2.0
+            cy = (min_y + max_y) / 2.0
+            if len(anchors) == 1:
+                scale = 1.0
+            for point_id, (x, y) in anchors.items():
+                payload = points.get(point_id)
+                if not isinstance(payload, dict):
+                    payload = {}
+                    points[point_id] = payload
+                payload["pos"] = [
+                    round((x - cx) * scale, 6),
+                    round((cy - y) * scale, 6),
+                ]
+                payload["position_source"] = "pixel_anchor_soft_sketch"
+
+        anchored_points = sorted(anchors.keys())
+        missing_points = sorted(
+            str(point_id) for point_id in points.keys() if str(point_id) not in anchors
+        )
+        report = {
+            "anchor_count": len(anchored_points),
+            "point_count": len(points),
+            "anchored_points": anchored_points,
+            "missing_points": missing_points,
+        }
+        scene_graph["pixel_anchor_coverage"] = report
+        return report
+
+    def _point_payloads_by_id(
+        self,
+        geometry_data: Optional[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        result: Dict[str, Dict[str, Any]] = {}
+        if not isinstance(geometry_data, dict):
+            return result
+        for point in geometry_data.get("points") or []:
+            if not isinstance(point, dict):
+                continue
+            point_id = str(point.get("id", "")).strip()
+            if point_id:
+                result[point_id] = copy.deepcopy(point)
+        return result
+
+    def _apply_wireframe_display(self, scene_graph: Dict[str, Any]) -> None:
+        display = scene_graph.setdefault("display", {})
+        if not isinstance(display, dict):
+            display = {}
+            scene_graph["display"] = display
+        primitive_display = display.setdefault("primitives", {})
+        if not isinstance(primitive_display, dict):
+            primitive_display = {}
+            display["primitives"] = primitive_display
+
+        for primitive in scene_graph.get("primitives") or []:
+            if not isinstance(primitive, dict):
+                continue
+            primitive_id = str(primitive.get("id", "")).strip()
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            if not primitive_id:
+                continue
+            item_display = primitive_display.setdefault(primitive_id, {})
+            if not isinstance(item_display, dict):
+                item_display = {}
+                primitive_display[primitive_id] = item_display
+            if primitive_type in {"polygon", "circle"}:
+                item_display["fill_opacity"] = 0.0
+            if primitive_type == "segment":
+                item_display.setdefault("stroke_width", 3)
+
+    def _split_soft_sketch_constraints(
+        self,
+        *,
+        geometry_data: Dict[str, Any],
+        geometry_facts: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        hard_constraints: List[Dict[str, Any]] = []
+        soft_constraints: List[Dict[str, Any]] = []
+
+        def append_items(
+            target: List[Dict[str, Any]],
+            source: Any,
+            *,
+            layer: str,
+        ) -> None:
+            if not isinstance(source, list):
+                return
+            for item in source:
+                if not isinstance(item, dict):
+                    continue
+                payload = copy.deepcopy(item)
+                payload.setdefault("layer", layer)
+                target.append(payload)
+
+        append_items(
+            hard_constraints,
+            geometry_facts.get("text_explicit_relations"),
+            layer="text_explicit_relation",
+        )
+        append_items(
+            hard_constraints,
+            geometry_facts.get("text_explicit_measurements"),
+            layer="text_explicit_measurement",
+        )
+        append_items(
+            hard_constraints,
+            geometry_data.get("measurements"),
+            layer="compiled_measurement",
+        )
+
+        append_items(
+            soft_constraints,
+            geometry_facts.get("observed_relations") or geometry_facts.get("relations"),
+            layer="observed_relation",
+        )
+        append_items(
+            soft_constraints,
+            geometry_facts.get("unverified_observed_relations"),
+            layer="unverified_observed_relation",
+        )
+        append_items(
+            soft_constraints,
+            geometry_facts.get("derived_relations")
+            or geometry_facts.get("inferred_relations"),
+            layer="derived_relation",
+        )
+        append_items(
+            soft_constraints,
+            geometry_facts.get("observed_measurements"),
+            layer="observed_measurement",
+        )
+        append_items(
+            soft_constraints,
+            geometry_data.get("constraints"),
+            layer="compiled_constraint_unverified",
+        )
+        return soft_constraints, hard_constraints
+
+    def _refine_soft_sketch_with_hard_constraints(
+        self,
+        scene_graph: Dict[str, Any],
+        *,
+        geometry_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        points = scene_graph.get("points") or {}
+        if not isinstance(points, dict) or len(points) < 2:
+            return {
+                "applied": False,
+                "reason": "insufficient_points",
+                "iterations": 0,
+                "constraint_counts": {},
+            }
+
+        positions = self._scene_positions(points)
+        if len(positions) < 2:
+            return {
+                "applied": False,
+                "reason": "missing_positions",
+                "iterations": 0,
+                "constraint_counts": {},
+            }
+
+        initial_positions = copy.deepcopy(positions)
+        anchor_positions = {
+            point_id: coord
+            for point_id, coord in initial_positions.items()
+            if isinstance(points.get(point_id), dict)
+            and str(points[point_id].get("position_source", "")).strip()
+            == "pixel_anchor_soft_sketch"
+        }
+        refinement_policy = self._soft_sketch_refinement_policy(
+            scene_graph,
+            geometry_data=geometry_data,
+            anchor_positions=anchor_positions,
+        )
+        segment_map = self._soft_sketch_segment_map(geometry_data, scene_graph)
+        length_targets, length_unit_scale = self._soft_sketch_length_targets(
+            geometry_data,
+            positions=positions,
+            segment_map=segment_map,
+        )
+        angle_targets = self._soft_sketch_angle_targets(geometry_data)
+        relation_targets = [
+            item
+            for item in (geometry_data.get("constraints") or [])
+            if isinstance(item, dict)
+        ]
+        counts = {
+            "length": len(length_targets),
+            "angle": len(angle_targets),
+            "relation": len(relation_targets),
+        }
+        if not any(counts.values()):
+            self._write_scene_positions(points, positions)
+            return {
+                "applied": False,
+                "reason": "no_supported_hard_constraints",
+                "iterations": 0,
+                "constraint_counts": counts,
+                "length_unit_scale": length_unit_scale,
+                "profile": refinement_policy["profile"],
+            }
+
+        before = self._soft_sketch_refinement_residuals(
+            positions,
+            segment_map=segment_map,
+            length_targets=length_targets,
+            angle_targets=angle_targets,
+            relation_targets=relation_targets,
+        )
+        for _iteration in range(int(refinement_policy["iterations"])):
+            for point_id, segment_id in self._relation_entities(
+                relation_targets,
+                "point_on_segment",
+                expected_len=2,
+            ):
+                self._project_point_to_segment(
+                    positions,
+                    point_id=point_id,
+                    segment_id=segment_id,
+                    segment_map=segment_map,
+                    ratio=None,
+                    strength=float(refinement_policy["point_on_segment_strength"]),
+                )
+            for point_id, segment_id in self._relation_entities(
+                relation_targets,
+                "midpoint",
+                expected_len=2,
+            ):
+                self._project_point_to_segment(
+                    positions,
+                    point_id=point_id,
+                    segment_id=segment_id,
+                    segment_map=segment_map,
+                    ratio=0.5,
+                    strength=float(refinement_policy["midpoint_strength"]),
+                )
+            for first, second in self._relation_entities(
+                relation_targets,
+                "equal_length",
+                expected_len=2,
+            ):
+                seg_a = self._resolve_segment_ref(first, segment_map, positions)
+                seg_b = self._resolve_segment_ref(second, segment_map, positions)
+                if seg_a and seg_b:
+                    self._project_equal_length(
+                        positions,
+                        seg_a=seg_a,
+                        seg_b=seg_b,
+                        strength=float(refinement_policy["equal_length_strength"]),
+                    )
+            for first, second in self._relation_entities(
+                relation_targets,
+                "perpendicular",
+                expected_len=2,
+            ):
+                seg_a = self._resolve_segment_ref(first, segment_map, positions)
+                seg_b = self._resolve_segment_ref(second, segment_map, positions)
+                if seg_a and seg_b:
+                    self._project_perpendicular(
+                        positions,
+                        seg_a=seg_a,
+                        seg_b=seg_b,
+                        strength=float(refinement_policy["perpendicular_strength"]),
+                    )
+            for point_a, point_b, target_length in length_targets:
+                self._project_pair_distance(
+                    positions,
+                    point_a=point_a,
+                    point_b=point_b,
+                    target=target_length,
+                    strength=float(refinement_policy["length_strength"]),
+                )
+            for point_a, vertex, point_c, target_degrees in angle_targets:
+                self._project_angle(
+                    positions,
+                    point_a=point_a,
+                    vertex=vertex,
+                    point_c=point_c,
+                    target_degrees=target_degrees,
+                    strength=float(refinement_policy["angle_strength"]),
+                )
+            self._pull_soft_sketch_anchors(
+                positions,
+                anchor_positions=anchor_positions,
+                strength=float(refinement_policy["anchor_pull_strength"]),
+            )
+            self._clamp_soft_sketch_anchor_drift(
+                positions,
+                anchor_positions=anchor_positions,
+                max_drift=refinement_policy.get("max_anchor_drift"),
+            )
+
+        after = self._soft_sketch_refinement_residuals(
+            positions,
+            segment_map=segment_map,
+            length_targets=length_targets,
+            angle_targets=angle_targets,
+            relation_targets=relation_targets,
+        )
+        self._write_scene_positions(points, positions)
+        adjusted_points = sorted(
+            point_id
+            for point_id, coord in positions.items()
+            if point_id in initial_positions
+            and (
+                abs(coord[0] - initial_positions[point_id][0]) > 1e-4
+                or abs(coord[1] - initial_positions[point_id][1]) > 1e-4
+            )
+        )
+        return {
+            "applied": True,
+            "iterations": int(refinement_policy["iterations"]),
+            "constraint_counts": counts,
+            "length_unit_scale": length_unit_scale,
+            "anchored_points": sorted(anchor_positions.keys()),
+            "adjusted_points": adjusted_points,
+            "residual_before": before,
+            "residual_after": after,
+            "profile": refinement_policy["profile"],
+            "max_anchor_drift": refinement_policy.get("max_anchor_drift"),
+        }
+
+    def _soft_sketch_refinement_policy(
+        self,
+        scene_graph: Dict[str, Any],
+        *,
+        geometry_data: Dict[str, Any],
+        anchor_positions: Dict[str, List[float]],
+    ) -> Dict[str, Any]:
+        policy = {
+            "profile": "default_soft_projection",
+            "iterations": 24,
+            "point_on_segment_strength": 0.72,
+            "midpoint_strength": 0.78,
+            "equal_length_strength": 0.24,
+            "perpendicular_strength": 0.20,
+            "length_strength": 0.26,
+            "angle_strength": 0.18,
+            "anchor_pull_strength": 0.055,
+            "max_anchor_drift": None,
+        }
+        point_count = len(self._scene_positions(scene_graph.get("points") or {}))
+        anchor_count = len(anchor_positions)
+        anchor_coverage = (anchor_count / point_count) if point_count else 0.0
+        if (
+            self._soft_sketch_has_fold_semantics(scene_graph, geometry_data)
+            and anchor_count >= 4
+            and anchor_coverage >= 0.8
+        ):
+            span = self._soft_sketch_anchor_span(anchor_positions)
+            policy.update(
+                {
+                    "profile": "fold_anchor_preserving",
+                    "iterations": 8,
+                    "point_on_segment_strength": 0.18,
+                    "midpoint_strength": 0.20,
+                    "equal_length_strength": 0.08,
+                    "perpendicular_strength": 0.08,
+                    "length_strength": 0.10,
+                    "angle_strength": 0.08,
+                    "anchor_pull_strength": 0.22,
+                    "max_anchor_drift": round(max(0.18, span * 0.05), 6),
+                }
+            )
+        return policy
+
+    def _soft_sketch_has_fold_semantics(
+        self,
+        scene_graph: Dict[str, Any],
+        geometry_data: Dict[str, Any],
+    ) -> bool:
+        if scene_graph.get("fold_correspondences") or geometry_data.get(
+            "fold_correspondences"
+        ):
+            return True
+        for point in geometry_data.get("points") or []:
+            if not isinstance(point, dict):
+                continue
+            derived = point.get("derived")
+            if not isinstance(derived, dict):
+                continue
+            if str(derived.get("type", "")).strip().lower() == "reflect_point":
+                return True
+        return False
+
+    def _soft_sketch_anchor_span(
+        self,
+        anchor_positions: Dict[str, List[float]],
+    ) -> float:
+        if not anchor_positions:
+            return 1.0
+        xs = [float(coord[0]) for coord in anchor_positions.values()]
+        ys = [float(coord[1]) for coord in anchor_positions.values()]
+        return max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+
+    def _clamp_soft_sketch_anchor_drift(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        anchor_positions: Dict[str, List[float]],
+        max_drift: Optional[float],
+    ) -> None:
+        if max_drift is None or max_drift <= 0:
+            return
+        for point_id, anchor in anchor_positions.items():
+            current = positions.get(point_id)
+            if current is None:
+                continue
+            dx = float(current[0]) - float(anchor[0])
+            dy = float(current[1]) - float(anchor[1])
+            distance = math.hypot(dx, dy)
+            if distance <= max_drift or distance <= 1e-9:
+                continue
+            scale = float(max_drift) / distance
+            positions[point_id] = [
+                float(anchor[0]) + dx * scale,
+                float(anchor[1]) + dy * scale,
+            ]
+
+    def _scene_positions(
+        self,
+        points: Dict[str, Any],
+    ) -> Dict[str, List[float]]:
+        positions: Dict[str, List[float]] = {}
+        for point_id, payload in points.items():
+            if not isinstance(payload, dict):
+                continue
+            coord = payload.get("pos") or payload.get("coord")
+            if not isinstance(coord, (list, tuple)) or len(coord) < 2:
+                continue
+            try:
+                x = float(coord[0])
+                y = float(coord[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                positions[str(point_id)] = [x, y]
+        return positions
+
+    def _write_scene_positions(
+        self,
+        points: Dict[str, Any],
+        positions: Dict[str, List[float]],
+    ) -> None:
+        for point_id, coord in positions.items():
+            payload = points.get(point_id)
+            if not isinstance(payload, dict):
+                payload = {}
+                points[point_id] = payload
+            payload["pos"] = [round(float(coord[0]), 6), round(float(coord[1]), 6)]
+            if payload.get("position_source") == "pixel_anchor_soft_sketch":
+                payload["position_refined_by"] = "hard_constraints_soft_projection"
+
+    def _soft_sketch_segment_map(
+        self,
+        geometry_data: Dict[str, Any],
+        scene_graph: Dict[str, Any],
+    ) -> Dict[str, Tuple[str, str]]:
+        segment_map: Dict[str, Tuple[str, str]] = {}
+        for primitive in [
+            *(geometry_data.get("primitives") or []),
+            *(scene_graph.get("primitives") or []),
+            *(scene_graph.get("lines") or []),
+        ]:
+            if not isinstance(primitive, dict):
+                continue
+            if str(primitive.get("type", "")).strip().lower() != "segment":
+                continue
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
+            if len(refs) != 2:
+                continue
+            segment_id = str(primitive.get("id", "")).strip()
+            for candidate in [
+                segment_id,
+                f"seg_{refs[0]}{refs[1]}",
+                f"seg_{refs[1]}{refs[0]}",
+                f"line_{refs[0]}{refs[1]}",
+                f"line_{refs[1]}{refs[0]}",
+                f"{refs[0]}{refs[1]}",
+                f"{refs[1]}{refs[0]}",
+            ]:
+                if candidate:
+                    segment_map.setdefault(candidate, (refs[0], refs[1]))
+        return segment_map
+
+    def _soft_sketch_length_targets(
+        self,
+        geometry_data: Dict[str, Any],
+        *,
+        positions: Dict[str, List[float]],
+        segment_map: Dict[str, Tuple[str, str]],
+    ) -> Tuple[List[Tuple[str, str, float]], Optional[float]]:
+        raw_targets: List[Tuple[str, str, float]] = []
+        ratios: List[float] = []
+        for measurement in geometry_data.get("measurements") or []:
+            if not isinstance(measurement, dict):
+                continue
+            if str(measurement.get("type", "")).strip().lower() != "length":
+                continue
+            value = self._coerce_float(measurement.get("value"), default=0.0)
+            if value <= 1e-9:
+                continue
+            endpoints = self._measurement_length_endpoints(
+                measurement,
+                segment_map=segment_map,
+                positions=positions,
+            )
+            if not endpoints:
+                continue
+            first, second = endpoints
+            raw_targets.append((first, second, value))
+            current = self._distance_2d(positions.get(first), positions.get(second))
+            if current and current > 1e-9:
+                ratios.append(current / value)
+        if not raw_targets:
+            return [], None
+        if ratios:
+            ratios = sorted(ratios)
+            unit_scale = ratios[len(ratios) // 2]
+        else:
+            unit_scale = 1.0
+        return [
+            (first, second, value * unit_scale) for first, second, value in raw_targets
+        ], round(float(unit_scale), 6)
+
+    def _measurement_length_endpoints(
+        self,
+        measurement: Dict[str, Any],
+        *,
+        segment_map: Dict[str, Tuple[str, str]],
+        positions: Dict[str, List[float]],
+    ) -> Optional[Tuple[str, str]]:
+        entities = [
+            str(item).strip()
+            for item in (measurement.get("entities") or [])
+            if str(item).strip()
+        ]
+        if len(entities) == 2 and all(entity in positions for entity in entities):
+            return entities[0], entities[1]
+        if len(entities) == 1:
+            resolved = self._resolve_segment_ref(entities[0], segment_map, positions)
+            if resolved:
+                return resolved
+        raw_segment = measurement.get("segment") or measurement.get("line")
+        if raw_segment:
+            resolved = self._resolve_segment_ref(raw_segment, segment_map, positions)
+            if resolved:
+                return resolved
+        return None
+
+    def _soft_sketch_angle_targets(
+        self,
+        geometry_data: Dict[str, Any],
+    ) -> List[Tuple[str, str, str, float]]:
+        targets: List[Tuple[str, str, str, float]] = []
+        for primitive in geometry_data.get("primitives") or []:
+            if not isinstance(primitive, dict):
+                continue
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
+            if len(refs) != 3:
+                continue
+            if primitive_type == "right_angle":
+                targets.append((refs[0], refs[1], refs[2], 90.0))
+        for measurement in geometry_data.get("measurements") or []:
+            if not isinstance(measurement, dict):
+                continue
+            if str(measurement.get("type", "")).strip().lower() != "angle":
+                continue
+            refs = [
+                str(item).strip()
+                for item in (measurement.get("entities") or [])
+                if str(item).strip()
+            ]
+            if len(refs) != 3:
+                continue
+            value = self._coerce_float(measurement.get("value"), default=0.0)
+            if value > 0:
+                targets.append((refs[0], refs[1], refs[2], value))
+        return list(dict.fromkeys(targets))
+
+    def _relation_entities(
+        self,
+        relations: List[Dict[str, Any]],
+        relation_type: str,
+        *,
+        expected_len: int,
+    ) -> List[List[str]]:
+        result: List[List[str]] = []
+        for relation in relations:
+            if not isinstance(relation, dict):
+                continue
+            if str(relation.get("type", "")).strip().lower() != relation_type:
+                continue
+            entities = [
+                str(item).strip()
+                for item in (relation.get("entities") or [])
+                if str(item).strip()
+            ]
+            if len(entities) == expected_len:
+                result.append(entities)
+        return result
+
+    def _resolve_segment_ref(
+        self,
+        ref: Any,
+        segment_map: Dict[str, Tuple[str, str]],
+        positions: Dict[str, List[float]],
+    ) -> Optional[Tuple[str, str]]:
+        token = str(ref).strip()
+        if not token:
+            return None
+        if token in segment_map:
+            return segment_map[token]
+        normalized = token.replace("seg_", "").replace("line_", "")
+        normalized = re.sub(r"[^A-Za-z0-9_′']", "", normalized)
+        point_ids = list(positions.keys())
+        for first in point_ids:
+            for second in point_ids:
+                if first == second:
+                    continue
+                if normalized in {
+                    f"{first}{second}",
+                    f"{second}{first}",
+                    f"{first}_{second}",
+                    f"{second}_{first}",
+                }:
+                    return first, second
+        return None
+
+    def _project_point_to_segment(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        point_id: str,
+        segment_id: str,
+        segment_map: Dict[str, Tuple[str, str]],
+        ratio: Optional[float],
+        strength: float,
+    ) -> None:
+        endpoints = self._resolve_segment_ref(segment_id, segment_map, positions)
+        if not endpoints or point_id not in positions:
+            return
+        start, end = endpoints
+        if start not in positions or end not in positions:
+            return
+        ax, ay = positions[start]
+        bx, by = positions[end]
+        px, py = positions[point_id]
+        vx, vy = bx - ax, by - ay
+        denom = vx * vx + vy * vy
+        if denom <= 1e-9:
+            return
+        if ratio is None:
+            t = ((px - ax) * vx + (py - ay) * vy) / denom
+            t = max(0.0, min(1.0, t))
+        else:
+            t = max(0.0, min(1.0, ratio))
+        target = [ax + vx * t, ay + vy * t]
+        self._move_point_toward(positions, point_id, target, strength)
+
+    def _project_pair_distance(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        point_a: str,
+        point_b: str,
+        target: float,
+        strength: float,
+    ) -> None:
+        if point_a not in positions or point_b not in positions or target <= 0:
+            return
+        ax, ay = positions[point_a]
+        bx, by = positions[point_b]
+        dx, dy = bx - ax, by - ay
+        dist = math.hypot(dx, dy)
+        if dist <= 1e-9:
+            return
+        delta = (dist - target) * strength * 0.5
+        ux, uy = dx / dist, dy / dist
+        positions[point_a] = [ax + ux * delta, ay + uy * delta]
+        positions[point_b] = [bx - ux * delta, by - uy * delta]
+
+    def _project_equal_length(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        seg_a: Tuple[str, str],
+        seg_b: Tuple[str, str],
+        strength: float,
+    ) -> None:
+        len_a = self._distance_2d(positions.get(seg_a[0]), positions.get(seg_a[1]))
+        len_b = self._distance_2d(positions.get(seg_b[0]), positions.get(seg_b[1]))
+        if not len_a or not len_b:
+            return
+        target = (len_a + len_b) / 2.0
+        self._project_pair_distance(
+            positions,
+            point_a=seg_a[0],
+            point_b=seg_a[1],
+            target=target,
+            strength=strength,
+        )
+        self._project_pair_distance(
+            positions,
+            point_a=seg_b[0],
+            point_b=seg_b[1],
+            target=target,
+            strength=strength,
+        )
+
+    def _project_perpendicular(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        seg_a: Tuple[str, str],
+        seg_b: Tuple[str, str],
+        strength: float,
+    ) -> None:
+        if not all(point in positions for point in [*seg_a, *seg_b]):
+            return
+        ax, ay = positions[seg_a[0]]
+        bx, by = positions[seg_a[1]]
+        vx, vy = bx - ax, by - ay
+        norm = math.hypot(vx, vy)
+        if norm <= 1e-9:
+            return
+        ux, uy = -vy / norm, vx / norm
+        c, d = seg_b
+        cx, cy = positions[c]
+        dx, dy = positions[d]
+        mid = [(cx + dx) / 2.0, (cy + dy) / 2.0]
+        half_len = max(math.hypot(dx - cx, dy - cy) / 2.0, 0.25)
+        target_c = [mid[0] - ux * half_len, mid[1] - uy * half_len]
+        target_d = [mid[0] + ux * half_len, mid[1] + uy * half_len]
+        self._move_point_toward(positions, c, target_c, strength)
+        self._move_point_toward(positions, d, target_d, strength)
+
+    def _project_angle(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        point_a: str,
+        vertex: str,
+        point_c: str,
+        target_degrees: float,
+        strength: float,
+    ) -> None:
+        if (
+            point_a not in positions
+            or vertex not in positions
+            or point_c not in positions
+        ):
+            return
+        if abs(target_degrees - 90.0) > 1e-3:
+            return
+        vx = positions[point_a][0] - positions[vertex][0]
+        vy = positions[point_a][1] - positions[vertex][1]
+        norm = math.hypot(vx, vy)
+        current_len = self._distance_2d(positions.get(vertex), positions.get(point_c))
+        if norm <= 1e-9 or not current_len:
+            return
+        dirs = [(-vy / norm, vx / norm), (vy / norm, -vx / norm)]
+        candidates = [
+            [
+                positions[vertex][0] + direction[0] * current_len,
+                positions[vertex][1] + direction[1] * current_len,
+            ]
+            for direction in dirs
+        ]
+        current = positions[point_c]
+        target = min(
+            candidates,
+            key=lambda item: (item[0] - current[0]) ** 2 + (item[1] - current[1]) ** 2,
+        )
+        self._move_point_toward(positions, point_c, target, strength)
+
+    def _pull_soft_sketch_anchors(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        anchor_positions: Dict[str, List[float]],
+        strength: float,
+    ) -> None:
+        for point_id, target in anchor_positions.items():
+            self._move_point_toward(positions, point_id, target, strength)
+
+    def _move_point_toward(
+        self,
+        positions: Dict[str, List[float]],
+        point_id: str,
+        target: List[float],
+        strength: float,
+    ) -> None:
+        if point_id not in positions:
+            return
+        x, y = positions[point_id]
+        positions[point_id] = [
+            x + (float(target[0]) - x) * strength,
+            y + (float(target[1]) - y) * strength,
+        ]
+
+    def _soft_sketch_refinement_residuals(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        segment_map: Dict[str, Tuple[str, str]],
+        length_targets: List[Tuple[str, str, float]],
+        angle_targets: List[Tuple[str, str, str, float]],
+        relation_targets: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        residuals: List[float] = []
+        for point_a, point_b, target in length_targets:
+            current = self._distance_2d(positions.get(point_a), positions.get(point_b))
+            if current is not None and target > 0:
+                residuals.append(abs(current - target) / max(target, 1e-9))
+        for point_a, vertex, point_c, target in angle_targets:
+            current = self._angle_degrees_2d(
+                positions.get(point_a),
+                positions.get(vertex),
+                positions.get(point_c),
+            )
+            if current is not None and target > 0:
+                residuals.append(abs(current - target) / max(target, 1.0))
+        for point_id, segment_id in self._relation_entities(
+            relation_targets, "point_on_segment", expected_len=2
+        ):
+            residual = self._point_segment_normalized_distance(
+                positions,
+                point_id=point_id,
+                segment_id=segment_id,
+                segment_map=segment_map,
+            )
+            if residual is not None:
+                residuals.append(residual)
+        for first, second in self._relation_entities(
+            relation_targets, "equal_length", expected_len=2
+        ):
+            seg_a = self._resolve_segment_ref(first, segment_map, positions)
+            seg_b = self._resolve_segment_ref(second, segment_map, positions)
+            if seg_a and seg_b:
+                len_a = self._distance_2d(
+                    positions.get(seg_a[0]), positions.get(seg_a[1])
+                )
+                len_b = self._distance_2d(
+                    positions.get(seg_b[0]), positions.get(seg_b[1])
+                )
+                if len_a and len_b:
+                    residuals.append(
+                        abs(len_a - len_b) / max((len_a + len_b) / 2.0, 1e-9)
+                    )
+        for first, second in self._relation_entities(
+            relation_targets, "perpendicular", expected_len=2
+        ):
+            seg_a = self._resolve_segment_ref(first, segment_map, positions)
+            seg_b = self._resolve_segment_ref(second, segment_map, positions)
+            if seg_a and seg_b:
+                residual = self._perpendicular_residual(positions, seg_a, seg_b)
+                if residual is not None:
+                    residuals.append(residual)
+        if not residuals:
+            return {"count": 0, "mean": 0.0, "max": 0.0}
+        return {
+            "count": len(residuals),
+            "mean": round(sum(residuals) / len(residuals), 6),
+            "max": round(max(residuals), 6),
+        }
+
+    def _distance_2d(
+        self,
+        first: Optional[List[float]],
+        second: Optional[List[float]],
+    ) -> Optional[float]:
+        if first is None or second is None:
+            return None
+        return math.hypot(
+            float(second[0]) - float(first[0]), float(second[1]) - float(first[1])
+        )
+
+    def _angle_degrees_2d(
+        self,
+        point_a: Optional[List[float]],
+        vertex: Optional[List[float]],
+        point_c: Optional[List[float]],
+    ) -> Optional[float]:
+        if point_a is None or vertex is None or point_c is None:
+            return None
+        ax, ay = (
+            float(point_a[0]) - float(vertex[0]),
+            float(point_a[1]) - float(vertex[1]),
+        )
+        cx, cy = (
+            float(point_c[0]) - float(vertex[0]),
+            float(point_c[1]) - float(vertex[1]),
+        )
+        denom = math.hypot(ax, ay) * math.hypot(cx, cy)
+        if denom <= 1e-9:
+            return None
+        cos_value = max(-1.0, min(1.0, (ax * cx + ay * cy) / denom))
+        return math.degrees(math.acos(cos_value))
+
+    def _point_segment_normalized_distance(
+        self,
+        positions: Dict[str, List[float]],
+        *,
+        point_id: str,
+        segment_id: str,
+        segment_map: Dict[str, Tuple[str, str]],
+    ) -> Optional[float]:
+        endpoints = self._resolve_segment_ref(segment_id, segment_map, positions)
+        if not endpoints or point_id not in positions:
+            return None
+        start, end = endpoints
+        if start not in positions or end not in positions:
+            return None
+        ax, ay = positions[start]
+        bx, by = positions[end]
+        px, py = positions[point_id]
+        vx, vy = bx - ax, by - ay
+        denom = vx * vx + vy * vy
+        if denom <= 1e-9:
+            return None
+        t = max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / denom))
+        closest = [ax + vx * t, ay + vy * t]
+        dist = math.hypot(px - closest[0], py - closest[1])
+        return dist / max(math.sqrt(denom), 1e-9)
+
+    def _perpendicular_residual(
+        self,
+        positions: Dict[str, List[float]],
+        seg_a: Tuple[str, str],
+        seg_b: Tuple[str, str],
+    ) -> Optional[float]:
+        if not all(point in positions for point in [*seg_a, *seg_b]):
+            return None
+        ax, ay = positions[seg_a[0]]
+        bx, by = positions[seg_a[1]]
+        cx, cy = positions[seg_b[0]]
+        dx, dy = positions[seg_b[1]]
+        v1 = [bx - ax, by - ay]
+        v2 = [dx - cx, dy - cy]
+        denom = math.hypot(v1[0], v1[1]) * math.hypot(v2[0], v2[1])
+        if denom <= 1e-9:
+            return None
+        return abs((v1[0] * v2[0] + v1[1] * v2[1]) / denom)
 
     def _compile_geometry_spec(
         self,
@@ -2657,34 +5414,60 @@ Be conservative. If uncertain, omit instead of guessing.
         measurements = geometry_data.get("measurements") or []
         segment_map: Dict[str, Tuple[str, str]] = {}
 
+        for point_id, payload in points.items():
+            if not isinstance(payload, dict):
+                continue
+            coord = payload.get("pos") or payload.get("coord")
+            if not isinstance(coord, (list, tuple)) or len(coord) < 2:
+                continue
+            try:
+                x = float(coord[0])
+                y = float(coord[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                positions[str(point_id)] = [x, y]
+
         for line in lines:
             if not isinstance(line, dict):
                 continue
             line_id = str(line.get("id", "")).strip()
-            refs = [str(item).strip() for item in (line.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (line.get("points") or [])
+                if str(item).strip()
+            ]
             if line_id and len(refs) == 2:
                 segment_map[line_id] = (refs[0], refs[1])
 
-        self._apply_circle_parallel_extension_layout(
-            positions=positions,
-            objects=objects,
-            constraints=constraints,
-            measurements=measurements,
-            segment_map=segment_map,
-        )
+        if not positions:
+            self._apply_circle_parallel_extension_layout(
+                positions=positions,
+                objects=objects,
+                constraints=constraints,
+                measurements=measurements,
+                segment_map=segment_map,
+            )
 
         for obj in objects:
             if not isinstance(obj, dict):
                 continue
             obj_type = str(obj.get("type", "")).strip().lower()
-            refs = [str(item).strip() for item in (obj.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (obj.get("points") or [])
+                if str(item).strip()
+            ]
             if obj_type in {"polygon", "triangle"} and len(refs) >= 3:
                 radius = 3.2
                 for index, point_id in enumerate(refs):
                     angle = (math.pi / 2) - (2 * math.pi * index / len(refs))
                     positions.setdefault(
                         point_id,
-                        [round(radius * math.cos(angle), 6), round(radius * math.sin(angle), 6)],
+                        [
+                            round(radius * math.cos(angle), 6),
+                            round(radius * math.sin(angle), 6),
+                        ],
                     )
                 break
 
@@ -2711,7 +5494,9 @@ Be conservative. If uncertain, omit instead of guessing.
             for constraint in constraints:
                 if str(constraint.get("type", "")).strip().lower() != "point_on_circle":
                     continue
-                entities = [str(item).strip() for item in (constraint.get("entities") or [])]
+                entities = [
+                    str(item).strip() for item in (constraint.get("entities") or [])
+                ]
                 if len(entities) == 2 and entities[1] == circle_id and entities[0]:
                     members.append(entities[0])
             members = list(dict.fromkeys(members))
@@ -2723,7 +5508,10 @@ Be conservative. If uncertain, omit instead of guessing.
                 angle = (5 * math.pi / 6) - (2 * math.pi * index / max(len(members), 3))
                 positions.setdefault(
                     point_id,
-                    [round(cx + radius * math.cos(angle), 6), round(cy + radius * math.sin(angle), 6)],
+                    [
+                        round(cx + radius * math.cos(angle), 6),
+                        round(cy + radius * math.sin(angle), 6),
+                    ],
                 )
 
         for start, end in segment_map.values():
@@ -2738,10 +5526,16 @@ Be conservative. If uncertain, omit instead of guessing.
             changed = False
             for start, end in segment_map.values():
                 if start in positions and end not in positions:
-                    positions[end] = [positions[start][0] + 2.6, positions[start][1] + 1.2]
+                    positions[end] = [
+                        positions[start][0] + 2.6,
+                        positions[start][1] + 1.2,
+                    ]
                     changed = True
                 elif end in positions and start not in positions:
-                    positions[start] = [positions[end][0] - 2.6, positions[end][1] - 1.2]
+                    positions[start] = [
+                        positions[end][0] - 2.6,
+                        positions[end][1] - 1.2,
+                    ]
                     changed = True
             if not changed:
                 break
@@ -2750,12 +5544,18 @@ Be conservative. If uncertain, omit instead of guessing.
         for constraint in constraints:
             if str(constraint.get("type", "")).strip().lower() != "point_on_segment":
                 continue
-            entities = [str(item).strip() for item in (constraint.get("entities") or [])]
+            entities = [
+                str(item).strip() for item in (constraint.get("entities") or [])
+            ]
             if len(entities) != 2:
                 continue
             point_id, segment_id = entities
             endpoints = segment_map.get(segment_id)
-            if not endpoints or endpoints[0] not in positions or endpoints[1] not in positions:
+            if (
+                not endpoints
+                or endpoints[0] not in positions
+                or endpoints[1] not in positions
+            ):
                 continue
             count = segment_mid_counts.get(segment_id, 0)
             segment_mid_counts[segment_id] = count + 1
@@ -2767,7 +5567,9 @@ Be conservative. If uncertain, omit instead of guessing.
                 [round(ax + (bx - ax) * ratio, 6), round(ay + (by - ay) * ratio, 6)],
             )
 
-        unresolved = [point_id for point_id in points.keys() if point_id not in positions]
+        unresolved = [
+            point_id for point_id in points.keys() if point_id not in positions
+        ]
         for index, point_id in enumerate(unresolved):
             col = index % 3
             row = index // 3
@@ -2792,11 +5594,14 @@ Be conservative. If uncertain, omit instead of guessing.
         segment_map: Dict[str, Tuple[str, str]],
     ) -> bool:
         circle_objects = [
-            obj for obj in objects
-            if isinstance(obj, dict) and str(obj.get("type", "")).strip().lower() == "circle"
+            obj
+            for obj in objects
+            if isinstance(obj, dict)
+            and str(obj.get("type", "")).strip().lower() == "circle"
         ]
         parallel_constraints = [
-            item for item in constraints
+            item
+            for item in constraints
             if str(item.get("type", "")).strip().lower() == "parallel"
         ]
         if not circle_objects or not parallel_constraints:
@@ -2812,7 +5617,11 @@ Be conservative. If uncertain, omit instead of guessing.
                 continue
 
             for relation in parallel_constraints:
-                entities = [str(item).strip() for item in (relation.get("entities") or []) if str(item).strip()]
+                entities = [
+                    str(item).strip()
+                    for item in (relation.get("entities") or [])
+                    if str(item).strip()
+                ]
                 if len(entities) != 2:
                     continue
                 seg1 = segment_map.get(entities[0])
@@ -2830,7 +5639,9 @@ Be conservative. If uncertain, omit instead of guessing.
                     continue
 
                 chord_a, chord_c, anchor_b, external_point = layout
-                remaining = [item for item in members if item not in {chord_a, chord_c, anchor_b}]
+                remaining = [
+                    item for item in members if item not in {chord_a, chord_c, anchor_b}
+                ]
                 if len(remaining) == 1:
                     angle_map = {
                         chord_a: 210.0,
@@ -2890,7 +5701,11 @@ Be conservative. If uncertain, omit instead of guessing.
         for constraint in constraints:
             if str(constraint.get("type", "")).strip().lower() != "point_on_circle":
                 continue
-            entities = [str(item).strip() for item in (constraint.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (constraint.get("entities") or [])
+                if str(item).strip()
+            ]
             if len(entities) == 2 and entities[1] == circle_id:
                 members.append(entities[0])
         return list(dict.fromkeys(members))
@@ -2937,7 +5752,11 @@ Be conservative. If uncertain, omit instead of guessing.
         for measurement in measurements:
             if str(measurement.get("type", "")).strip().lower() != "length":
                 continue
-            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (measurement.get("entities") or [])
+                if str(item).strip()
+            ]
             if len(entities) != 2:
                 continue
             first, second = entities
@@ -2965,7 +5784,11 @@ Be conservative. If uncertain, omit instead of guessing.
         for measurement in measurements:
             if str(measurement.get("type", "")).strip().lower() != "length":
                 continue
-            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (measurement.get("entities") or [])
+                if str(item).strip()
+            ]
             if len(entities) == 2 and set(entities) == pair:
                 value = self._coerce_float(measurement.get("value"), default=0.0)
                 if value > 0:
@@ -3015,12 +5838,17 @@ Be conservative. If uncertain, omit instead of guessing.
         for attempt in range(attempts):
             try:
                 response = self.ocr_llm.invoke(messages)
-                return response.content
+                content = response.content
+                if not content:
+                    content = self._extract_content_from_response(response)
+                    if not content and self._is_response_refusal(response):
+                        return ""
+                return content
             except Exception as exc:
                 last_error = exc
                 if not self._is_retryable_llm_error(exc) or attempt >= attempts - 1:
                     raise
-                sleep_seconds = self.retry_backoff_seconds * (2 ** attempt)
+                sleep_seconds = self.retry_backoff_seconds * (2**attempt)
                 print(
                     f"[{self.__class__.__name__}] OCR request hit a temporary limit; "
                     f"retrying in {sleep_seconds:.1f}s ({attempt + 1}/{attempts})"
@@ -3033,7 +5861,9 @@ Be conservative. If uncertain, omit instead of guessing.
 
     def parse_geometry_spec(self, image_path: str) -> dict:
         bundle = self._analyze_problem_bundle(image_path)
-        geometry_facts = bundle.get("geometry_facts") or bundle.get("geometry_spec") or {}
+        geometry_facts = (
+            bundle.get("geometry_facts") or bundle.get("geometry_spec") or {}
+        )
         return self._compile_geometry_spec(
             geometry_facts,
             problem_text=str(bundle.get("problem_text", "")).strip(),
@@ -3042,7 +5872,9 @@ Be conservative. If uncertain, omit instead of guessing.
     def parse_geometry_scene(self, image_path: str) -> dict:
         return self.parse_geometry_spec(image_path)
 
-    def _parse_json_like_output(self, result: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_json_like_output(
+        self, result: str, fallback: Dict[str, Any]
+    ) -> Dict[str, Any]:
         candidates = [result]
         match = re.search(r"```json\s*([\s\S]*?)\s*```", result)
         if match:

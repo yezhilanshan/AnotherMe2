@@ -1,4 +1,4 @@
-import { DEFAULT_CHAT_USER_ID, gatewayFetch } from './core';
+import { DEFAULT_CHAT_USER_ID, gatewayFetch, getGatewayBaseUrl, buildGatewayHeaders } from './core';
 import type {
   AnotherMe2JobSummary,
   GatewayAIChatMessage,
@@ -7,6 +7,9 @@ import type {
   GatewayLearningRecord,
   LearningRecordExtractResult,
 } from './types';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('GatewayAI');
 
 export async function listGatewayAISessions(params: {
   userId: string;
@@ -168,4 +171,57 @@ export async function listGatewayAILearningRecords(params: {
   return gatewayFetch<GatewayLearningRecord[]>(
     `/v1/ai/sessions/${params.sessionId}/learning-records${suffix}`,
   );
+}
+
+/**
+ * 通过 AnotherMe2 Python 网关调用 DeepTutor engine 的 agentic chat capability。
+ * 返回一个 ReadableStream，直接透传网关的 SSE 事件流。
+ */
+export async function streamGatewayChat(params: {
+  messages: Array<{ role: string; content: string }>;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  capability?: string;
+  userId?: string;
+  requestId?: string;
+  learningContext?: Record<string, unknown>;
+  persistenceSessionId?: string;
+  persistMessages?: boolean;
+  persistUserMessage?: boolean;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const url = `${getGatewayBaseUrl()}/v1/ai/chat`;
+  const t_start = Date.now();
+  log.info(
+    `Gateway chat request -> url=${url} capability=${params.capability || 'chat'} model=${params.model} msgs=${params.messages.length}`,
+  );
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...buildGatewayHeaders(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      messages: params.messages,
+      model: params.model,
+      api_key: params.apiKey,
+      base_url: params.baseUrl,
+      capability: params.capability || 'chat',
+      streaming: true,
+      user_id: params.userId || DEFAULT_CHAT_USER_ID,
+      request_id: params.requestId || `chat-${Date.now()}`,
+      learning_context: params.learningContext,
+      persistence_session_id: params.persistenceSessionId,
+      persist_messages: params.persistMessages ?? false,
+      persist_user_message: params.persistUserMessage ?? true,
+      persist_assistant_message: params.persistMessages ?? false,
+    }),
+    signal: params.signal,
+    cache: 'no-store',
+  });
+
+  log.info(`Gateway chat response status=${response.status} ms=${Date.now() - t_start}`);
+  return response;
 }

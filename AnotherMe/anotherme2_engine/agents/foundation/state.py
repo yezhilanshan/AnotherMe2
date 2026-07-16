@@ -1,7 +1,8 @@
 """
 状态定义 - 用于 LangGraph 的状态管理
 """
-from typing import Dict, List, Any, Optional, TypedDict
+from copy import deepcopy
+from typing import Annotated, Dict, List, Any, Optional, TypedDict
 from dataclasses import dataclass, field
 
 
@@ -51,13 +52,69 @@ class VideoProject:
 
     # 合成阶段输出
     final_video_path: Optional[str] = None
+
+    # Matplotlib 可视化输出
+    matplotlib_image_path: Optional[str] = None
+
+    # 交互可视化输出
+    interactive_html_path: Optional[str] = None
+    scene_package_path: Optional[str] = None
+
     status: str = "pending"  # pending, running, completed, failed
     error_message: Optional[str] = None
 
 
+def _merge_project(left: VideoProject, right: VideoProject) -> VideoProject:
+    """LangGraph reducer for shared VideoProject state.
+
+    Parallel planning nodes receive the same project and normally do not
+    independently mutate it. Prefer the newest non-empty value while keeping a
+    stable fallback if one branch returns an empty payload.
+    """
+    return right or left
+
+
+def _message_key(message: Any) -> tuple[str, str]:
+    if not isinstance(message, dict):
+        return ("", repr(message))
+    return (str(message.get("role", "")), str(message.get("content", "")))
+
+
+def _merge_messages(left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for message in [*(left or []), *(right or [])]:
+        key = _message_key(message)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(message)
+    return merged
+
+
+def _deep_merge_dict(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    result = deepcopy(left or {})
+    for key, value in (right or {}).items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge_dict(result[key], value)
+        elif isinstance(result.get(key), list) and isinstance(value, list):
+            merged_list = list(result[key])
+            for item in value:
+                if item not in merged_list:
+                    merged_list.append(item)
+            result[key] = merged_list
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+
+def _merge_step(left: str, right: str) -> str:
+    return right or left
+
+
 class AgentState(TypedDict):
     """LangGraph 状态"""
-    project: VideoProject
-    messages: List[Dict[str, Any]]
-    current_step: str
-    metadata: Dict[str, Any]
+    project: Annotated[VideoProject, _merge_project]
+    messages: Annotated[List[Dict[str, Any]], _merge_messages]
+    current_step: Annotated[str, _merge_step]
+    metadata: Annotated[Dict[str, Any], _deep_merge_dict]

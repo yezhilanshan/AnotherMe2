@@ -1,1 +1,3 @@
-export { default } from '@/features/live-book/pages/live-book/page';
+'use client';
+
+export { default } from '@/features/live-book/client/live-book-client';

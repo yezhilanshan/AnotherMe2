@@ -15,6 +15,7 @@ import {
 import type { CapabilityDef, CapabilityId, ToolDef, TutorToolName } from './types';
 
 export const CAPABILITIES: CapabilityDef[] = [
+  { id: 'auto', label: '智能导师', description: '苏格拉底式启发教学', icon: Sparkles },
   { id: '', label: '聊天', description: '灵活对话，可使用多种工具', icon: MessageSquare },
   { id: 'deep_solve', label: '深度解题', description: '多步骤推理与问题解决', icon: Zap },
   { id: 'quiz_practice', label: '练习生成', description: '自动验证的题目生成', icon: BookOpen },
@@ -89,6 +90,10 @@ export const TOOL_CONFIG_BY_CAPABILITY: Record<
     allowedTools: ['brainstorm', 'rag', 'web_search', 'code_execution', 'reason', 'paper_search'],
     defaultTools: [],
   },
+  auto: {
+    allowedTools: ['brainstorm', 'rag', 'web_search', 'code_execution', 'reason', 'paper_search'],
+    defaultTools: ['rag', 'web_search', 'code_execution', 'reason'],
+  },
   deep_solve: {
     allowedTools: ['rag', 'web_search', 'code_execution', 'reason'],
     defaultTools: ['rag', 'web_search', 'code_execution', 'reason'],
@@ -115,10 +120,6 @@ export const STORAGE_KEY = 'anotherme:ai-tutor:sessions:v1';
 export const LEGACY_STORAGE_KEY = 'openmaic:ai-tutor:sessions:v1';
 export const MAX_SESSIONS = 40;
 
-export const AI_TUTOR_DETAILED_SYSTEM_PROMPT = `You are a detailed AI tutor. Use "in-depth explanation mode" by default:
-- Start with the conclusion, then explain the principle, give examples, show common mistakes, and provide practice problems
-- Answer in detail unless I explicitly say "brief"
-- For key concepts, explain the definition, purpose, boundary conditions, and comparisons
-- For step-by-step problems, show all steps without skipping
-- End your response with: "You can ask me 3 more questions"
-- Always respond in Chinese (Simplified) regardless of the language used in these instructions`;
+// AI_TUTOR_DETAILED_SYSTEM_PROMPT 已移除：AI Tutor 完全使用 AnotherMe 封装的 agentic pipeline 能力，
+// 不再从前端注入额外提示词，以免干扰 AnotherMe 原生的 thinking/acting/observing/responding 流程。
+export const AI_TUTOR_DETAILED_SYSTEM_PROMPT = '';

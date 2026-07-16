@@ -1,0 +1,35 @@
+{
+  "defaultModel": "qwen3.7-plus",
+  "capabilityDefaults": {
+    "auto": "qwen3.7-plus",
+    "chat": "qwen3.7-plus",
+    "visual_solve_fast": "qwen3.7-plus",
+    "deep_solve": "qwen3.7-plus",
+    "deep_question": "qwen3.6-max-preview",
+    "deep_research": "qwen3.6-max-preview",
+    "math_animator": "qwen3.6-max-preview",
+    "visualize": "qwen3.6-max-preview"
+  },
+  "models": [
+    {
+      "id": "qwen3.7-plus",
+      "label": "Qwen 3.7 Plus",
+      "provider": "通义千问",
+      "description": "DashScope vision-capable model for text and image chat",
+      "supportsVision": true,
+      "supportsTools": false,
+      "maxInputTokens": 128000,
+      "defaultFor": ["auto", "chat", "visual_solve_fast", "deep_solve"]
+    },
+    {
+      "id": "qwen3.6-max-preview",
+      "label": "Qwen 3.6 Max",
+      "provider": "通义千问",
+      "description": "DashScope text model for research and generation tasks",
+      "supportsVision": false,
+      "supportsTools": false,
+      "maxInputTokens": 128000,
+      "defaultFor": ["deep_question", "deep_research", "math_animator", "visualize"]
+    }
+  ]
+}

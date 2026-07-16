@@ -364,3 +364,43 @@ export function toToolExecutionTraces(traces?: TutorToolTrace[]): ToolExecutionT
     error: t.error,
   }));
 }
+
+/** 会话时间分组标签 */
+export type SessionTimeGroup = '今天' | '昨天' | '本周' | '更早';
+
+/** 按时间将会话分组，返回 [组名, 会话列表][] */
+export function groupSessionsByTime(
+  sessions: TutorSession[],
+): [SessionTimeGroup, TutorSession[]][] {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 86400000;
+  const weekStart = todayStart - 6 * 86400000;
+
+  const groups: Record<SessionTimeGroup, TutorSession[]> = {
+    '今天': [],
+    '昨天': [],
+    '本周': [],
+    '更早': [],
+  };
+
+  for (const session of sessions) {
+    const t = new Date(session.updatedAt).getTime();
+    if (t >= todayStart) groups['今天'].push(session);
+    else if (t >= yesterdayStart) groups['昨天'].push(session);
+    else if (t >= weekStart) groups['本周'].push(session);
+    else groups['更早'].push(session);
+  }
+
+  return (Object.entries(groups) as [SessionTimeGroup, TutorSession[]][]).filter(
+    ([, list]) => list.length > 0,
+  );
+}
+
+/** 提取会话的最后一条消息预览文本，最多 maxLen 个字符 */
+export function getSessionPreview(session: TutorSession, maxLen = 32): string {
+  const lastMsg = session.messages[session.messages.length - 1];
+  if (!lastMsg || !lastMsg.content.trim()) return '';
+  const text = lastMsg.content.replace(/\s+/g, ' ').trim();
+  return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+}

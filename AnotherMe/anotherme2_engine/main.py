@@ -49,6 +49,7 @@ class MathVideoGenerator:
         geometry_file: Optional[str] = None,
         export_ggb: bool = True,
         learner_memory: Optional[Dict[str, Any]] = None,
+        render_mode: str = "video",
     ) -> str:
         self.workflow = create_default_workflow(
             llm_config=self.llm_config,
@@ -56,6 +57,7 @@ class MathVideoGenerator:
             ocr_llm_config=self.ocr_vision_config,
             output_dir=output_dir,
             export_ggb=export_ggb,
+            render_mode=render_mode,
         )
 
         initial_state: AgentState = {
@@ -75,7 +77,7 @@ class MathVideoGenerator:
         }
 
         print("=" * 60)
-        print("Starting math video generation")
+        print(f"Starting math generation (render_mode={render_mode})")
         print("=" * 60)
         print(f"Image: {image_path}")
         if geometry_file:
@@ -95,8 +97,30 @@ class MathVideoGenerator:
         print(f"Total duration: {project.total_duration:.1f}s")
         if project.final_video_path:
             print(f"Output: {project.final_video_path}")
+        if project.matplotlib_image_path:
+            print(f"Matplotlib image: {project.matplotlib_image_path}")
+        if project.interactive_html_path:
+            print(f"Interactive HTML: {project.interactive_html_path}")
+        if project.scene_package_path:
+            print(f"Scene package: {project.scene_package_path}")
         if project.error_message:
             print(f"Error: {project.error_message}")
+
+        # Matplotlib 模式：返回图片路径
+        if render_mode == "matplotlib":
+            if not project.matplotlib_image_path:
+                details = project.error_message or f"workflow ended with status: {project.status}"
+                raise RuntimeError(f"AnotherMe2 matplotlib generation failed: {details}")
+            return project.matplotlib_image_path
+
+        # 交互模式：返回自包含 HTML 路径
+        if render_mode == "interactive":
+            if not project.interactive_html_path:
+                details = project.error_message or f"workflow ended with status: {project.status}"
+                raise RuntimeError(f"AnotherMe2 interactive generation failed: {details}")
+            return project.interactive_html_path
+
+        # 视频模式：返回视频路径
         if not project.final_video_path:
             details = project.error_message or f"workflow ended with status: {project.status}"
             raise RuntimeError(f"AnotherMe2 generation failed: {details}")

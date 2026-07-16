@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { useStageStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 export interface CanvasToolbarProps {
   readonly currentSceneIndex: number;
@@ -52,9 +53,9 @@ export interface CanvasToolbarProps {
   readonly onCycleSpeed?: () => void;
 }
 
-/* Compact control button */
+/* Compact control button — min 44px touch target on mobile */
 const ctrlBtn = cn(
-  'relative w-7 h-7 rounded-md flex items-center justify-center',
+  'relative min-h-[44px] min-w-[44px] md:min-h-[28px] md:min-w-[28px] w-7 h-7 rounded-md flex items-center justify-center',
   'transition-all duration-150 outline-none cursor-pointer',
   'hover:bg-gray-500/[0.08] dark:hover:bg-gray-400/[0.08] active:scale-90',
 );
@@ -110,6 +111,7 @@ export function CanvasToolbar({
   onCycleSpeed,
 }: CanvasToolbarProps) {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const canGoPrev = currentSceneIndex > 0;
   const canGoNext = currentSceneIndex < scenesCount - 1;
   const showPlayPause = !isLiveSession;
@@ -140,9 +142,9 @@ export function CanvasToolbar({
   const presentationLabel = isPresenting ? t('stage.exitFullscreen') : t('stage.fullscreen');
 
   return (
-    <div className={cn('flex items-center gap-2', className)}>
+    <div className={cn('flex items-center gap-1.5 md:gap-2 min-w-0', className)}>
       {/* ── Left: sidebar toggle + page indicator ── */}
-      <div className="flex items-center gap-1 shrink-0 pl-1">
+      <div className="flex items-center gap-1 shrink-0 pl-0.5 md:pl-1">
         {onToggleSidebar && (
           <button
             onClick={onToggleSidebar}
@@ -158,7 +160,7 @@ export function CanvasToolbar({
             <LayoutList className="w-3.5 h-3.5" />
           </button>
         )}
-        <span className="text-[11px] text-gray-400 dark:text-gray-500 tabular-nums select-none font-medium">
+        <span className="min-w-[30px] text-center text-[11px] text-gray-400 dark:text-gray-500 tabular-nums select-none font-medium">
           {currentSceneIndex + 1}
           <span className="opacity-35 mx-px">/</span>
           {scenesCount}
@@ -171,14 +173,14 @@ export function CanvasToolbar({
       <div className="flex-1 flex items-center justify-center min-w-0">
         <div
           className={cn(
-            'inline-flex items-center gap-0.5 px-1 h-7',
+            'inline-flex items-center gap-0.5 px-0.5 md:px-1 h-9 md:h-7',
             isPresenting
               ? '' /* Single visual layer in fullscreen — buttons sit inside outer pill directly */
               : 'bg-gray-100/60 dark:bg-gray-800/60 rounded-lg',
           )}
         >
           {/* Volume with vertical popover slider */}
-          {onToggleMute && (
+          {onToggleMute && !isMobile && (
             <div
               ref={volumeContainerRef}
               className="relative flex items-center"
@@ -245,7 +247,7 @@ export function CanvasToolbar({
           )}
 
           {/* Speed */}
-          {onCycleSpeed && (
+          {onCycleSpeed && !isMobile && (
             <TooltipProvider delayDuration={0}>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -297,7 +299,7 @@ export function CanvasToolbar({
                 onStopDiscussion();
               }}
               className={cn(
-                'flex items-center gap-1.5 h-6 px-2.5 rounded-md',
+                'flex min-h-[44px] md:min-h-0 items-center gap-1.5 h-9 md:h-6 px-2.5 rounded-md',
                 'bg-red-500/10 dark:bg-red-400/10 text-red-600 dark:text-red-400',
                 'text-[11px] font-semibold whitespace-nowrap',
                 'hover:bg-red-500/20 dark:hover:bg-red-400/20 active:scale-95 transition-all cursor-pointer',
@@ -308,7 +310,7 @@ export function CanvasToolbar({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
               </span>
-              {t('roundtable.stopDiscussion')}
+              <span className="max-sm:hidden">{t('roundtable.stopDiscussion')}</span>
             </button>
           ) : showPlayPause ? (
             <button
@@ -348,7 +350,7 @@ export function CanvasToolbar({
           <CtrlDivider />
 
           {/* Auto-play */}
-          {onToggleAutoPlay && (
+          {onToggleAutoPlay && !isMobile && (
             <TooltipProvider delayDuration={0}>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -397,7 +399,7 @@ export function CanvasToolbar({
       </div>
 
       {/* ── Right: fullscreen + chat toggle ── */}
-      <div className="flex items-center justify-end gap-px shrink-0 pr-1">
+      <div className="flex items-center justify-end gap-px shrink-0 pr-0.5 md:pr-1">
         <CtrlDivider />
         {onTogglePresentation && (
           <button

@@ -3,6 +3,7 @@ import type {
   GatewayDiagnosticProbe,
   GatewayKnowledgePoint,
   GatewayLearningEvent,
+  GatewayLearningEventStats,
   GatewayQuizAnswerResult,
   GatewayStudentKnowledgeContext,
   GatewayStudentKnowledgeState,
@@ -51,6 +52,50 @@ export async function createGatewayLearningEvent(params: {
         weight: params.weight,
       }),
     },
+  );
+}
+
+export async function listGatewayLearningEvents(params: {
+  userId: string;
+  eventType?: string;
+  classroomId?: string;
+  sceneId?: string;
+  limit?: number;
+}): Promise<GatewayLearningEvent[]> {
+  const query = new URLSearchParams();
+  if (params.eventType) {
+    query.set('event_type', params.eventType);
+  }
+  if (params.classroomId) {
+    query.set('classroom_id', params.classroomId);
+  }
+  if (params.sceneId) {
+    query.set('scene_id', params.sceneId);
+  }
+  if (typeof params.limit === 'number') {
+    query.set('limit', String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return gatewayFetch<GatewayLearningEvent[]>(
+    `/v1/users/${encodeURIComponent(params.userId)}/learning-events${suffix}`,
+  );
+}
+
+export async function getGatewayLearningEventStats(params: {
+  userId: string;
+  classroomId?: string;
+  lookbackDays?: number;
+}): Promise<GatewayLearningEventStats> {
+  const query = new URLSearchParams();
+  if (params.classroomId) {
+    query.set('classroom_id', params.classroomId);
+  }
+  if (typeof params.lookbackDays === 'number') {
+    query.set('lookback_days', String(params.lookbackDays));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return gatewayFetch<GatewayLearningEventStats>(
+    `/v1/users/${encodeURIComponent(params.userId)}/learning-events/stats${suffix}`,
   );
 }
 
@@ -140,6 +185,7 @@ export async function createGatewayQuizAnswer(params: {
   userId: string;
   questionId: string;
   isCorrect: boolean;
+  knowledgePointIds?: string[];
   payload?: Record<string, unknown>;
 }): Promise<GatewayQuizAnswerResult[]> {
   return gatewayFetch<GatewayQuizAnswerResult[]>(
@@ -152,6 +198,7 @@ export async function createGatewayQuizAnswer(params: {
       body: JSON.stringify({
         question_id: params.questionId,
         is_correct: params.isCorrect,
+        knowledge_point_ids: params.knowledgePointIds,
         payload: params.payload,
       }),
     },

@@ -62,11 +62,13 @@ class FormalVideoValidator:
         else:
             ok("drawable_points", "point registry detected")
 
-        has_geometry_container = "lines['" in code or "objects['" in code
+        has_image_geometry_base = "ImageMobject(" in code and "geometry_render_mode = 'image_overlay'" in code
+        has_geometry_container = "lines['" in code or "objects['" in code or has_image_geometry_base
         if not has_geometry_container:
             fail("drawable_geometry", "generated Manim code does not create drawable geometry objects")
         else:
-            ok("drawable_geometry", "geometry registry detected")
+            detail = "image base + overlay registry detected" if has_image_geometry_base else "geometry registry detected"
+            ok("drawable_geometry", detail)
 
         geometry_tokens = [
             "Dot(",
@@ -77,6 +79,7 @@ class FormalVideoValidator:
             "Angle(",
             "RightAngle(",
             "Arc(",
+            "ImageMobject(",
         ]
         if not any(token in code for token in geometry_tokens):
             fail("geometry_constructors", "generated Manim code is missing core geometric constructors")

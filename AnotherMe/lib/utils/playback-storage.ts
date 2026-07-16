@@ -14,6 +14,15 @@ export interface PlaybackSnapshot {
   sceneId?: string; // Scene this snapshot belongs to; discard on mismatch
 }
 
+function queueStageSync(stageId: string): void {
+  if (typeof window === 'undefined') return;
+  void import('./stage-storage')
+    .then(({ debouncedSyncToServer }) => debouncedSyncToServer(stageId))
+    .catch(() => {
+      // Best-effort server backup must not block local playback persistence.
+    });
+}
+
 /**
  * Save playback state for a stage.
  * Each stage has at most one playback state record.
@@ -31,6 +40,7 @@ export async function savePlaybackState(
     updatedAt: Date.now(),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
+  queueStageSync(stageId);
 }
 
 /**
@@ -55,4 +65,5 @@ export async function loadPlaybackState(stageId: string): Promise<PlaybackSnapsh
  */
 export async function clearPlaybackState(stageId: string): Promise<void> {
   await db.playbackState.delete(stageId);
+  queueStageSync(stageId);
 }

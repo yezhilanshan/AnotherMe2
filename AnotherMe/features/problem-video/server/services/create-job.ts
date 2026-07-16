@@ -6,6 +6,7 @@ import {
   uploadProblemImageToAnotherMe2,
 } from '@/lib/server/anotherme2-gateway';
 import { buildLearningContext } from '@/lib/server/learning-context';
+import { withProblemVideoStepPersonalization } from '@/lib/server/problem-video-step-personalization';
 import { createDefaultRuntime } from '@/lib/orchestration/capability-runtime';
 import { globalStreamBus } from '@/lib/orchestration/stream-bus';
 import { problemVideoGenerateHandler } from '@/lib/orchestration/handlers/problem-video-handler';
@@ -133,7 +134,7 @@ export async function createProblemVideoJob(
   input: CreateProblemVideoJobInput,
 ): Promise<CreateProblemVideoJobResult> {
   const upload = await uploadProblemImageToAnotherMe2(input.image);
-  const learningContext = input.userId
+  let learningContext = input.userId
     ? await buildLearningContext({
         userId: input.userId,
         source: 'problem_video',
@@ -152,6 +153,12 @@ export async function createProblemVideoJob(
         lookbackDays: input.learnerLookbackDays,
       })
     : undefined;
+  if (learningContext) {
+    learningContext = withProblemVideoStepPersonalization(
+      learningContext,
+      input.problemText || input.image.name,
+    );
+  }
 
   const runtime = createDefaultRuntime({
     buildContext: async () =>

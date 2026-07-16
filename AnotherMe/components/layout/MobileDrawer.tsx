@@ -8,7 +8,7 @@ import {
   LayoutDashboard,
   BookOpen,
   Camera,
-  NotebookPen,
+  PenLine,
   Settings,
   LogOut,
   GraduationCap,
@@ -33,7 +33,7 @@ const navItems: Array<{
   { name: '创建课堂', href: '/create-class', icon: BookOpen },
   { name: '我的课程', href: '/classes', icon: Library },
   { name: '拍题答疑', href: '/photo-to-video', icon: Camera },
-  { name: '笔记本', href: '/notebook', icon: NotebookPen },
+  { name: '协作写作', href: '/co-writer', icon: PenLine },
   { name: '诊断练习', href: '/diagnostic', icon: Stethoscope },
   { name: 'AI 导师', href: '/ai-tutor', icon: Headphones },
   { name: '消息中心', href: '/messages', icon: MessageSquare },
@@ -54,16 +54,13 @@ export function MobileDrawer() {
     touchStartY.current = e.touches[0].clientY;
   }, []);
 
-  const handleTouchEnd = useCallback(
-    (e: React.TouchEvent) => {
-      const deltaX = e.changedTouches[0].clientX - touchStartX.current;
-      const deltaY = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
-      if (deltaX > SWIPE_THRESHOLD && deltaY < 100) {
-        setOpen(false);
-      }
-    },
-    [],
-  );
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    const deltaY = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+    if (deltaX > SWIPE_THRESHOLD && deltaY < 100) {
+      setOpen(false);
+    }
+  }, []);
 
   return (
     <>
@@ -96,7 +93,7 @@ export function MobileDrawer() {
       <div
         className={cn(
           'md:hidden fixed top-0 right-0 bottom-0 z-50 w-[280px] bg-white dark:bg-slate-950 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col pt-safe pb-safe',
-          open ? 'translate-x-0' : 'translate-x-full'
+          open ? 'translate-x-0' : 'translate-x-full',
         )}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
@@ -116,7 +113,8 @@ export function MobileDrawer() {
         {/* Drawer Nav Items */}
         <div className="flex-1 overflow-auto py-3 px-3 flex flex-col gap-1">
           {navItems.map((item) => {
-            const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+            const isActive =
+              pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
             return (
               <Link
                 key={item.name}
@@ -126,7 +124,7 @@ export function MobileDrawer() {
                   'flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-200 min-h-[44px]',
                   isActive
                     ? 'bg-black dark:bg-white text-white dark:text-slate-900 font-medium'
-                    : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900'
+                    : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900',
                 )}
               >
                 <item.icon
@@ -134,7 +132,7 @@ export function MobileDrawer() {
                     'h-5 w-5 shrink-0',
                     isActive
                       ? 'text-white dark:text-slate-900'
-                      : 'text-gray-400 dark:text-slate-500'
+                      : 'text-gray-400 dark:text-slate-500',
                   )}
                 />
                 <span className="text-sm">{item.name}</span>
@@ -150,7 +148,7 @@ export function MobileDrawer() {
                 'flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-200 min-h-[44px]',
                 pathname === '/settings'
                   ? 'bg-black dark:bg-white text-white dark:text-slate-900 font-medium'
-                  : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900'
+                  : 'text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 hover:bg-gray-50 dark:hover:bg-slate-900',
               )}
             >
               <Settings
@@ -158,7 +156,7 @@ export function MobileDrawer() {
                   'h-5 w-5 shrink-0',
                   pathname === '/settings'
                     ? 'text-white dark:text-slate-900'
-                    : 'text-gray-400 dark:text-slate-500'
+                    : 'text-gray-400 dark:text-slate-500',
                 )}
               />
               <span className="text-sm">系统设置</span>

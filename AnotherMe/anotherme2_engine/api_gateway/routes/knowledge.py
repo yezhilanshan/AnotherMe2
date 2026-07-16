@@ -36,7 +36,7 @@ from .auth import require_token
 
 
 def create_knowledge_router(settings: Settings) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["knowledge"])
 
     # ------------------------------------------------------------------
     # Knowledge Tracing APIs

@@ -30,9 +30,11 @@ _EXPORTS = {
     "SceneGraphUpdater": ".planning.scene_graph_updater",
     "CanvasScene": ".planning.canvas_scene",
     "RepairAgent": ".execution.repair_agent",
+    "RenderReviewRepairAgent": ".execution.render_review_repair_agent",
     "VoiceAgent": ".execution.voice_agent",
     "LearnerModelingAgent": ".planning.learner_modeling_agent",
     "MergeAgent": ".execution.merge_agent",
+    "SemanticRenderReviewer": ".execution.semantic_render_reviewer",
     "create_workflow": ".orchestration.workflow",
     "create_default_workflow": ".orchestration.workflow",
 }

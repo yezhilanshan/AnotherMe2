@@ -6,6 +6,7 @@
  */
 
 import type { UIMessage } from 'ai';
+import type { SocraticChainState } from '@anotherme/teaching-core';
 
 // Session Types
 export type SessionType = 'qa' | 'discussion' | 'lecture';
@@ -31,7 +32,15 @@ export interface ChatMessageMetadata {
  * Stream event for tool execution visualization
  */
 export interface StreamEvent {
-  type: 'thinking' | 'observation' | 'content' | 'progress' | 'tool_call' | 'tool_result' | 'error' | 'result';
+  type:
+    | 'thinking'
+    | 'observation'
+    | 'content'
+    | 'progress'
+    | 'tool_call'
+    | 'tool_result'
+    | 'error'
+    | 'result';
   stage: string;
   content: string;
   timestamp: number;
@@ -241,15 +250,16 @@ import type { TutorToolName, TutorToolConfig } from '@/lib/types/tutor-tools';
 export interface UserReaction {
   type: 'confused' | 'too_fast' | 'agree' | 'want_example' | 'boring';
   timestamp: number;
-  /** Optional: which agent's response triggered this reaction */
   targetAgentId?: string;
 }
 
-/**
- * Accumulated director state passed between per-agent requests.
- * Client-maintained — backend is stateless.
- */
+export type { SocraticChainState } from '@anotherme/teaching-core';
+
 export interface DirectorState {
+  /**
+   * Accumulated director state passed between per-agent requests.
+   * Client-maintained — backend is stateless.
+   */
   turnCount: number;
   agentResponses: AgentTurnSummary[];
   whiteboardLedger: WhiteboardActionRecord[];
@@ -319,6 +329,17 @@ export interface StatelessChatRequest {
      * @default 10 for multi-agent, 1 for single-agent
      */
     maxTurns?: number;
+    /**
+     * 苏格拉底提示层级，0=首次引导，1=方向性提示，2=深层拆解，3=最终手段
+     * @default 0
+     */
+    socraticHintLevel?: number;
+    /**
+     * 学生学段（用于自适应工具描述和回答语气）。
+     * 'junior_high' | 'senior_high' | 'college'
+     * @default 'college'（保持向后兼容）
+     */
+    studentLevel?: import('@/features/ai-tutor/types/tutor-tools').StudentLevel;
   };
   /** Accumulated director state from previous per-agent requests */
   directorState?: DirectorState;
@@ -333,6 +354,8 @@ export interface StatelessChatRequest {
   diagnosticSession?: import('@/lib/types/learning-context').DiagnosticSessionSnapshot | null;
   /** User reactions accumulated during the current discussion (sent with each request) */
   userReactions?: UserReaction[];
+  /** 苏格拉底追问链状态（客户端维护，跨轮持久化） */
+  socraticChainState?: SocraticChainState | null;
   /** OpenAI-compatible API credentials */
   apiKey: string;
   baseUrl?: string;
@@ -360,7 +383,7 @@ export interface StatelessChatRequest {
    * - 'visualize': 可视化生成（SVG/Chart.js/Mermaid）
    * @default 'chat'
    */
-  capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize';
+  capability?: 'chat' | 'auto' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize';
 }
 
 /**
@@ -391,6 +414,7 @@ export type StatelessEvent =
     }
   | { type: 'agent_end'; data: { messageId: string; agentId: string } }
   | { type: 'text_delta'; data: { content: string; messageId?: string } }
+  | { type: 'code_delta'; data: { code: string; stage?: string; format?: string } }
   | {
       type: 'action';
       data: {
@@ -403,7 +427,21 @@ export type StatelessEvent =
     }
   | {
       type: 'thinking';
-      data: { stage: 'director' | 'agent_loading'; agentId?: string; reasoning?: string };
+      data: {
+        stage:
+          | 'director'
+          | 'agent_loading'
+          | 'planning'
+          | 'reasoning'
+          | 'rephrasing'
+          | 'decomposing'
+          | 'analyzing'
+          | 'reviewing'
+          | 'designing';
+        agentId?: string;
+        reasoning?: string;
+        content?: string;
+      };
     }
   | { type: 'cue_user'; data: { fromAgentId?: string; prompt?: string } }
   | {

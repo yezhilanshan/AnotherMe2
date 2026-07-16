@@ -256,7 +256,7 @@ class SceneGraphUpdater:
         if not has_transform:
             return scene
 
-        # 折叠轴优先级：步骤显式提到的线段 -> AD -> AB -> 第一条可用线段
+        # 折叠轴优先级：步骤显式轴 -> 焦点线段 -> 第一条可用线段。
         axis_pairs: List[List[str]] = []
         for op in operations:
             if str(op.get("type", "")).strip().lower() != "transform":
@@ -292,10 +292,6 @@ class SceneGraphUpdater:
                 refs = _line_points(entity_id)
                 if refs:
                     axis_pairs.append(refs)
-        if _line_points("AD"):
-            axis_pairs.append(_line_points("AD"))
-        if _line_points("AB"):
-            axis_pairs.append(_line_points("AB"))
         for item in lines:
             if not isinstance(item, dict):
                 continue

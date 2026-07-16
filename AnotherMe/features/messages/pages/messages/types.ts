@@ -128,5 +128,6 @@ export type SearchResponse = {
 export type WSConfigResponse = {
   success: boolean;
   wsBaseUrl?: string;
+  token?: string | null;
   error?: string;
 };

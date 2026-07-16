@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 class JobType(str, Enum):
     COURSE_GENERATE = "course_generate"
     PROBLEM_VIDEO_GENERATE = "problem_video_generate"
+    PHOTO_MANIM_DIRECT = "photo_manim_direct"
     STUDY_PACKAGE_GENERATE = "study_package_generate"
     LEARNING_RECORD_EXTRACT = "learning_record_extract"
 
@@ -42,6 +43,12 @@ class CourseGenerateInput(BaseModel):
     language: str = "zh-CN"
     options: CourseOptions = Field(default_factory=CourseOptions)
     pedagogy_profile: Optional[PedagogyProfile] = None
+    request_id: Optional[str] = Field(default=None, max_length=128)
+    source_object_key: Optional[str] = None
+    source_file_name: Optional[str] = None
+    source_mime_type: Optional[str] = None
+    source_text: Optional[str] = None
+    pdf_content: Optional[Dict[str, Any]] = None
 
 
 class ProblemVideoGenerateInput(BaseModel):
@@ -55,6 +62,7 @@ class ProblemVideoGenerateInput(BaseModel):
     learner_session_id: Optional[str] = None
     learner_lookback_days: int = Field(default=120, ge=14, le=365)
     learning_context: Optional[Dict[str, Any]] = None
+    render_mode: str = "video"  # "video", "matplotlib", or "interactive"
 
 
 class StudyPackageSource(BaseModel):
@@ -92,6 +100,7 @@ class UploadResponse(BaseModel):
     url: str
     size: int
     content_type: str
+    sha256: Optional[str] = None
 
 
 class JobSummary(BaseModel):
@@ -117,6 +126,7 @@ class APIError(BaseModel):
     error_code: str
     message: str
     details: Optional[Dict[str, Any]] = None
+    request_id: Optional[str] = None
 
 
 class MessageAttachmentInput(BaseModel):
@@ -133,6 +143,7 @@ class CreateConversationRequest(BaseModel):
     name: str = Field(..., min_length=1)
     creator_id: Optional[str] = None
     member_ids: list[str] = Field(default_factory=list)
+    metadata: Optional[dict] = None
 
 
 class ConversationSummary(BaseModel):
@@ -243,6 +254,9 @@ class CreateAIChatMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
     user_id: Optional[str] = None
     content_type: str = "text"
+    capability: str = ""
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     model_name: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
@@ -255,9 +269,22 @@ class CreateAIChatMessageRequest(BaseModel):
 class AIChatMessageOutput(BaseModel):
     message_id: str
     session_id: str
+    runtime_seq: Optional[int] = None
     role: str
     content: str
+    content_preview: Optional[str] = None
+    full_content_ref: Optional[str] = None
+    content_length: int = 0
+    content_truncated: bool = False
+    model_incomplete: bool = False
+    server_cutoff: bool = False
+    client_preview_only: bool = False
+    history_preview_only: bool = False
+    storage_preview_only: bool = False
     content_type: str
+    capability: str = ""
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     model_name: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
@@ -503,6 +530,7 @@ def validate_job_payload(job_type: JobType, payload: Dict[str, Any]) -> Dict[str
     model_map = {
         JobType.COURSE_GENERATE: CourseGenerateInput,
         JobType.PROBLEM_VIDEO_GENERATE: ProblemVideoGenerateInput,
+        JobType.PHOTO_MANIM_DIRECT: ProblemVideoGenerateInput,
         JobType.STUDY_PACKAGE_GENERATE: StudyPackageGenerateInput,
         JobType.LEARNING_RECORD_EXTRACT: LearningRecordExtractInput,
     }

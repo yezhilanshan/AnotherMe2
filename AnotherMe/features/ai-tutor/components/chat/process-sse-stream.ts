@@ -1,4 +1,5 @@
 import type { StatelessEvent } from '@/lib/types/chat';
+import type { TeachingTraceEvent } from '@/lib/types/teaching-trace';
 import type { StreamBuffer } from '@/lib/buffer/stream-buffer';
 import { createLogger } from '@/lib/logger';
 
@@ -14,6 +15,9 @@ export async function processSSEStream(
   sessionId: string,
   buffer: StreamBuffer,
   signal?: AbortSignal,
+  options?: {
+    onTeachingTrace?: (event: TeachingTraceEvent) => void;
+  },
 ): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -43,9 +47,16 @@ export async function processSSEStream(
         let sseError: Error | null = null;
 
         try {
-          const event: StatelessEvent = JSON.parse(line.slice(6));
+          const event = JSON.parse(line.slice(6)) as
+            | StatelessEvent
+            | { type: 'teaching_trace'; data: TeachingTraceEvent };
 
           switch (event.type) {
+            case 'teaching_trace': {
+              options?.onTeachingTrace?.(event.data);
+              break;
+            }
+
             case 'agent_start': {
               const { messageId, agentId, agentName, agentAvatar, agentColor } = event.data;
               currentMessageId = messageId;
@@ -71,6 +82,16 @@ export async function processSSEStream(
               const targetId = event.data.messageId ?? currentMessageId;
               if (!targetId) break;
               buffer.pushText(targetId, event.data.content);
+              break;
+            }
+
+            case 'code_delta': {
+              const targetId = currentMessageId;
+              if (!targetId) break;
+              const code = event.data?.code;
+              if (typeof code === 'string' && code) {
+                buffer.pushText(targetId, code);
+              }
               break;
             }
 

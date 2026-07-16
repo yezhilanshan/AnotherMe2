@@ -6,7 +6,7 @@ from ..config import Settings
 
 
 def create_core_router(settings: Settings, queue_client) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(tags=["core"])
 
     @router.get("/")
     def root() -> dict:

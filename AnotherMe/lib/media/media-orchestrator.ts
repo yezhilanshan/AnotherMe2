@@ -4,6 +4,11 @@
  * Dispatches media generation API calls for all mediaGenerations across outlines.
  * Runs entirely on the frontend — calls /api/generate/image and /api/generate/video,
  * fetches result blobs, stores in IndexedDB, and updates the Zustand store.
+ *
+ * Fallback strategy for video generation (via unified FallbackChain):
+ *   1. Direct call → success → done
+ *   2. CONTENT_SENSITIVE → mark needs_confirmation → user decides
+ *   3. Other error → FallbackChain (provider switch, extensible)
  */
 
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
@@ -14,6 +19,7 @@ import type { MediaGenerationRequest, VideoProviderId } from '@/lib/media/types'
 import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
 import { createLogger } from '@/lib/logger';
 import { recordMediaExperience, suggestFallbackVideoProvider } from '@/lib/media/media-experience';
+import { FallbackChain, createProviderSwitchStrategy } from '@/lib/fallback';
 
 const log = createLogger('MediaOrchestrator');
 const MEDIA_GENERATION_MAX_CONCURRENCY = 2;
@@ -75,6 +81,40 @@ export async function generateMediaForOutlines(
   };
 
   await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+}
+
+/**
+ * Confirm content-softening and retry video generation with the safe prompt.
+ * Call this when the user accepts the softened prompt after CONTENT_SENSITIVE.
+ */
+export async function confirmSofteningAndRetry(elementId: string): Promise<void> {
+  const store = useMediaGenerationStore.getState();
+  const task = store.getTask(elementId);
+  if (!task || task.status !== 'needs_confirmation' || !task.softenedPrompt) return;
+
+  // Transition to pending (this also replaces prompt with softenedPrompt)
+  store.confirmSoftening(elementId);
+
+  const updatedTask = store.getTask(elementId);
+  if (!updatedTask) return;
+
+  await generateSingleMedia(
+    {
+      type: updatedTask.type,
+      prompt: updatedTask.prompt,
+      elementId: updatedTask.elementId,
+      aspectRatio: updatedTask.params.aspectRatio as MediaGenerationRequest['aspectRatio'],
+      style: updatedTask.params.style,
+    },
+    updatedTask.stageId,
+  );
+}
+
+/**
+ * Reject content-softening — marks the task as failed with user cancellation.
+ */
+export function rejectSoftening(elementId: string): void {
+  useMediaGenerationStore.getState().rejectSoftening(elementId);
 }
 
 /**
@@ -363,7 +403,10 @@ async function pollVideoGatewayJob(
     if (job.status === 'succeeded') {
       const url = job.result?.url;
       if (!url) {
-        throw new MediaApiError('Gateway job succeeded but no video URL returned', 'GENERATION_FAILED');
+        throw new MediaApiError(
+          'Gateway job succeeded but no video URL returned',
+          'GENERATION_FAILED',
+        );
       }
       return {
         url,
@@ -441,32 +484,12 @@ async function generateVideoWithRecovery(
 
     if (directErrorCode === 'CONTENT_SENSITIVE') {
       const softenedPrompt = makeSafePrompt(req.prompt);
-      try {
-        const softened = await callVideoApi(req, abortSignal, {
-          providerId: currentProviderId,
-          modelId: currentModelId,
-          prompt: softenedPrompt,
-        });
-        await recordMediaExperience({
-          kind: 'video',
-          providerId: currentProviderId,
-          modelId: currentModelId,
-          success: true,
-          strategy: 'soften_prompt',
-        });
-        return softened;
-      } catch (softenError) {
-        await recordMediaExperience({
-          kind: 'video',
-          providerId: currentProviderId,
-          modelId: currentModelId,
-          success: false,
-          errorCode: getErrorCode(softenError),
-          strategy: 'soften_prompt',
-        });
-      }
+      useMediaGenerationStore.getState().markNeedsConfirmation(req.elementId, softenedPrompt);
+      log.info(`Content sensitive for ${req.elementId}: marked needs_confirmation`);
+      throw error;
     }
 
+    // --- Unified FallbackChain: provider switching ---
     const configuredProviders = getConfiguredVideoProviderIds();
     const fallbackProviderId = await suggestFallbackVideoProvider({
       currentProviderId,
@@ -476,19 +499,34 @@ async function generateVideoWithRecovery(
 
     if (fallbackProviderId && fallbackProviderId !== currentProviderId) {
       const fallbackModelId = VIDEO_PROVIDERS[fallbackProviderId]?.models?.[0]?.id;
+
+      // Use FallbackChain so additional strategies (retry, degrade) can be
+      // added later without restructuring this function.
+      const chain = new FallbackChain<MediaGenerationRequest>([
+        createProviderSwitchStrategy(async (r, ctx) => {
+          const fallbackResult = await callVideoApi(req, abortSignal, {
+            providerId: fallbackProviderId,
+            modelId: fallbackModelId,
+          });
+          await recordMediaExperience({
+            kind: 'video',
+            providerId: fallbackProviderId,
+            modelId: fallbackModelId,
+            success: true,
+            strategy: `fallback_provider`,
+          });
+          return fallbackResult as unknown as MediaGenerationRequest;
+        }),
+      ]);
+
       try {
-        const fallbackResult = await callVideoApi(req, abortSignal, {
-          providerId: fallbackProviderId,
-          modelId: fallbackModelId,
+        // Execute: primary is known to have failed, so skip straight to strategy.
+        // FallbackChain will try each strategy in order until one succeeds.
+        const fallbackResult = await chain.execute(req, async () => {
+          // Primary already failed — re-throw to trigger fallback chain
+          throw error;
         });
-        await recordMediaExperience({
-          kind: 'video',
-          providerId: fallbackProviderId,
-          modelId: fallbackModelId,
-          success: true,
-          strategy: 'fallback_provider',
-        });
-        return fallbackResult;
+        return fallbackResult as unknown as { url: string; poster?: string };
       } catch (fallbackError) {
         await recordMediaExperience({
           kind: 'video',

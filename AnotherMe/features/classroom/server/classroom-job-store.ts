@@ -250,6 +250,27 @@ export async function markClassroomGenerationJobSucceeded(
   });
 }
 
+/** Write partial result to a running job so pollers can get classroomId early. */
+export async function writeClassroomGenerationJobResult(
+  jobId: string,
+  result: { classroomId: string; url: string; scenesCount: number },
+): Promise<void> {
+  return withJobLock(jobId, async () => {
+    const existing = await readClassroomGenerationJob(jobId);
+    if (!existing || existing.status === "canceled") return;
+    const updated: ClassroomGenerationJob = {
+      ...existing,
+      result: {
+        classroomId: result.classroomId,
+        url: result.url,
+        scenesCount: result.scenesCount,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+  });
+}
+
 export async function markClassroomGenerationJobFailed(
   jobId: string,
   error: string,

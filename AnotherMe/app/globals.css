@@ -72,11 +72,11 @@
   --border: #e2d7c8;
   --input: #e8ddd0;
   --ring: #b59369;
-  --chart-1: #96673a;
-  --chart-2: #70624d;
-  --chart-3: #c07f45;
-  --chart-4: #8e8a7d;
-  --chart-5: #4d6a5c;
+  --chart-1: #6366f1;
+  --chart-2: #06b6d4;
+  --chart-3: #f59e0b;
+  --chart-4: #10b981;
+  --chart-5: #ec4899;
   --radius: 1rem;
   --sidebar: #f9f4ed;
   --sidebar-foreground: #2b2621;
@@ -107,11 +107,11 @@
   --border: #342d26;
   --input: #332c25;
   --ring: #bc9469;
-  --chart-1: #ddb07c;
-  --chart-2: #8f8069;
-  --chart-3: #b97943;
-  --chart-4: #b5ac9b;
-  --chart-5: #7da08f;
+  --chart-1: #818cf8;
+  --chart-2: #22d3ee;
+  --chart-3: #fbbf24;
+  --chart-4: #34d399;
+  --chart-5: #f472b6;
   --sidebar: #1c1814;
   --sidebar-foreground: #f4ece4;
   --sidebar-primary: #f0dec4;
@@ -932,6 +932,58 @@
   font-weight: 700;
 }
 
+.ai-tutor-response,
+.ai-tutor-response-markdown {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ai-tutor-response-markdown :where(pre, table, img, video, iframe, .katex-display) {
+  max-width: 100%;
+}
+
+.ai-tutor-response-markdown :where(pre, .katex-display) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ai-tutor-response-markdown :where(table) {
+  width: max-content;
+  min-width: 100%;
+}
+
+.ai-tutor-response-markdown :where(code, kbd, samp) {
+  overflow-wrap: anywhere;
+}
+
+.ai-tutor-response-markdown :where(pre code) {
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+@media (max-width: 640px) {
+  .ai-tutor-markdown {
+    line-height: 1.62;
+  }
+
+  .ai-tutor-response-markdown :where(h1, h2) {
+    font-size: 1.05rem;
+    line-height: 1.35;
+  }
+
+  .ai-tutor-response-markdown :where(h3, h4) {
+    font-size: 0.98rem;
+    line-height: 1.4;
+  }
+
+  .ai-tutor-response-markdown :where(pre) {
+    border-radius: 0.5rem;
+    font-size: 0.78rem;
+  }
+}
+
 /* Safe area insets for notched/punch-hole devices */
 :root {
   --sat: env(safe-area-inset-top);
@@ -1024,4 +1076,34 @@
   .group\/message [data-slot='tooltip'] {
     pointer-events: auto;
   }
+}
+
+/* ── Mobile landscape classroom: maximise content area ── */
+@media (orientation: landscape) and (pointer: coarse) {
+  /* Safe area insets swap in landscape: notch moves to left/right */
+  :root {
+    --sat: env(safe-area-inset-top);
+    --sar: env(safe-area-inset-right);
+    --sab: env(safe-area-inset-bottom);
+    --sal: env(safe-area-inset-left);
+  }
+}
+
+/* Floating toolbar auto-hide for mobile landscape */
+@keyframes toolbar-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; pointer-events: none; }
+}
+
+.landscape-toolbar-auto-hide {
+  animation: toolbar-fade-out 0.3s ease forwards;
+  animation-delay: 3s;
+}
+
+.landscape-toolbar-auto-hide:hover,
+.landscape-toolbar-auto-hide:focus-within,
+.landscape-toolbar-auto-hide[data-active="true"] {
+  animation: none;
+  opacity: 1;
+  pointer-events: auto;
 }

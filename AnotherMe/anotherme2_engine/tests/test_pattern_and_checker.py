@@ -20,6 +20,33 @@ class PatternAndCheckerTests(unittest.TestCase):
         self.assertEqual(result["problem_pattern"], "fold_transform")
         self.assertEqual(result["sub_pattern"], "fold_point_to_point_distance")
 
+    def test_problem_pattern_classifier_uses_geometry_ir_templates_boundary(self) -> None:
+        classifier = ProblemPatternClassifier()
+        metadata = {
+            "geometry_ir": {
+                "version": "geometry_ir.v1",
+                "scene_draft": {
+                    "fold_correspondences": [
+                        {"source": "B", "image": "B1"},
+                    ]
+                },
+                "facts": {
+                    "visual_observed": {
+                        "segments": [
+                            {"points": ["B", "C"]},
+                        ]
+                    }
+                },
+            }
+        }
+
+        result = classifier.classify(
+            problem_text="已知 B1 到 BC 的距离为 x，求 x 的取值范围",
+            metadata=metadata,
+        )
+
+        self.assertEqual(result["problem_pattern"], "fold_transform")
+
     def test_teaching_ir_geometry_includes_problem_pattern(self) -> None:
         planner = TeachingIRPlanner()
         metadata = {

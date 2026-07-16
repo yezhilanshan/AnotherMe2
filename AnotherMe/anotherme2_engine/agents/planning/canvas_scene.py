@@ -1,6 +1,7 @@
 """
 画布场景管理 - 管理几何区和公式区布局，输出稳定布局快照
 """
+import re
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
@@ -60,6 +61,48 @@ class FormulaLayoutManager:
             order=slot_index,
         )
 
+    def place_step_items(self, formula_items: List[str]) -> List[CanvasElement]:
+        left, top, right, bottom = self.formula_area
+        items = [
+            str(item or "").strip()
+            for item in formula_items[: self.max_slots]
+            if str(item or "").strip()
+        ]
+        if not items:
+            return []
+
+        weights = [1.35 if self._is_explanatory_text(item) else 1.0 for item in items]
+        total_gap = self.vertical_gap * max(len(items) - 1, 0)
+        usable_height = max((bottom - top) - total_gap, 0.24)
+        total_weight = max(sum(weights), 1.0)
+
+        elements: List[CanvasElement] = []
+        cursor = top
+        for index, (item, weight) in enumerate(zip(items, weights), start=1):
+            height = max(usable_height * weight / total_weight, 0.07)
+            if index == len(items):
+                height = max(min(bottom - cursor, height), 0.07)
+            element = CanvasElement(
+                id=f"formula_slot_{index}",
+                kind="text" if self._is_explanatory_text(item) else "formula",
+                content=item,
+                area="formula",
+                x=left,
+                y=cursor,
+                width=right - left,
+                height=min(height, max(bottom - cursor, 0.07)),
+                order=index - 1,
+            )
+            elements.append(element)
+            cursor += element.height + self.vertical_gap
+            if cursor >= bottom:
+                break
+        return elements
+
+    @staticmethod
+    def _is_explanatory_text(content: str) -> bool:
+        return bool(re.search(r"[\u4e00-\u9fff]", str(content or "")))
+
 
 class CanvasScene:
     """用于几何区/公式区布局管理，并输出稳定布局快照。"""
@@ -71,9 +114,10 @@ class CanvasScene:
         formula_area: Optional[List[float]] = None,
     ):
         self.elements: Dict[str, CanvasElement] = {}
-        # 左侧题图区稍微缩小，放在左侧中间；右侧公式区加宽以承载更多公式。
-        self.geometry_area = geometry_area or [0.02, 0.08, 0.56, 0.92]
-        self.formula_area = formula_area or [0.60, 0.08, 0.96, 0.92]
+        # Geometry needs enough visual weight in exported videos; keep formula
+        # text to the far right so the two areas do not compete.
+        self.geometry_area = geometry_area or [0.02, 0.08, 0.64, 0.92]
+        self.formula_area = formula_area or [0.68, 0.08, 0.96, 0.92]
         self.formula_layout = FormulaLayoutManager(self.formula_area, max_slots=max_formula_slots)
 
     def add_element(self, element: CanvasElement) -> None:
@@ -116,16 +160,12 @@ class CanvasScene:
             self.clear_formula_elements()
 
         elements: List[CanvasElement] = []
-        slot_count = self.formula_layout.max_slots
-        for index, item in enumerate(formula_items[:slot_count], start=1):
-            safe_item = item.strip() or f"step_{step_id}_formula_{index}"
-            element_id = f"formula_slot_{index}"
-            element = self.formula_layout.place_formula(
-                existing_elements=list(self.elements.values()),
-                element_id=element_id,
-                content=safe_item,
-                slot_index=index - 1,
-            )
+        for index, element in enumerate(
+            self.formula_layout.place_step_items(formula_items),
+            start=1,
+        ):
+            if not element.content:
+                element.content = f"step_{step_id}_formula_{index}"
             self.add_element(element)
             elements.append(element)
         return elements

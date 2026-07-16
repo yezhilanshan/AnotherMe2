@@ -310,7 +310,7 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
   }, [currentSceneId]);
 
   // Toggle save state for a card
-  const toggleSave = (sceneId: string) => {
+  const toggleSave = async (sceneId: string) => {
     const target = knowledgeSections.find((section) => section.sceneId === sceneId);
     if (!target) return;
 
@@ -318,7 +318,7 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
     const wasSaved = Boolean(savedCards[sceneId]?.saved);
 
     if (wasSaved) {
-      removeKnowledgeCardNote(stageKey, sceneId);
+      await removeKnowledgeCardNote(stageKey, sceneId);
       setSavedCards((prev) => ({
         ...prev,
         [sceneId]: {
@@ -330,7 +330,7 @@ export function LectureNotesView({ scenes, currentSceneId, stageId }: LectureNot
       return;
     }
 
-    const note = upsertKnowledgeCardNote({
+    const note = await upsertKnowledgeCardNote({
       stageId: stageKey,
       sceneId,
       title: target.title,

@@ -1,7 +1,7 @@
 export type NotebookSource = 'manual' | 'knowledge-card' | 'photo-video' | 'chat' | 'solve' | 'research';
 export type NoteSortOption = 'updatedAt' | 'createdAt' | 'title';
 
-// 笔记类型（参考 DeepTutor）
+// 笔记类型（参考 AnotherMe）
 export type NotebookNoteType =
   | 'manual'      // 手动创建
   | 'chat'        // 聊天保存
@@ -10,7 +10,7 @@ export type NotebookNoteType =
   | 'classroom'   // 课堂笔记
   | 'quiz';       // 测验记录
 
-// 笔记本（参考 DeepTutor 的多笔记本管理）
+// 笔记本（参考 AnotherMe 的多笔记本管理）
 export interface Notebook {
   id: string;
   name: string;
@@ -72,21 +72,21 @@ export interface NotebookManagerState {
   activeNotebookId: string | null;
 }
 
-const NOTEBOOK_STORAGE_KEY = 'anotherme:notebook:items:v2';      // v2 升级版本
-const NOTEBOOK_TRASH_KEY = 'anotherme:notebook:trash:v1';
-const NOTEBOOK_SETTINGS_KEY = 'anotherme:notebook:settings:v1';
-const NOTEBOOK_MANAGER_KEY = 'anotherme:notebook:manager:v1';    // 笔记本管理
-const LEGACY_NOTEBOOK_STORAGE_KEY = 'workspace:notebook:items';
-const LEGACY_NOTEBOOK_V1_KEY = 'anotherme:notebook:items:v1';
+// localStorage keys deprecated — data now stored in IndexedDB via notebook-db.ts
+// Kept for reference during migration period
+const _DEPRECATED_KEYS = [
+  'anotherme:notebook:items:v2',
+  'anotherme:notebook:trash:v1',
+  'anotherme:notebook:settings:v1',
+  'anotherme:notebook:manager:v1',
+  'workspace:notebook:items',
+  'anotherme:notebook:items:v1',
+];
 
 export interface NotebookSettings {
   sortBy: NoteSortOption;
   sortOrder: 'asc' | 'desc';
   viewMode: 'list' | 'grouped';
-}
-
-function hasWindowStorage(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 }
 
 function safeJsonParse(raw: string | null): unknown {
@@ -101,6 +101,60 @@ function safeJsonParse(raw: string | null): unknown {
 function normalizeTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+const NOTE_TYPES = new Set<NotebookNoteType>(['manual', 'chat', 'solve', 'research', 'classroom', 'quiz']);
+const NOTE_SOURCES = new Set<NotebookSource>(['manual', 'knowledge-card', 'photo-video', 'chat', 'solve', 'research']);
+
+function normalizeNoteType(value: unknown): NotebookNoteType {
+  return typeof value === 'string' && NOTE_TYPES.has(value as NotebookNoteType) ? (value as NotebookNoteType) : 'manual';
+}
+
+function normalizeNoteSource(value: unknown): NotebookSource {
+  return typeof value === 'string' && NOTE_SOURCES.has(value as NotebookSource) ? (value as NotebookSource) : 'manual';
+}
+
+function normalizeNotebookBook(book: NotebookBookRecord): Notebook {
+  return {
+    id: book.id,
+    name: book.name,
+    description: book.description ?? '',
+    color: book.color ?? '#3B82F6',
+    icon: book.icon ?? 'book',
+    createdAt: book.createdAt,
+    updatedAt: book.updatedAt,
+    recordCount: book.recordCount,
+  };
+}
+
+function normalizeNotebookRecord(note: NotebookNoteRecord): NotebookNote {
+  return {
+    id: note.id,
+    notebookId: note.notebookId || 'default',
+    type: normalizeNoteType(note.type),
+    title: note.title,
+    content: note.content,
+    summary: note.summary,
+    userQuery: note.userQuery,
+    output: note.output,
+    tags: normalizeTags(note.tags),
+    subject: note.subject?.trim() || '综合',
+    source: normalizeNoteSource(note.source),
+    createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    stageId: note.stageId,
+    sceneId: note.sceneId,
+    isPinned: note.isPinned,
+    isFavorite: note.isFavorite,
+    metadata: note.metadata,
+  };
+}
+
+function normalizeTrashRecord(note: NotebookTrashRecord): DeletedNote {
+  return {
+    ...normalizeNotebookRecord(note),
+    deletedAt: note.deletedAt,
+  };
 }
 
 function isNotebookNote(value: unknown): value is NotebookNote {
@@ -125,130 +179,109 @@ function normalizeNoteList(value: unknown): NotebookNote[] {
     .map((note) => ({
       ...note,
       tags: normalizeTags(note.tags),
-      type: note.type || 'manual',
+      type: normalizeNoteType(note.type),
+      subject: note.subject.trim() || '综合',
+      source: normalizeNoteSource(note.source),
       notebookId: note.notebookId || 'default',
     }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-function writeNotebookNotes(notes: NotebookNote[]) {
-  if (!hasWindowStorage()) return;
-  window.localStorage.setItem(NOTEBOOK_STORAGE_KEY, JSON.stringify(notes));
+import {
+  getAllNotes,
+  putNotes,
+  putNote,
+  getNote,
+  deleteNote as dbDeleteNote,
+  deleteNotes as dbDeleteNotes,
+  putTrashNote,
+  deleteTrashNote,
+  clearTrash as dbClearTrash,
+  getAllTrash,
+  getSettings,
+  putSettings,
+  getAllBooks,
+  putBook,
+  deleteBook,
+  searchNotes,
+} from './notebook-db';
+import {
+  debouncedSyncNotebookToServer,
+  pullNotebookFromServerIfLocalEmpty,
+} from './notebook-sync';
+import type { NotebookNoteRecord, NotebookTrashRecord, NotebookBookRecord, NotebookSettingsRecord } from '@/lib/utils/database';
+
+async function writeNotebookNotes(notes: NotebookNote[]) {
+  const records: NotebookNoteRecord[] = notes.map(n => ({
+    ...n,
+    notebookId: n.notebookId || 'default',
+  }));
+  await putNotes(records);
 }
 
-export function readNotebookNotes(): NotebookNote[] {
-  if (!hasWindowStorage()) return [];
-
-  // 尝试读取 v2 版本
-  const v2 = normalizeNoteList(safeJsonParse(window.localStorage.getItem(NOTEBOOK_STORAGE_KEY)));
-  if (v2.length > 0) {
-    return v2;
-  }
-
-  // 尝试读取 v1 版本并迁移
-  const v1 = normalizeNoteList(safeJsonParse(window.localStorage.getItem(LEGACY_NOTEBOOK_V1_KEY)));
-  if (v1.length > 0) {
-    const migrated = v1.map(note => ({
-      ...note,
-      notebookId: 'default',
-      type: 'manual' as NotebookNoteType,
-    }));
-    writeNotebookNotes(migrated);
-    return migrated;
-  }
-
-  // 尝试读取 legacy 版本
-  const legacy = normalizeNoteList(
-    safeJsonParse(window.localStorage.getItem(LEGACY_NOTEBOOK_STORAGE_KEY)),
-  );
-  if (legacy.length > 0) {
-    const migrated = legacy.map(note => ({
-      ...note,
-      notebookId: 'default',
-      type: 'manual' as NotebookNoteType,
-    }));
-    writeNotebookNotes(migrated);
-    window.localStorage.removeItem(LEGACY_NOTEBOOK_STORAGE_KEY);
-    return migrated;
-  }
-
-  return [];
+export async function readNotebookNotes(): Promise<NotebookNote[]> {
+  await pullNotebookFromServerIfLocalEmpty();
+  const records = await getAllNotes();
+  return normalizeNoteList(records);
 }
 
-// 笔记本管理函数
-function readNotebookManagerState(): NotebookManagerState {
-  if (!hasWindowStorage()) {
-    return { notebooks: [], activeNotebookId: null };
-  }
-  const raw = window.localStorage.getItem(NOTEBOOK_MANAGER_KEY);
-  if (!raw) {
-    // 初始化默认笔记本
-    const defaultNotebook: Notebook = {
-      id: 'default',
-      name: '默认笔记本',
-      description: '自动创建的默认笔记本',
-      color: '#3B82F6',
-      icon: 'book',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+// 笔记本管理函数 (backed by IndexedDB)
+
+const DEFAULT_NOTEBOOK: Notebook = {
+  id: 'default',
+  name: '默认笔记本',
+  description: '自动创建的默认笔记本',
+  color: '#3B82F6',
+  icon: 'book',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  recordCount: 0,
+};
+
+export async function listNotebooks(): Promise<Notebook[]> {
+  await pullNotebookFromServerIfLocalEmpty();
+  const books = await getAllBooks();
+  if (books.length === 0) {
+    // Initialize default notebook
+    await putBook({
+      id: DEFAULT_NOTEBOOK.id,
+      name: DEFAULT_NOTEBOOK.name,
+      description: DEFAULT_NOTEBOOK.description,
+      color: DEFAULT_NOTEBOOK.color,
+      icon: DEFAULT_NOTEBOOK.icon,
+      createdAt: DEFAULT_NOTEBOOK.createdAt,
+      updatedAt: DEFAULT_NOTEBOOK.updatedAt,
       recordCount: 0,
-    };
-    const state: NotebookManagerState = {
-      notebooks: [defaultNotebook],
-      activeNotebookId: 'default',
-    };
-    window.localStorage.setItem(NOTEBOOK_MANAGER_KEY, JSON.stringify(state));
-    return state;
+    });
+    debouncedSyncNotebookToServer();
+    return [DEFAULT_NOTEBOOK];
   }
-  try {
-    const parsed = JSON.parse(raw) as NotebookManagerState;
-    if (!parsed.notebooks || parsed.notebooks.length === 0) {
-      const defaultNotebook: Notebook = {
-        id: 'default',
-        name: '默认笔记本',
-        description: '自动创建的默认笔记本',
-        color: '#3B82F6',
-        icon: 'book',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        recordCount: 0,
-      };
-      return { notebooks: [defaultNotebook], activeNotebookId: 'default' };
-    }
-    return parsed;
-  } catch {
-    return { notebooks: [], activeNotebookId: null };
-  }
+  return books.map(normalizeNotebookBook);
 }
 
-function writeNotebookManagerState(state: NotebookManagerState) {
-  if (!hasWindowStorage()) return;
-  window.localStorage.setItem(NOTEBOOK_MANAGER_KEY, JSON.stringify(state));
+export async function getActiveNotebookId(): Promise<string | null> {
+  const settings = await getSettings();
+  return settings?.activeNotebookId ?? 'default';
 }
 
-export function listNotebooks(): Notebook[] {
-  return readNotebookManagerState().notebooks;
+export async function setActiveNotebookId(notebookId: string): Promise<void> {
+  const existing = await getSettings();
+  await putSettings({
+    id: 'default',
+    sortBy: existing?.sortBy || 'updatedAt',
+    sortOrder: existing?.sortOrder || 'desc',
+    viewMode: existing?.viewMode || 'grid',
+    activeNotebookId: notebookId,
+  });
+  debouncedSyncNotebookToServer();
 }
 
-export function getActiveNotebookId(): string | null {
-  return readNotebookManagerState().activeNotebookId;
-}
-
-export function setActiveNotebookId(notebookId: string): void {
-  const state = readNotebookManagerState();
-  if (state.notebooks.find(nb => nb.id === notebookId)) {
-    state.activeNotebookId = notebookId;
-    writeNotebookManagerState(state);
-  }
-}
-
-export function createNotebook(
+export async function createNotebook(
   name: string,
   description: string = '',
   color: string = '#3B82F6',
   icon: string = 'book'
-): Notebook {
-  const state = readNotebookManagerState();
+): Promise<Notebook> {
   const notebook: Notebook = {
     id: `nb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: name.trim() || '未命名笔记本',
@@ -259,54 +292,66 @@ export function createNotebook(
     updatedAt: Date.now(),
     recordCount: 0,
   };
-  state.notebooks.push(notebook);
-  writeNotebookManagerState(state);
+  await putBook({
+    id: notebook.id,
+    name: notebook.name,
+    description: notebook.description,
+    color: notebook.color,
+    icon: notebook.icon,
+    createdAt: notebook.createdAt,
+    updatedAt: notebook.updatedAt,
+    recordCount: 0,
+  });
+  debouncedSyncNotebookToServer();
   return notebook;
 }
 
-export function updateNotebook(
+export async function updateNotebook(
   notebookId: string,
   updates: Partial<Omit<Notebook, 'id' | 'createdAt'>>
-): Notebook | null {
-  const state = readNotebookManagerState();
-  const notebook = state.notebooks.find(nb => nb.id === notebookId);
-  if (!notebook) return null;
+): Promise<Notebook | null> {
+  const existing = await getAllBooks();
+  const book = existing.find(nb => nb.id === notebookId);
+  if (!book) return null;
 
-  Object.assign(notebook, updates, { updatedAt: Date.now() });
-  writeNotebookManagerState(state);
-  return notebook;
+  const updated = { ...book, ...updates, updatedAt: Date.now() };
+  await putBook(updated);
+  debouncedSyncNotebookToServer();
+  return normalizeNotebookBook(updated);
 }
 
-export function deleteNotebook(notebookId: string): boolean {
+export async function deleteNotebook(notebookId: string): Promise<boolean> {
   if (notebookId === 'default') return false; // 不能删除默认笔记本
 
-  const state = readNotebookManagerState();
-  const index = state.notebooks.findIndex(nb => nb.id === notebookId);
-  if (index === -1) return false;
+  const existing = await getAllBooks();
+  if (!existing.find(nb => nb.id === notebookId)) return false;
 
   // 将该笔记本的笔记移动到默认笔记本
-  const notes = readNotebookNotes();
-  const updatedNotes = notes.map(note =>
-    note.notebookId === notebookId ? { ...note, notebookId: 'default' } : note
-  );
-  writeNotebookNotes(updatedNotes);
-
-  state.notebooks.splice(index, 1);
-  if (state.activeNotebookId === notebookId) {
-    state.activeNotebookId = 'default';
+  const notes = await getAllNotes();
+  const toMove = notes.filter(n => n.notebookId === notebookId);
+  if (toMove.length > 0) {
+    await putNotes(toMove.map(n => ({ ...n, notebookId: 'default' })));
   }
-  writeNotebookManagerState(state);
+
+  await deleteBook(notebookId);
+
+  // Update active notebook if needed
+  const settings = await getSettings();
+  if (settings?.activeNotebookId === notebookId) {
+    await putSettings({ ...settings, activeNotebookId: 'default' });
+  }
+  debouncedSyncNotebookToServer();
   return true;
 }
 
-function updateNotebookRecordCount(notebookId: string): void {
-  const state = readNotebookManagerState();
-  const notebook = state.notebooks.find(nb => nb.id === notebookId);
-  if (notebook) {
-    const notes = readNotebookNotes();
-    notebook.recordCount = notes.filter(n => n.notebookId === notebookId).length;
-    notebook.updatedAt = Date.now();
-    writeNotebookManagerState(state);
+async function updateNotebookRecordCount(notebookId: string): Promise<void> {
+  const books = await getAllBooks();
+  const book = books.find(nb => nb.id === notebookId);
+  if (book) {
+    const notes = await getAllNotes();
+    book.recordCount = notes.filter(n => n.notebookId === notebookId).length;
+    book.updatedAt = Date.now();
+    await putBook(book);
   }
 }
 
@@ -317,27 +362,27 @@ function createNoteId(): string {
   return `note-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function upsertNotebookNote(input: UpsertNotebookInput): NotebookNote {
-  const notes = readNotebookNotes();
+export async function upsertNotebookNote(input: UpsertNotebookInput): Promise<NotebookNote> {
+  const notes = await getAllNotes();
   const now = Date.now();
   const noteId = input.id || createNoteId();
   const current = notes.find((note) => note.id === noteId);
 
   // 确定所属笔记本
-  const notebookId = input.notebookId || current?.notebookId || getActiveNotebookId() || 'default';
+  const notebookId = input.notebookId || current?.notebookId || (await getActiveNotebookId()) || 'default';
 
   const next: NotebookNote = {
     id: noteId,
     notebookId,
-    type: input.type || current?.type || 'manual',
+    type: input.type || normalizeNoteType(current?.type),
     title: input.title.trim() || '未命名笔记',
     content: input.content,
     summary: input.summary || current?.summary,
     userQuery: input.userQuery || current?.userQuery,
     output: input.output || current?.output,
-    tags: normalizeTags(input.tags),
-    subject: input.subject?.trim() || current?.subject || '综合',
-    source: input.source || current?.source || 'manual',
+    tags: input.tags !== undefined ? normalizeTags(input.tags) : normalizeTags(current?.tags),
+    subject: input.subject?.trim() || current?.subject?.trim() || '综合',
+    source: input.source || normalizeNoteSource(current?.source),
     createdAt: current?.createdAt || now,
     updatedAt: now,
     stageId: input.stageId || current?.stageId,
@@ -347,118 +392,106 @@ export function upsertNotebookNote(input: UpsertNotebookInput): NotebookNote {
     metadata: input.metadata || current?.metadata,
   };
 
-  const merged = [next, ...notes.filter((note) => note.id !== noteId)].sort(
-    (a, b) => b.updatedAt - a.updatedAt,
-  );
-  writeNotebookNotes(merged);
-  updateNotebookRecordCount(notebookId);
+  await putNote({ ...next, notebookId: next.notebookId || 'default' });
+  await updateNotebookRecordCount(notebookId);
+  debouncedSyncNotebookToServer();
   return next;
 }
 
-export function deleteNotebookNote(noteId: string): DeletedNote | null {
-  const notes = readNotebookNotes();
-  const noteToDelete = notes.find((note) => note.id === noteId);
-  if (!noteToDelete) return null;
+export async function deleteNotebookNote(noteId: string): Promise<DeletedNote | null> {
+  const note = await getNote(noteId);
+  if (!note) return null;
 
-  const deletedNote: DeletedNote = { ...noteToDelete, deletedAt: Date.now() };
+  const deletedNote: DeletedNote = { ...normalizeNotebookRecord(note), deletedAt: Date.now() };
 
-  const next = notes.filter((note) => note.id !== noteId);
-  writeNotebookNotes(next);
+  await dbDeleteNote(noteId);
+  await putTrashNote(deletedNote);
 
-  const trash = readTrashNotes();
-  writeTrashNotes([deletedNote, ...trash].slice(0, 50));
+  // Keep max 50 trash items
+  const trash = await getAllTrash();
+  if (trash.length > 50) {
+    const toRemove = trash.slice(50);
+    for (const t of toRemove) {
+      await deleteTrashNote(t.id);
+    }
+  }
 
-  updateNotebookRecordCount(noteToDelete.notebookId);
+  await updateNotebookRecordCount(note.notebookId);
+  debouncedSyncNotebookToServer();
   return deletedNote;
 }
 
-export function readTrashNotes(): DeletedNote[] {
-  if (!hasWindowStorage()) return [];
-  const raw = window.localStorage.getItem(NOTEBOOK_TRASH_KEY);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as DeletedNote[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+export async function readTrashNotes(): Promise<DeletedNote[]> {
+  return (await getAllTrash()).map(normalizeTrashRecord);
 }
 
-function writeTrashNotes(notes: DeletedNote[]) {
-  if (!hasWindowStorage()) return;
-  window.localStorage.setItem(NOTEBOOK_TRASH_KEY, JSON.stringify(notes));
-}
-
-export function restoreFromTrash(noteId: string): NotebookNote | null {
-  const trash = readTrashNotes();
+export async function restoreFromTrash(noteId: string): Promise<NotebookNote | null> {
+  const trash = await getAllTrash();
   const noteToRestore = trash.find((note) => note.id === noteId);
   if (!noteToRestore) return null;
 
-  const { deletedAt, ...restoredNote } = noteToRestore;
-  const updatedNote = { ...restoredNote, updatedAt: Date.now() };
+  const updatedNote = { ...normalizeNotebookRecord(noteToRestore), updatedAt: Date.now() };
 
-  upsertNotebookNote(updatedNote);
-  writeTrashNotes(trash.filter((note) => note.id !== noteId));
+  await putNote({ ...updatedNote, notebookId: updatedNote.notebookId || 'default' });
+  await deleteTrashNote(noteId);
+  debouncedSyncNotebookToServer();
   return updatedNote;
 }
 
-export function permanentlyDeleteFromTrash(noteId: string): boolean {
-  const trash = readTrashNotes();
-  const filtered = trash.filter((note) => note.id !== noteId);
-  if (filtered.length === trash.length) return false;
-  writeTrashNotes(filtered);
+export async function permanentlyDeleteFromTrash(noteId: string): Promise<boolean> {
+  const trash = await getAllTrash();
+  if (!trash.find((note) => note.id === noteId)) return false;
+  await deleteTrashNote(noteId);
+  debouncedSyncNotebookToServer();
   return true;
 }
 
-export function clearTrash(): void {
-  writeTrashNotes([]);
+export async function clearTrash(): Promise<void> {
+  await dbClearTrash();
+  debouncedSyncNotebookToServer();
 }
 
-export function toggleNotePin(noteId: string): NotebookNote | null {
-  const notes = readNotebookNotes();
+export async function toggleNotePin(noteId: string): Promise<NotebookNote | null> {
+  const notes = await getAllNotes();
   const note = notes.find((n) => n.id === noteId);
   if (!note) return null;
 
   return upsertNotebookNote({
-    ...note,
+    ...normalizeNotebookRecord(note),
     isPinned: !note.isPinned,
   });
 }
 
-export function toggleNoteFavorite(noteId: string): NotebookNote | null {
-  const notes = readNotebookNotes();
+export async function toggleNoteFavorite(noteId: string): Promise<NotebookNote | null> {
+  const notes = await getAllNotes();
   const note = notes.find((n) => n.id === noteId);
   if (!note) return null;
 
   return upsertNotebookNote({
-    ...note,
+    ...normalizeNotebookRecord(note),
     isFavorite: !note.isFavorite,
   });
 }
 
-export function readNotebookSettings(): NotebookSettings {
-  if (!hasWindowStorage()) {
-    return { sortBy: 'updatedAt', sortOrder: 'desc', viewMode: 'list' };
-  }
-  const raw = window.localStorage.getItem(NOTEBOOK_SETTINGS_KEY);
-  if (!raw) {
-    return { sortBy: 'updatedAt', sortOrder: 'desc', viewMode: 'list' };
-  }
-  try {
-    const parsed = JSON.parse(raw) as NotebookSettings;
-    return {
-      sortBy: parsed.sortBy || 'updatedAt',
-      sortOrder: parsed.sortOrder || 'desc',
-      viewMode: parsed.viewMode || 'list',
-    };
-  } catch {
-    return { sortBy: 'updatedAt', sortOrder: 'desc', viewMode: 'list' };
-  }
+export async function readNotebookSettings(): Promise<NotebookSettings> {
+  const existing = await getSettings();
+  return {
+    sortBy: (existing?.sortBy as NoteSortOption) || 'updatedAt',
+    sortOrder: (existing?.sortOrder as 'asc' | 'desc') || 'desc',
+    viewMode: (existing?.viewMode as 'list' | 'grouped') || 'list',
+  };
 }
 
-export function saveNotebookSettings(settings: NotebookSettings): void {
-  if (!hasWindowStorage()) return;
-  window.localStorage.setItem(NOTEBOOK_SETTINGS_KEY, JSON.stringify(settings));
+export async function saveNotebookSettings(settings: NotebookSettings): Promise<void> {
+  const existing = await getSettings();
+  await putSettings({
+    id: 'default',
+    sortBy: settings.sortBy,
+    sortOrder: settings.sortOrder,
+    viewMode: settings.viewMode,
+    activeNotebookId: existing?.activeNotebookId ?? null,
+  });
+  debouncedSyncNotebookToServer();
 }
 
 export function sortNotes(notes: NotebookNote[], sortBy: NoteSortOption, sortOrder: 'asc' | 'desc'): NotebookNote[] {
@@ -529,12 +562,12 @@ export function buildKnowledgeCardNoteId(stageId: string, sceneId: string): stri
   return `knowledge-card:${stageId}:${sceneId}`;
 }
 
-export function upsertKnowledgeCardNote(params: {
+export async function upsertKnowledgeCardNote(params: {
   stageId: string;
   sceneId: string;
   title: string;
   bullets: string[];
-}) {
+}): Promise<NotebookNote> {
   const markdown = params.bullets.map((bullet) => `- ${bullet}`).join('\n');
   return upsertNotebookNote({
     id: buildKnowledgeCardNoteId(params.stageId, params.sceneId),
@@ -549,15 +582,15 @@ export function upsertKnowledgeCardNote(params: {
   });
 }
 
-export function removeKnowledgeCardNote(stageId: string, sceneId: string) {
-  deleteNotebookNote(buildKnowledgeCardNoteId(stageId, sceneId));
+export async function removeKnowledgeCardNote(stageId: string, sceneId: string): Promise<void> {
+  await deleteNotebookNote(buildKnowledgeCardNoteId(stageId, sceneId));
 }
 
 export function buildPhotoVideoNoteId(videoUrl: string): string {
   return `photo-video:${encodeURIComponent(videoUrl || 'local')}`;
 }
 
-// 保存聊天到笔记（参考 DeepTutor）
+// 保存聊天到笔记（参考 AnotherMe）
 export interface ChatMessageForNote {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -570,7 +603,7 @@ export interface SaveChatToNoteInput {
   metadata?: Record<string, unknown>;
 }
 
-export function saveChatToNote(input: SaveChatToNoteInput): NotebookNote {
+export async function saveChatToNote(input: SaveChatToNoteInput): Promise<NotebookNote> {
   const transcript = input.messages
     .map((msg) => {
       const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
@@ -843,7 +876,7 @@ export const NOTE_TEMPLATES: NoteTemplate[] = [
   },
 ];
 
-export function createNoteFromTemplate(templateId: string, notebookId?: string): NotebookNote {
+export async function createNoteFromTemplate(templateId: string, notebookId?: string): Promise<NotebookNote> {
   const template = NOTE_TEMPLATES.find((t) => t.id === templateId);
   if (!template) {
     return upsertNotebookNote({
@@ -868,55 +901,72 @@ export function createNoteFromTemplate(templateId: string, notebookId?: string):
 }
 
 // Batch operations
-export function batchDeleteNotes(noteIds: string[]): number {
-  const notes = readNotebookNotes();
+export async function batchDeleteNotes(noteIds: string[]): Promise<number> {
+  const notes = await getAllNotes();
   const notesToDelete = notes.filter((n) => noteIds.includes(n.id));
 
   if (notesToDelete.length === 0) return 0;
 
   const deletedNotes: DeletedNote[] = notesToDelete.map((n) => ({
-    ...n,
+    ...normalizeNotebookRecord(n),
     deletedAt: Date.now(),
   }));
 
-  const remaining = notes.filter((n) => !noteIds.includes(n.id));
-  writeNotebookNotes(remaining);
+  await dbDeleteNotes(noteIds);
+  for (const deletedNote of deletedNotes) {
+    await putTrashNote({ ...deletedNote, notebookId: deletedNote.notebookId || 'default' });
+  }
 
-  const trash = readTrashNotes();
-  writeTrashNotes([...deletedNotes, ...trash].slice(0, 50));
+  // Keep max 50 trash items
+  const trash = await getAllTrash();
+  if (trash.length > 50) {
+    const toRemove = trash.slice(50);
+    for (const t of toRemove) {
+      await deleteTrashNote(t.id);
+    }
+  }
 
   // 更新笔记本记录数
   const affectedNotebookIds = new Set(notesToDelete.map(n => n.notebookId));
-  affectedNotebookIds.forEach(id => updateNotebookRecordCount(id));
+  for (const id of affectedNotebookIds) {
+    await updateNotebookRecordCount(id);
+  }
 
+  debouncedSyncNotebookToServer();
   return deletedNotes.length;
 }
 
-export function batchPinNotes(noteIds: string[]): number {
-  const notes = readNotebookNotes();
+export async function batchPinNotes(noteIds: string[]): Promise<number> {
+  const notes = await getAllNotes();
   let count = 0;
+  const toUpdate: NotebookNoteRecord[] = [];
 
-  notes.forEach((note) => {
+  for (const note of notes) {
     if (noteIds.includes(note.id) && !note.isPinned) {
-      upsertNotebookNote({ ...note, isPinned: true });
+      toUpdate.push({ ...note, isPinned: true, updatedAt: Date.now(), notebookId: note.notebookId || 'default' });
       count++;
     }
-  });
+  }
 
+  if (toUpdate.length > 0) await putNotes(toUpdate);
+  if (toUpdate.length > 0) debouncedSyncNotebookToServer();
   return count;
 }
 
-export function batchUnpinNotes(noteIds: string[]): number {
-  const notes = readNotebookNotes();
+export async function batchUnpinNotes(noteIds: string[]): Promise<number> {
+  const notes = await getAllNotes();
   let count = 0;
+  const toUpdate: NotebookNoteRecord[] = [];
 
-  notes.forEach((note) => {
+  for (const note of notes) {
     if (noteIds.includes(note.id) && note.isPinned) {
-      upsertNotebookNote({ ...note, isPinned: false });
+      toUpdate.push({ ...note, isPinned: false, updatedAt: Date.now(), notebookId: note.notebookId || 'default' });
       count++;
     }
-  });
+  }
 
+  if (toUpdate.length > 0) await putNotes(toUpdate);
+  if (toUpdate.length > 0) debouncedSyncNotebookToServer();
   return count;
 }
 
@@ -929,21 +979,21 @@ export interface NotebookExport {
   settings: NotebookSettings;
 }
 
-export function exportAllNotes(): NotebookExport {
+export async function exportAllNotes(): Promise<NotebookExport> {
   return {
     version: '2.0',
     exportDate: new Date().toISOString(),
-    notebooks: listNotebooks(),
-    notes: readNotebookNotes(),
-    settings: readNotebookSettings(),
+    notebooks: await listNotebooks(),
+    notes: await readNotebookNotes(),
+    settings: await readNotebookSettings(),
   };
 }
 
-export function importNotes(exportData: NotebookExport): {
+export async function importNotes(exportData: NotebookExport): Promise<{
   imported: number;
   skipped: number;
   errors: string[];
-} {
+}> {
   const errors: string[] = [];
   let imported = 0;
   let skipped = 0;
@@ -953,25 +1003,34 @@ export function importNotes(exportData: NotebookExport): {
     return { imported: 0, skipped: 0, errors };
   }
 
-  const existingNotes = readNotebookNotes();
+  const existingNotes = await getAllNotes();
   const existingIds = new Set(existingNotes.map((n) => n.id));
 
   // 导入笔记本
   if (exportData.notebooks && Array.isArray(exportData.notebooks)) {
-    const state = readNotebookManagerState();
-    exportData.notebooks.forEach((notebook) => {
-      if (!state.notebooks.find(nb => nb.id === notebook.id)) {
-        state.notebooks.push(notebook);
+    const existingBooks = await getAllBooks();
+    const existingBookIds = new Set(existingBooks.map(b => b.id));
+    for (const notebook of exportData.notebooks) {
+      if (!existingBookIds.has(notebook.id)) {
+        await putBook({
+          id: notebook.id,
+          name: notebook.name,
+          description: notebook.description,
+          color: notebook.color,
+          icon: notebook.icon,
+          createdAt: notebook.createdAt,
+          updatedAt: notebook.updatedAt,
+          recordCount: notebook.recordCount,
+        });
       }
-    });
-    writeNotebookManagerState(state);
+    }
   }
 
-  exportData.notes.forEach((note) => {
+  for (const note of exportData.notes) {
     if (!isNotebookNote(note)) {
       errors.push(`Invalid note: ${(note as Partial<NotebookNote>).title || 'unknown'}`);
       skipped++;
-      return;
+      continue;
     }
 
     // If note with same ID exists, create new ID
@@ -979,10 +1038,11 @@ export function importNotes(exportData: NotebookExport): {
       note.id = createNoteId();
     }
 
-    upsertNotebookNote(note);
+    await upsertNotebookNote(note);
     imported++;
-  });
+  }
 
+  debouncedSyncNotebookToServer();
   return { imported, skipped, errors };
 }
 

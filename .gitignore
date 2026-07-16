@@ -6,7 +6,9 @@
 .codex-logs/
 .codex-*
 .workbuddy/
+.playwright-mcp/
 *.local.md
+nul
 
 # env
 .env
@@ -36,11 +38,23 @@ blob-report/
 %SystemDrive%/
 OpenMAIC/%SystemDrive%/
 gateway_data/
-AnotherMe/data/
+/data/
+AnotherMe/anotherme2_engine/data/
 AnotherMe/logs/
 AnotherMe/.workbuddy/
 AnotherMe/.next/
 AnotherMe/.vercel/
+AnotherMe/output/
+AnotherMe/output_problem*/
+AnotherMe/output_test/
+AnotherMe/generated_outputs/
+AnotherMe/media/videos/
+*.log
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
 
 # generated artifacts
 *.tar
@@ -51,6 +65,11 @@ AnotherMe/.vercel/
 *.rar
 media/videos/
 media/texts/
+media/images/
+media/Tex/
+*.bundle
+graphify-out/
+AnotherMe/anotherme2_engine/graphify-out/
 AnotherMe/public/generated/
 OpenMAIC/anotherme2_engine/output/
 OpenMAIC/anotherme2_engine/output_problem*/
@@ -67,6 +86,19 @@ OpenMAIC/anotherme2_engine/.cache/
 
 # local diagnostics / scratch output
 diff.txt
+output_test/
+tmp_template_frames/
+*.bak.api-test
+.pytest-run-tmp-*/
+**/.dbg/
+**/.gradle-ascii-home/
+**/.gradle-user-home/
+**/.tmp/
+*.diff
+**/debug-*.md
+**/*-修复建议.md
+讲解稿.md
+expo-screen.png
 **/diff_output.txt
 **/staged_diff.txt
 **/unstaged_diff.txt

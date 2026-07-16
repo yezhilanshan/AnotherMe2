@@ -8,12 +8,15 @@ import type { TutorToolState } from '@/lib/types/tutor-tools';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
-import { PanelRightClose, BookOpen, MessageSquare, NotebookPen, Plus } from 'lucide-react';
+import { PanelRightClose, BookOpen, MessageSquare, NotebookPen, Plus, Brain } from 'lucide-react';
+import { useAuth } from '@/features/auth/components/auth-provider';
+import { MemoryPanel } from './memory-panel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { useChatSessions } from './use-chat-sessions';
+import { useChatSessions, type SendMessageOptions } from './use-chat-sessions';
 import { SessionList } from './session-list';
 import { LectureNotesView } from './lecture-notes-view';
 import { ToolTracePanel } from './tool-trace-panel';
+import { TeachingTracePanel } from './TeachingTracePanel';
 import { ChatComposer, type ChatCapability } from './chat-composer';
 
 interface ChatAreaProps {
@@ -48,16 +51,25 @@ export interface ChatAreaRef {
   endActiveSession: () => Promise<void>;
   softPauseActiveSession: () => Promise<void>;
   resumeActiveSession: () => Promise<void>;
-  sendMessage: (content: string, capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize') => Promise<void>;
+  sendMessage: (
+    content: string,
+    capability?: 'chat' | 'deep_solve' | 'quiz' | 'research' | 'math_animator' | 'visualize',
+    options?: SendMessageOptions,
+  ) => Promise<void>;
   startDiscussion: (request: DiscussionRequest) => Promise<void>;
   startLecture: (sceneId: string) => Promise<string>;
   addLectureMessage: (sessionId: string, action: Action, actionIndex: number) => void;
-  addReaction: (type: import('@/lib/types/chat').UserReaction['type'], targetAgentId?: string) => void;
+  addReaction: (
+    type: import('@/lib/types/chat').UserReaction['type'],
+    targetAgentId?: string,
+  ) => void;
   getIsStreaming: () => boolean;
   getActiveSessionType: () => string | null;
   getLectureMessageId: (sessionId: string) => string | null;
   pauseBuffer: (sessionId: string) => void;
   resumeBuffer: (sessionId: string) => void;
+  pauseAllLectureBuffers: () => void;
+  resumeAllLectureBuffers: () => void;
   pauseActiveLiveBuffer: () => boolean;
   resumeActiveLiveBuffer: () => void;
   switchToTab: (tab: 'lecture' | 'chat') => void;
@@ -93,6 +105,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
     ref,
   ) => {
     const { t } = useI18n();
+    const { user } = useAuth();
+    const [showMemoryPanel, setShowMemoryPanel] = useState(false);
     const stageId = useStageStore((s) => s.stage?.id ?? null);
     const scenes = useStageStore((s) => s.scenes);
     const {
@@ -101,6 +115,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       expandedSessionIds,
       isStreaming,
       toolTraces,
+      teachingTraces,
       addReaction,
       createSession,
       endSession,
@@ -115,6 +130,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       getLectureMessageId,
       pauseBuffer,
       resumeBuffer,
+      pauseAllLectureBuffers,
+      resumeAllLectureBuffers,
       pauseActiveLiveBuffer,
       resumeActiveLiveBuffer,
       deleteMessage,
@@ -173,6 +190,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       getLectureMessageId,
       pauseBuffer,
       resumeBuffer,
+      pauseAllLectureBuffers,
+      resumeAllLectureBuffers,
       pauseActiveLiveBuffer,
       resumeActiveLiveBuffer,
       switchToTab,
@@ -286,14 +305,10 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
 
             {/* Notes Tab */}
             <TabsContent value="lecture" className="flex-1 overflow-hidden flex flex-col">
-              <LectureNotesView
-                scenes={scenes}
-                currentSceneId={currentSceneId}
-                stageId={stageId}
-              />
+              <LectureNotesView scenes={scenes} currentSceneId={currentSceneId} stageId={stageId} />
             </TabsContent>
 
-            {/* Chat Tab - DeepTutor style */}
+            {/* Chat Tab - AnotherMe style */}
             <TabsContent value="chat" className="flex-1 overflow-hidden flex flex-col min-h-0">
               {/* Top header bar */}
               <div className="flex items-center justify-between px-4 py-2 shrink-0">
@@ -301,6 +316,19 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                   Chat
                 </span>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMemoryPanel((v) => !v)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg border transition-colors',
+                      showMemoryPanel
+                        ? 'text-purple-600 bg-purple-50 border-purple-200 dark:text-purple-400 dark:bg-purple-900/20 dark:border-purple-800'
+                        : 'text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700',
+                    )}
+                  >
+                    <Brain className="w-3 h-3" />
+                    记忆
+                  </button>
                   <button className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                     <NotebookPen className="w-3 h-3" />
                     Save to Notebook
@@ -312,18 +340,37 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                 </div>
               </div>
 
+              {/* Personalization indicator */}
+              {chatSessions.length > 0 && (
+                <div className="flex items-center gap-2 mx-3 mb-1 px-3 py-1.5 text-[11px] text-gray-500 dark:text-gray-400 bg-purple-50/60 dark:bg-purple-900/10 rounded-lg border border-purple-100 dark:border-purple-800/30">
+                  <Brain className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                  <span>讲解已根据你的学习状态自动调整</span>
+                </div>
+              )}
+
+              {/* Memory Panel */}
+              {user?.id && (
+                <MemoryPanel
+                  userId={user.id}
+                  open={showMemoryPanel}
+                  onClose={() => setShowMemoryPanel(false)}
+                />
+              )}
+
               <div className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-2 space-y-3 scrollbar-hide">
                 {/* AI导师工具执行轨迹 */}
+                <TeachingTracePanel events={teachingTraces} isStreaming={isStreaming} />
                 <ToolTracePanel traces={toolTraces} isStreaming={isStreaming} />
 
                 {chatSessions.length === 0 ? (
-                  /* Empty state - DeepTutor style */
+                  /* Empty state - AnotherMe style */
                   <div className="flex-1 flex flex-col items-center justify-center text-center px-6 min-h-[300px]">
                     <h2 className="text-[22px] font-semibold text-gray-800 dark:text-gray-100 mb-2 tracking-tight">
                       {t('chat.welcomeTitle') || 'What would you like to learn?'}
                     </h2>
                     <p className="text-[13px] text-gray-400 dark:text-gray-500 leading-relaxed">
-                      {t('chat.welcomeSubtitle') || 'Ask anything — I am here to help you understand.'}
+                      {t('chat.welcomeSubtitle') ||
+                        'Ask anything — I am here to help you understand.'}
                     </p>
                   </div>
                 ) : (
@@ -344,7 +391,7 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
               </div>
 
               {/* Chat Composer */}
-              <div className="shrink-0 px-3 pb-3 pt-1">
+              <div className="shrink-0 px-3 pb-3 pt-1 max-md:pb-safe">
                 <ChatComposer
                   isStreaming={isStreaming}
                   capability={capability}

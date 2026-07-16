@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from ..perception.geometry_context import GeometryContext
+
 
 class ProblemPatternClassifier:
     """Classify problem pattern before IR planning."""
@@ -22,7 +24,8 @@ class ProblemPatternClassifier:
 
     def classify(self, *, problem_text: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         text = str(problem_text or "")
-        templates = self._collect_templates(metadata)
+        geometry_context = GeometryContext.from_metadata(metadata, problem_text=text)
+        templates = self._collect_templates(geometry_context)
         vision_signals = (
             metadata.get("vision_semantic_signals")
             if isinstance(metadata.get("vision_semantic_signals"), dict)
@@ -108,11 +111,9 @@ class ProblemPatternClassifier:
             "source": source,
         }
 
-    def _collect_templates(self, metadata: Dict[str, Any]) -> List[str]:
-        geometry_spec = metadata.get("geometry_spec") if isinstance(metadata.get("geometry_spec"), dict) else {}
-        geometry_facts = metadata.get("geometry_facts") if isinstance(metadata.get("geometry_facts"), dict) else {}
+    def _collect_templates(self, geometry_context: GeometryContext) -> List[str]:
         templates = []
-        for token in (geometry_spec.get("templates") or geometry_facts.get("templates") or []):
+        for token in geometry_context.templates:
             text = str(token).strip().lower()
             if text:
                 templates.append(text)

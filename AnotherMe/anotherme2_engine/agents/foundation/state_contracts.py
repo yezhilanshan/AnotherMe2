@@ -21,7 +21,7 @@ def _has_drawable_geometry(payload: Any) -> bool:
 		)
 	elif isinstance(points, list):
 		has_points = any(
-			isinstance(item, dict) and item.get("coord")
+			isinstance(item, dict) and (item.get("coord") or item.get("pos") or item.get("position"))
 			for item in points
 		)
 	if not has_points:
@@ -92,8 +92,6 @@ def _validate_before(step_name: str, state: StateLike) -> Tuple[bool, str]:
 	elif step_name == "animation":
 		if not getattr(project, "script_steps", []):
 			return False, "AnimationAgent input missing: project.script_steps"
-		if not _has_drawable_geometry(metadata.get("drawable_scene")):
-			return False, "AnimationAgent input missing: metadata.drawable_scene with drawable geometry"
 	elif step_name == "repair":
 		if not str(metadata.get("manim_code", "") or "").strip():
 			return False, "RepairAgent input missing: metadata.manim_code"
@@ -104,6 +102,11 @@ def _validate_before(step_name: str, state: StateLike) -> Tuple[bool, str]:
 		has_problem_text = bool(str(getattr(project, "problem_text", "") or "").strip())
 		if not has_problem_text and not _has_structured_geometry(metadata):
 			return False, "ProblemTypePrePlanner input missing: project.problem_text or structured geometry metadata"
+	elif step_name == "matplotlib_render":
+		has_problem_text = bool(str(getattr(project, "problem_text", "") or "").strip())
+		has_script = bool(getattr(project, "script_steps", []))
+		if not has_problem_text and not has_script:
+			return False, "MatplotlibAgent input missing: project.problem_text or project.script_steps"
 
 	return True, ""
 
@@ -139,12 +142,22 @@ def _validate_after(step_name: str, state: StateLike) -> Tuple[bool, str]:
 		if not str(metadata.get("manim_code", "") or "").strip():
 			return False, "RepairAgent output missing: metadata.manim_code"
 	elif step_name == "merge":
-		if str(getattr(project, "status", "")) in {"completed", "completed_with_fallback"}:
+		if str(getattr(project, "status", "")) in {"completed", "completed_degraded", "completed_with_fallback"}:
 			if not str(getattr(project, "final_video_path", "") or "").strip():
 				return False, "MergeAgent completed without final output path"
 	elif step_name == "pre_planning":
 		if not isinstance(metadata.get("problem_constraints"), dict):
 			return False, "ProblemTypePrePlanner output missing: metadata.problem_constraints"
+	elif step_name == "matplotlib_render":
+		if str(getattr(project, "status", "")) in {"completed", "completed_degraded", "completed_with_fallback"}:
+			if not str(getattr(project, "matplotlib_image_path", "") or "").strip():
+				return False, "MatplotlibAgent completed without matplotlib_image_path"
+	elif step_name == "interactive_render":
+		if str(getattr(project, "status", "")) in {"completed", "completed_degraded", "completed_with_fallback"}:
+			if not str(getattr(project, "interactive_html_path", "") or "").strip():
+				return False, "InteractiveAgent completed without interactive_html_path"
+			if not str(getattr(project, "scene_package_path", "") or "").strip():
+				return False, "InteractiveAgent completed without scene_package_path"
 
 	return True, ""
 
@@ -182,4 +195,3 @@ def wrap_agent_node(step_name: str, node_func: NodeFunc) -> NodeFunc:
 		return updated_state
 
 	return _wrapped
-

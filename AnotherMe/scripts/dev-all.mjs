@@ -9,8 +9,15 @@ const rootDir = process.cwd();
 const engineDir = path.join(rootDir, 'anotherme2_engine');
 const comspec = process.env.ComSpec || 'cmd.exe';
 const uvCmd = process.env.ANOTHERME2_UV_CMD || 'uv';
-const requirementsPath = path.join(engineDir, 'requirements.txt');
 const nextDevLockPath = path.join(rootDir, '.next', 'dev', 'lock');
+
+const dockerComposeFile = path.resolve(rootDir, '..', 'docker-compose.unified.yml');
+
+const INFRA_CONTAINERS = [
+  { containerName: 'anotherme-postgres', serviceName: 'postgres' },
+  { containerName: 'anotherme-redis', serviceName: 'redis' },
+  { containerName: 'anotherme-minio', serviceName: 'minio' },
+];
 
 const children = new Map();
 let shuttingDown = false;
@@ -131,19 +138,6 @@ function resolvePythonCommand() {
   return fallback ?? { label: 'python', uvPython: null, version: null };
 }
 
-function buildUvRunArgs(scriptName, pythonCommand) {
-  return [
-    'run',
-    ...(pythonCommand.uvPython ? ['--python', pythonCommand.uvPython] : []),
-    '--with-requirements',
-    requirementsPath,
-    '--directory',
-    engineDir,
-    'python',
-    scriptName,
-  ];
-}
-
 function isPortAvailable(port, host) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -183,6 +177,168 @@ function prefixOutput(name, chunk, stream = process.stdout) {
   }
 }
 
+function killProcessOnPort(port) {
+  let pid = null;
+  if (isWindows) {
+    const result = spawnSync('netstat', ['-ano'], { encoding: 'utf8' });
+    if (result.error || !result.stdout) return;
+    for (const line of result.stdout.split(/\r?\n/)) {
+      const match = line.trim().match(new RegExp(`:${port}\\s+.*?LISTENING\\s+(\\d+)`));
+      if (match) {
+        pid = match[1];
+        break;
+      }
+    }
+  } else {
+    const result = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });
+    if (!result.error && result.stdout) {
+      pid = result.stdout.trim().split('\n')[0];
+    }
+  }
+  if (pid) {
+    spawnSync(isWindows ? 'taskkill' : 'kill', isWindows ? ['/F', '/PID', pid] : ['-9', pid], {
+      encoding: 'utf8',
+    });
+    process.stdout.write(`[dev-all] Killed old process on port ${port} (PID: ${pid}).\n`);
+  }
+}
+
+function cleanupOldProcesses() {
+  if (process.env.ANOTHERME2_SKIP_CLEANUP) {
+    return;
+  }
+
+  killProcessOnPort(3000);
+  killProcessOnPort(8080);
+
+  if (fs.existsSync(nextDevLockPath)) {
+    try {
+      fs.rmSync(nextDevLockPath, { force: true });
+      process.stdout.write('[dev-all] Removed stale Next.js dev lock.\n');
+    } catch {
+      // Ignore errors during cleanup
+    }
+  }
+}
+
+function isDockerAvailable() {
+  const result = spawnSync('docker', ['--version'], { encoding: 'utf8' });
+  return !result.error;
+}
+
+function getContainerStates() {
+  const result = spawnSync('docker', ['ps', '-a', '--format', '{{.Names}}\t{{.State}}'], {
+    encoding: 'utf8',
+  });
+  if (result.error) return new Map();
+  const states = new Map();
+  for (const line of result.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+    const [name, state] = line.split('\t');
+    if (name) states.set(name, state);
+  }
+  return states;
+}
+
+async function waitForContainerHealthy(containerName, timeoutMs = 60000) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const check = () => {
+      const result = spawnSync(
+        'docker',
+        ['ps', '--filter', `name=^${containerName}$`, '--format', '{{.Status}}'],
+        { encoding: 'utf8' },
+      );
+      const status = result.stdout?.trim() || '';
+      if (status.includes('(healthy)') || status.includes('(Healthy)')) {
+        process.stdout.write(`[dev-all] Container ${containerName} is healthy.\n`);
+        resolve();
+      } else if (Date.now() - start > timeoutMs) {
+        process.stdout.write(
+          `[dev-all] Warning: ${containerName} did not become healthy within ${timeoutMs / 1000}s, proceeding anyway.\n`,
+        );
+        resolve();
+      } else {
+        setTimeout(check, 2000);
+      }
+    };
+    check();
+  });
+}
+
+async function ensureInfraContainers() {
+  if (process.env.ANOTHERME2_SKIP_DOCKER) {
+    process.stdout.write(
+      '[dev-all] Skipping Docker container startup (ANOTHERME2_SKIP_DOCKER is set).\n',
+    );
+    return;
+  }
+
+  if (!isDockerAvailable()) {
+    process.stdout.write('[dev-all] Docker not available. Skipping container startup.\n');
+    return;
+  }
+
+  if (!fs.existsSync(dockerComposeFile)) {
+    process.stdout.write(
+      `[dev-all] docker-compose file not found at ${dockerComposeFile}. Skipping.\n`,
+    );
+    return;
+  }
+
+  const states = getContainerStates();
+  const toStart = [];
+
+  for (const { containerName, serviceName } of INFRA_CONTAINERS) {
+    const state = states.get(containerName);
+    if (!state) {
+      process.stdout.write(`[dev-all] Container ${containerName} does not exist, will create.\n`);
+      toStart.push(serviceName);
+    } else if (state !== 'running') {
+      process.stdout.write(`[dev-all] Container ${containerName} is ${state}, will restart.\n`);
+      toStart.push(serviceName);
+    } else {
+      process.stdout.write(`[dev-all] Container ${containerName} already running.\n`);
+    }
+  }
+
+  if (toStart.length === 0) {
+    process.stdout.write('[dev-all] All infrastructure containers already running.\n');
+    return;
+  }
+
+  process.stdout.write(`[dev-all] Starting Docker infrastructure: ${toStart.join(', ')}\n`);
+
+  // Include minio-init whenever minio is being started (it creates the bucket)
+  const services = [...toStart];
+  if (toStart.includes('minio') && !services.includes('minio-init')) {
+    services.push('minio-init');
+  }
+
+  const result = spawnSync(
+    'docker',
+    ['compose', '-f', dockerComposeFile, 'up', '-d', ...services],
+    {
+      encoding: 'utf8',
+      stdio: 'inherit',
+      cwd: rootDir,
+    },
+  );
+
+  if (result.error || result.status !== 0) {
+    process.stdout.write(
+      '[dev-all] Failed to start Docker containers. ' +
+        'Please start them manually or set ANOTHERME2_SKIP_DOCKER=1.\n',
+    );
+    return;
+  }
+
+  // Wait for Postgres and Redis health checks before proceeding
+  process.stdout.write('[dev-all] Waiting for containers to become healthy...\n');
+  await waitForContainerHealthy('anotherme-postgres');
+  await waitForContainerHealthy('anotherme-redis');
+  process.stdout.write('[dev-all] Infrastructure containers ready.\n');
+}
+
 function shouldIgnoreServiceExit(serviceName, code) {
   if (serviceName !== 'anotherme' || code === 0) {
     return false;
@@ -214,16 +370,16 @@ function shutdown(exitCode = 0) {
 }
 
 async function main() {
+  cleanupOldProcesses();
+  await ensureInfraContainers();
+
   const gatewayUrl = await pickGatewayUrl();
   const gatewayPort = new URL(gatewayUrl).port || '8080';
   const pythonCommand = resolvePythonCommand();
+  const condaEnv = process.env.ANOTHERME2_CONDA_ENV || 'AnotherMe-V2';
   const queueBackend = process.env.GATEWAY_QUEUE_BACKEND || 'polling';
 
-  process.stdout.write(`[dev-all] AnotherMe2 gateway URL: ${gatewayUrl}\n`);
-  process.stdout.write(`[dev-all] AnotherMe2 python: ${pythonCommand.label}\n`);
-  if (pythonCommand.uvPython) {
-    process.stdout.write(`[dev-all] AnotherMe2 uv python: ${pythonCommand.uvPython}\n`);
-  }
+  process.stdout.write(`[dev-all] AnotherMe2 conda env: ${condaEnv}\n`);
   if (!process.env.GATEWAY_QUEUE_BACKEND) {
     process.stdout.write('[dev-all] AnotherMe2 queue backend: polling\n');
   }
@@ -243,21 +399,27 @@ async function main() {
     ANOTHERME2_GATEWAY_BASE_URL: gatewayUrl,
     GATEWAY_PORT: gatewayPort,
     GATEWAY_QUEUE_BACKEND: queueBackend,
+    CLASSROOM_DATA_DIR: path.join(rootDir, 'data', 'classrooms'),
   };
 
+  const pythonExe =
+    process.env.ANOTHERME2_PYTHON_CMD ||
+    (isWindows ? 'C:\\User\\anaconda\\envs\\AnotherMe-V2\\python.exe' : 'python3');
   const services = [
     {
       name: 'anotherme2-gateway',
-      cwd: engineDir,
-      runner: 'uv',
-      args: buildUvRunArgs('run_gateway.py', pythonCommand),
+      cwd: rootDir,
+      runner: 'direct',
+      command: pythonExe,
+      args: [path.join(engineDir, 'run_gateway.py')],
       env: sharedEnv,
     },
     {
       name: 'anotherme2-worker',
-      cwd: engineDir,
-      runner: 'uv',
-      args: buildUvRunArgs('run_gateway_worker.py', pythonCommand),
+      cwd: rootDir,
+      runner: 'direct',
+      command: pythonExe,
+      args: [path.join(engineDir, 'run_gateway_worker.py')],
       env: sharedEnv,
     },
   ];
@@ -293,12 +455,26 @@ async function main() {
               stdio: ['inherit', 'pipe', 'pipe'],
               shell: false,
             })
-        : spawn(uvCmd, service.args, {
-            cwd: service.cwd,
-            env: service.env,
-            stdio: ['inherit', 'pipe', 'pipe'],
-            shell: false,
-          });
+        : service.runner === 'conda'
+          ? spawn('conda', service.args, {
+              cwd: service.cwd,
+              env: service.env,
+              stdio: ['inherit', 'pipe', 'pipe'],
+              shell: false,
+            })
+          : service.runner === 'direct'
+            ? spawn(service.command, service.args, {
+                cwd: service.cwd,
+                env: service.env,
+                stdio: ['inherit', 'pipe', 'pipe'],
+                shell: false,
+              })
+            : spawn(uvCmd, service.args, {
+                cwd: service.cwd,
+                env: service.env,
+                stdio: ['inherit', 'pipe', 'pipe'],
+                shell: false,
+              });
 
     children.set(service.name, child);
     child.stdout.on('data', (chunk) => prefixOutput(service.name, chunk));

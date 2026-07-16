@@ -147,4 +147,58 @@ describe('anotherme2 gateway client contract', () => {
       'http://gateway.test/v1/users/student%2Fid/knowledge-states?knowledge_point_ids=kp-1&knowledge_point_ids=kp-2&min_mastery=0.4&limit=10',
     );
   });
+
+  it('maps learning event list and stats endpoints', async () => {
+    const { listGatewayLearningEvents, getGatewayLearningEventStats } =
+      await import('@/lib/server/anotherme2-gateway/learning');
+    fetchMock.mockResolvedValueOnce(jsonResponse([])).mockResolvedValueOnce(
+      jsonResponse({
+        total_events: 1,
+        by_type: [{ event_type: 'quiz_answered', count: 1, latest_at: '2026-06-13T00:00:00' }],
+        knowledge_points_involved: ['kp-1'],
+      }),
+    );
+
+    await listGatewayLearningEvents({
+      userId: 'student/id',
+      eventType: 'quiz_answered',
+      classroomId: 'class-1',
+      sceneId: 'scene-1',
+      limit: 25,
+    });
+    await getGatewayLearningEventStats({
+      userId: 'student/id',
+      classroomId: 'class-1',
+      lookbackDays: 14,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://gateway.test/v1/users/student%2Fid/learning-events?event_type=quiz_answered&classroom_id=class-1&scene_id=scene-1&limit=25',
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'http://gateway.test/v1/users/student%2Fid/learning-events/stats?classroom_id=class-1&lookback_days=14',
+    );
+  });
+
+  it('passes explicit knowledge point ids through quiz answer updates', async () => {
+    const { createGatewayQuizAnswer } = await import('@/lib/server/anotherme2-gateway/learning');
+    fetchMock.mockResolvedValueOnce(jsonResponse([]));
+
+    await createGatewayQuizAnswer({
+      userId: 'student-1',
+      questionId: 'question-1',
+      isCorrect: false,
+      knowledgePointIds: ['kp-1', 'kp-2'],
+      payload: { probe_type: 'choice' },
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://gateway.test/v1/users/student-1/quiz-answers');
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toEqual({
+      question_id: 'question-1',
+      is_correct: false,
+      knowledge_point_ids: ['kp-1', 'kp-2'],
+      payload: { probe_type: 'choice' },
+    });
+  });
 });

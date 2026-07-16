@@ -33,6 +33,7 @@ export type ChatRequestMessage = {
 
 export type CapabilityId =
   | ''
+  | 'auto'
   | 'deep_solve'
   | 'quiz_practice'
   | 'deep_research'

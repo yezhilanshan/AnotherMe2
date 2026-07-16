@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@anotherme/api-client": ["./packages/api-client/src/index.ts"],
+      "@anotherme/api-client/*": ["./packages/api-client/src/*"]
     }
   },
   "include": [

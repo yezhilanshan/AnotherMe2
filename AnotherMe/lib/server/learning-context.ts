@@ -20,6 +20,7 @@ import {
 import { createLogger } from '@/lib/logger';
 import { globalStreamBus } from '@/lib/orchestration/stream-bus';
 import { createTraceEvent } from '@/lib/types/teaching-trace';
+import { buildMemoryContext } from '@/lib/server/memory-service';
 
 const log = createLogger('LearningContext');
 
@@ -127,6 +128,19 @@ export async function buildLearningContext(
     } catch (error) {
       log.warn('Failed to attach student profile to LearningContext:', error);
     }
+  }
+
+  try {
+    const memoryContext = await buildMemoryContext(params.userId);
+    if (memoryContext) {
+      context = {
+        ...context,
+        memoryContext,
+        updatedAt: Date.now(),
+      };
+    }
+  } catch (error) {
+    log.warn('Failed to attach persistent memory to LearningContext:', error);
   }
 
   // Knowledge Tracing: fetch teaching decisions for weakest knowledge points

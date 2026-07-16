@@ -5,7 +5,7 @@ import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { useStageStore } from '@/lib/store';
 import { loadImageMapping } from '@/lib/utils/image-storage';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useSceneGenerator } from '@/lib/hooks/use-scene-generator';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
@@ -13,19 +13,55 @@ import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { REQUIRED_CLASSROOM_AGENT_IDS } from '@/lib/orchestration/registry/classroom-presets';
+import { ArrowLeft, Loader2 } from 'lucide-react';
+import { useIsMobileLandscape } from '@/hooks/use-landscape';
 
 const log = createLogger('Classroom');
 
 export default function ClassroomDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const classroomId = params?.id as string;
 
   const { loadFromStorage } = useStageStore();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isMobileLandscape = useIsMobileLandscape();
+
+  // Override viewport meta to prevent user scaling on mobile
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) return;
+    const original = meta.getAttribute('content');
+
+    // Lock scaling for mobile classroom
+    meta.setAttribute(
+      'content',
+      'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover',
+    );
+
+    return () => {
+      // Restore original viewport when leaving classroom
+      if (original) {
+        meta.setAttribute('content', original);
+      }
+    };
+  }, []);
 
   const generationStartedRef = useRef(false);
+
+  // Loading timeout — if loading takes too long (e.g. IndexedDB stuck on mobile), show error
+  useEffect(() => {
+    if (!loading) return;
+    const timeout = setTimeout(() => {
+      if (loading) {
+        setError('加载超时，请检查网络连接后重试。');
+        setLoading(false);
+      }
+    }, 15000); // 15 seconds
+    return () => clearTimeout(timeout);
+  }, [loading]);
 
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
@@ -36,9 +72,28 @@ export default function ClassroomDetailPage() {
   const loadClassroom = useCallback(async () => {
     try {
       await loadFromStorage(classroomId);
+      const hasLocalData = !!useStageStore.getState().stage;
 
-      // If IndexedDB had no data, try server-side storage (API-generated classrooms)
-      if (!useStageStore.getState().stage) {
+      if (hasLocalData) {
+        // IndexedDB has data. Check if server also has it — if not, sync up
+        // so the classroom is accessible from other devices.
+        fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`, { method: 'GET' })
+          .then(async (res) => {
+            if (res.status === 404) {
+              // Server doesn't have this classroom — sync from local
+              log.info('Classroom not on server, syncing from IndexedDB:', classroomId);
+              const state = useStageStore.getState();
+              await fetch('/api/classroom', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage: state.stage, scenes: state.scenes }),
+              });
+              log.info('Synced classroom to server:', classroomId);
+            }
+          })
+          .catch((err) => log.warn('Server sync check failed:', err));
+      } else {
+        // No local data — try server-side storage
         log.info('No IndexedDB data, trying server-side storage for:', classroomId);
         try {
           const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`);
@@ -62,10 +117,20 @@ export default function ClassroomDetailPage() {
                 log.info('Hydrated server-generated agents:', agentIds);
               }
             }
+          } else if (res.status === 404) {
+            throw new Error('课堂数据不存在（可能未同步到服务器）。请回到课程列表重新进入。');
           }
         } catch (fetchErr) {
+          if (fetchErr instanceof Error && fetchErr.message.includes('课堂数据不存在')) {
+            throw fetchErr;
+          }
           log.warn('Server-side storage fetch failed:', fetchErr);
         }
+      }
+
+      // If still no stage data after both attempts, throw
+      if (!useStageStore.getState().stage) {
+        throw new Error('无法加载课堂数据。请检查网络连接或回到课程列表重新进入。');
       }
 
       // Restore completed media generation tasks from IndexedDB
@@ -181,27 +246,50 @@ export default function ClassroomDetailPage() {
   return (
     <ThemeProvider>
       <MediaStageProvider value={classroomId}>
-        <div className="h-mobile-screen flex flex-col overflow-hidden">
+        <div className="h-mobile-screen flex flex-col overflow-hidden relative">
+          {/* Mobile back button — hidden in landscape (native WebView handles back) */}
+          {!isMobileLandscape && (
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="fixed left-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-[100] min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm shadow-lg md:hidden active:bg-black/70 transition-colors"
+              aria-label="返回"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          )}
+
           {loading ? (
-            <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <div className="text-center text-muted-foreground">
-                <p>正在加载课堂...</p>
+            <div className="flex-1 flex items-center justify-center bg-[#f6f4f0] dark:bg-gray-950">
+              <div className="text-center">
+                <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-gray-400" />
+                <p className="text-sm text-gray-500">正在加载课堂...</p>
               </div>
             </div>
           ) : error ? (
-            <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <div className="text-center">
-                <p className="text-destructive mb-4">加载失败：{error}</p>
-                <button
-                  onClick={() => {
-                    setError(null);
-                    setLoading(true);
-                    loadClassroom();
-                  }}
-                  className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-                >
-                  重试
-                </button>
+            <div className="flex-1 flex items-center justify-center bg-[#f6f4f0] dark:bg-gray-950 px-6">
+              <div className="text-center max-w-sm">
+                <p className="text-red-600 dark:text-red-400 mb-4 text-sm">加载失败：{error}</p>
+                <div className="flex gap-3 justify-center">
+                  <button
+                    type="button"
+                    onClick={() => router.push('/classes')}
+                    className="min-h-[44px] px-4 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-200 rounded-lg text-sm font-medium"
+                  >
+                    返回课程列表
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setLoading(true);
+                      loadClassroom();
+                    }}
+                    className="min-h-[44px] px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90"
+                  >
+                    重试
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

@@ -1,0 +1,60 @@
+'use client';
+
+import SimpleMarkdownRenderer from './SimpleMarkdownRenderer';
+
+export interface MarkdownRendererProps {
+  content: string;
+  className?: string;
+  variant?: 'default' | 'compact' | 'prose' | 'trace';
+  enableMath?: boolean;
+  enableCode?: boolean;
+  enableMermaid?: boolean;
+  allowHtml?: boolean;
+  /**
+   * When true, top-level block elements receive a `data-source-line` attribute
+   * pointing at their starting line in the original markdown source. Useful for
+   * editor/preview scroll synchronization.
+   */
+  trackSourceLines?: boolean;
+}
+
+function detectMathContent(content: string): boolean {
+  if (/(^|[^\\])\$\$[\s\S]+?\$\$/.test(content)) return true;
+  if (/\\\(|\\\[/.test(content)) return true;
+  // Single-dollar inline math containing LaTeX commands (\cmd) or math operators ({}_^)
+  if (/(?:^|[^$\\])\$(?!\$|\s)(?:[^$\n]*(?:\\[a-zA-Z]+|[{}_^]))[^$\n]*\$(?!\$)/m.test(content))
+    return true;
+  return false;
+}
+
+function detectCodeContent(content: string): boolean {
+  return /```[A-Za-z0-9_+#.-]+/.test(content);
+}
+
+function detectMermaidContent(content: string): boolean {
+  // editor.md style ```flow / ```seq / ```sequence fences are converted to
+  // mermaid by processMarkdownContent, so they need to enable the mermaid path
+  // as well. Otherwise the converted blocks fall through to the code renderer.
+  return /```(?:mermaid|flow|seq|sequence)\b/i.test(content);
+}
+
+function detectHtmlContent(content: string): boolean {
+  return /<\/?[A-Za-z][\w:-]*(\s|>)/.test(content);
+}
+
+export default function MarkdownRenderer({
+  content,
+  className = '',
+  variant = 'default',
+  enableMath,
+  enableCode,
+  enableMermaid,
+  allowHtml,
+  trackSourceLines,
+}: MarkdownRendererProps) {
+  const resolvedEnableMath = enableMath ?? detectMathContent(content);
+  const resolvedEnableCode = enableCode ?? detectCodeContent(content);
+  const resolvedEnableMermaid = enableMermaid ?? detectMermaidContent(content);
+  const resolvedAllowHtml = allowHtml ?? detectHtmlContent(content);
+  return <SimpleMarkdownRenderer content={content} className={className} variant={variant} />;
+}

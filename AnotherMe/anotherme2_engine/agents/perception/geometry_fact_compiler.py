@@ -8,6 +8,8 @@ import copy
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .pixel_anchor import normalize_point_pixel_anchor
+
 
 class GeometryFactCompiler:
     """Normalize permissive fact payloads into a stable geometry_spec."""
@@ -22,10 +24,87 @@ class GeometryFactCompiler:
         "parallel",
         "midpoint",
         "equal_length",
+        "equal_angle",
         "intersect",
+        "bisects_angle",
+        "angle_bisector",
+        "congruent",
+        "similar",
+        "tangent",
+        "secant",
+        "circumscribed_to",
+        "inscribed_in",
+        "centroid",
+        "incenter",
+        "radius",
+        "diameter",
+        "midsegment",
+        "chord",
+        "side",
+        "hypotenuse",
+        "perpendicular_bisector",
+        "altitude",
+        "median",
+        "base",
+        "diagonal",
+        "leg",
+        "right",
+        "isosceles",
+        "equilateral",
+        "regular",
+        "shaded",
     }
 
-    MEASUREMENT_TYPES = {"length", "angle", "ratio"}
+    MEASUREMENT_TYPES = {
+        "length",
+        "angle",
+        "ratio",
+        "area",
+        "perimeter",
+        "circumference",
+        "radius",
+        "diameter",
+        "altitude",
+        "hypotenuse",
+        "side",
+        "width",
+        "height",
+        "leg",
+        "base",
+        "median",
+        "scale_factor",
+    }
+
+    SEMANTIC_RELATION_TYPES = {
+        "equal_angle",
+        "bisects_angle",
+        "angle_bisector",
+        "congruent",
+        "similar",
+        "tangent",
+        "secant",
+        "circumscribed_to",
+        "inscribed_in",
+        "centroid",
+        "incenter",
+        "radius",
+        "diameter",
+        "midsegment",
+        "chord",
+        "side",
+        "hypotenuse",
+        "perpendicular_bisector",
+        "altitude",
+        "median",
+        "base",
+        "diagonal",
+        "leg",
+        "right",
+        "isosceles",
+        "equilateral",
+        "regular",
+        "shaded",
+    }
 
     def compile(
         self,
@@ -58,19 +137,34 @@ class GeometryFactCompiler:
         measurements: List[Dict[str, Any]] = []
 
         def register_point(raw: Any) -> str:
-            point_id = self._normalize_point_id(raw)
+            point_payload = raw if isinstance(raw, dict) else None
+            raw_id = (
+                point_payload.get("id")
+                or point_payload.get("name")
+                or point_payload.get("label")
+                if point_payload
+                else raw
+            )
+            point_id = self._normalize_point_id(raw_id)
             if not point_id:
                 return ""
             if point_id not in point_set:
                 point_set.add(point_id)
                 point_order.append(point_id)
             payload = point_payloads.setdefault(point_id, {"id": point_id})
-            raw_label = str(raw or "").strip()
+            if point_payload:
+                for key, value in point_payload.items():
+                    if key in {"id", "name"}:
+                        continue
+                    payload[key] = copy.deepcopy(value)
+                payload["id"] = point_id
+            raw_label = str(raw_id or "").strip()
             if raw_label and raw_label != point_id and not payload.get("label"):
                 payload["label"] = raw_label
+            normalize_point_pixel_anchor(payload)
             return point_id
 
-        for point in self._iter_points(facts.get("points")):
+        for point in self._iter_point_payloads(facts.get("points")):
             register_point(point)
         for value in roles.values():
             register_point(value)
@@ -116,12 +210,16 @@ class GeometryFactCompiler:
                 primitives.append(compiled)
 
         for raw_angle in facts.get("angles") or []:
-            compiled = self._compile_angle_primitive(raw_angle, register_point, right_angle=False)
+            compiled = self._compile_angle_primitive(
+                raw_angle, register_point, right_angle=False
+            )
             if compiled is not None:
                 primitives.append(compiled)
 
         for raw_angle in facts.get("right_angles") or []:
-            compiled = self._compile_angle_primitive(raw_angle, register_point, right_angle=True)
+            compiled = self._compile_angle_primitive(
+                raw_angle, register_point, right_angle=True
+            )
             if compiled is not None:
                 primitives.append(compiled)
 
@@ -130,15 +228,22 @@ class GeometryFactCompiler:
             if not primitive_type:
                 continue
             if primitive_type == "segment":
-                compiled = self._compile_segment_primitive(raw_primitive, register_point)
+                compiled = self._compile_segment_primitive(
+                    raw_primitive, register_point
+                )
                 if compiled is not None:
                     primitives.append(compiled)
                     refs = compiled.get("points") or []
                     if len(refs) == 2:
-                        segment_points[str(compiled["id"])] = (str(refs[0]), str(refs[1]))
+                        segment_points[str(compiled["id"])] = (
+                            str(refs[0]),
+                            str(refs[1]),
+                        )
                 continue
             if primitive_type == "polygon":
-                compiled = self._compile_polygon_primitive(raw_primitive, register_point)
+                compiled = self._compile_polygon_primitive(
+                    raw_primitive, register_point
+                )
                 if compiled is not None:
                     primitives.append(compiled)
                 continue
@@ -195,7 +300,9 @@ class GeometryFactCompiler:
                     measurements.append(compiled)
                 continue
 
-        relation_items = list(facts.get("relations") or []) + list(facts.get("constraints") or [])
+        relation_items = list(facts.get("relations") or []) + list(
+            facts.get("constraints") or []
+        )
         for raw_relation in relation_items:
             relation_type = str((raw_relation or {}).get("type", "")).strip().lower()
             if relation_type not in self.CONSTRAINT_TYPES:
@@ -211,7 +318,9 @@ class GeometryFactCompiler:
                 constraints.append(compiled)
 
         for raw_measurement in facts.get("measurements") or []:
-            measurement_type = str((raw_measurement or {}).get("type", "")).strip().lower()
+            measurement_type = (
+                str((raw_measurement or {}).get("type", "")).strip().lower()
+            )
             if measurement_type not in self.MEASUREMENT_TYPES:
                 continue
             compiled = self._compile_measurement(
@@ -225,12 +334,14 @@ class GeometryFactCompiler:
                 measurements.append(compiled)
 
         explicit_segment_pairs = {
-            frozenset(points)
-            for points in segment_points.values()
-            if len(points) == 2
+            frozenset(points) for points in segment_points.values() if len(points) == 2
         }
         explicit_polygon_point_sets = {
-            tuple(str(item).strip() for item in (primitive.get("points") or []) if str(item).strip())
+            tuple(
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            )
             for primitive in primitives
             if str(primitive.get("type", "")).strip().lower() == "polygon"
         }
@@ -243,12 +354,20 @@ class GeometryFactCompiler:
             segment_points=segment_points,
         )
         reflected_point_ids = self._reflected_point_ids(point_payloads)
+        if self._has_fold_semantics(problem_text, facts.get("templates") or []):
+            reflected_point_ids.update(
+                self._prime_point_ids(point_payloads.keys(), point_order)
+            )
 
+        fold_axis = self._infer_fold_axis(problem_text, register_point, segment_points)
+        angle_side_pairs = self._angle_side_pairs(primitives)
+        relation_segment_pairs = self._referenced_segment_pairs(facts, register_point)
         self._ensure_polygon_edges(
             primitives=primitives,
             register_point=register_point,
             segment_points=segment_points,
             reflected_point_ids=reflected_point_ids,
+            allowed_reflected_pairs=angle_side_pairs | relation_segment_pairs,
         )
         constraints.extend(
             self._infer_constraints_from_text(
@@ -265,11 +384,15 @@ class GeometryFactCompiler:
             if str(item).strip()
         )
 
-        if "circle" in {str(item.get("type", "")).strip().lower() for item in primitives}:
+        if "circle" in {
+            str(item.get("type", "")).strip().lower() for item in primitives
+        }:
             templates.append("circle_basic")
         if problem_text and ("折叠" in problem_text or "翻折" in problem_text):
             templates.append("fold")
-        if problem_text and ("菱形" in problem_text or "rhombus" in problem_text.lower()):
+        if problem_text and (
+            "菱形" in problem_text or "rhombus" in problem_text.lower()
+        ):
             templates.append("rhombus")
 
         constraints = self._sanitize_constraints(
@@ -287,6 +410,7 @@ class GeometryFactCompiler:
                 reflected_point_ids=reflected_point_ids,
                 explicit_segment_pairs=explicit_segment_pairs,
                 explicit_polygon_point_sets=explicit_polygon_point_sets,
+                allowed_reflected_pairs=angle_side_pairs | relation_segment_pairs,
             )
 
         display = self._infer_display(
@@ -294,7 +418,9 @@ class GeometryFactCompiler:
             primitives=primitives,
             segment_points=segment_points,
         )
-        primitive_types = {str(item.get("type", "")).strip().lower() for item in primitives}
+        primitive_types = {
+            str(item.get("type", "")).strip().lower() for item in primitives
+        }
 
         if "circle" in primitive_types and any(
             str(item.get("type", "")).strip().lower() == "parallel"
@@ -310,14 +436,18 @@ class GeometryFactCompiler:
             "confidence": confidence,
             "ambiguities": ambiguities,
             "roles": roles,
-            "points": [copy.deepcopy(point_payloads[point_id]) for point_id in point_order],
+            "points": [
+                copy.deepcopy(point_payloads[point_id]) for point_id in point_order
+            ],
             "primitives": self._dedupe_objects(primitives),
             "constraints": self._dedupe_objects(constraints),
             "measurements": self._dedupe_objects(measurements),
             "display": display,
         }
 
-    def _compile_segment_primitive(self, raw: Any, register_point) -> Optional[Dict[str, Any]]:
+    def _compile_segment_primitive(
+        self, raw: Any, register_point
+    ) -> Optional[Dict[str, Any]]:
         endpoints = self._extract_segment_endpoints(raw)
         if len(endpoints) != 2:
             return None
@@ -327,7 +457,9 @@ class GeometryFactCompiler:
         primitive_id = self._primitive_id(raw, "seg_" + "".join(refs))
         return {"id": primitive_id, "type": "segment", "points": refs}
 
-    def _compile_polygon_primitive(self, raw: Any, register_point) -> Optional[Dict[str, Any]]:
+    def _compile_polygon_primitive(
+        self, raw: Any, register_point
+    ) -> Optional[Dict[str, Any]]:
         refs = [register_point(item) for item in self._extract_polygon_points(raw)]
         refs = [item for item in refs if item]
         if len(refs) < 3:
@@ -350,9 +482,7 @@ class GeometryFactCompiler:
         circle_id = self._primitive_id(raw, f"circle_{center}")
         point_constraints: List[Dict[str, Any]] = []
         circle_points = self._extract_point_list(
-            raw.get("points_on_circle")
-            or raw.get("points")
-            or raw.get("on_points")
+            raw.get("points_on_circle") or raw.get("points") or raw.get("on_points")
         )
         for point in circle_points:
             point_id = register_point(point)
@@ -477,6 +607,8 @@ class GeometryFactCompiler:
                 register_point=register_point,
                 segment_points=segment_points,
             )
+        elif primitive_type == "equal_angle":
+            entities = self._extract_angle_relation_entities(raw, register_point)
         elif primitive_type == "intersect":
             point_id = register_point(raw.get("point") or raw.get("intersection"))
             segment_entities = self._extract_binary_segment_relation_entities(
@@ -492,6 +624,39 @@ class GeometryFactCompiler:
                     register_point=register_point,
                     segment_points=segment_points,
                 )
+        elif primitive_type in {"tangent", "secant"}:
+            segment_ref = self._normalize_segment_ref(
+                raw.get("segment") or raw.get("line") or raw.get("line_id"),
+                register_point=register_point,
+                segment_points=segment_points,
+            )
+            if not segment_ref:
+                candidates = self._extract_binary_segment_relation_entities(
+                    raw,
+                    register_point=register_point,
+                    segment_points=segment_points,
+                )
+                segment_ref = candidates[0] if candidates else ""
+            circle_ref = self._normalize_circle_ref(
+                raw.get("circle") or raw.get("circle_id") or raw.get("target"),
+                circle_ids_by_center,
+            )
+            entities = [segment_ref, circle_ref]
+        elif primitive_type in {"congruent", "similar", "circumscribed_to", "inscribed_in"}:
+            entities = self._extract_shape_relation_entities(
+                raw,
+                register_point=register_point,
+                segment_points=segment_points,
+                circle_ids_by_center=circle_ids_by_center,
+            )
+        elif primitive_type in self.SEMANTIC_RELATION_TYPES:
+            entities = self._extract_semantic_relation_entities(
+                raw,
+                relation_type=primitive_type,
+                register_point=register_point,
+                segment_points=segment_points,
+                circle_ids_by_center=circle_ids_by_center,
+            )
         else:
             entities = [
                 self._normalize_generic_entity(item, register_point, segment_points)
@@ -522,23 +687,47 @@ class GeometryFactCompiler:
             entities = [
                 register_point(item)
                 for item in self._extract_segment_endpoints(
-                    raw.get("segment")
-                    or raw.get("line")
-                    or raw.get("entities")
-                    or raw
+                    raw.get("segment") or raw.get("line") or raw.get("entities") or raw
                 )
             ]
         elif measurement_type == "angle":
-            entities = [register_point(item) for item in self._extract_angle_points(raw)]
+            entities = [
+                register_point(item) for item in self._extract_angle_points(raw)
+            ]
             if len(entities) != 3:
                 for key in ("angle", "name", "label"):
                     token = self._normalize_named_angle_ref(raw.get(key))
                     if token and token in (named_angles or {}):
-                        entities = [register_point(item) for item in (named_angles or {}).get(token, [])]
+                        entities = [
+                            register_point(item)
+                            for item in (named_angles or {}).get(token, [])
+                        ]
                         break
         elif measurement_type == "ratio":
             entities = self._extract_relation_entities(
                 raw,
+                register_point=register_point,
+                segment_points=segment_points,
+            )
+        elif measurement_type in {
+            "area",
+            "perimeter",
+            "circumference",
+            "radius",
+            "diameter",
+            "altitude",
+            "hypotenuse",
+            "side",
+            "width",
+            "height",
+            "leg",
+            "base",
+            "median",
+            "scale_factor",
+        }:
+            entities = self._extract_measurement_target_entities(
+                raw,
+                measurement_type=measurement_type,
                 register_point=register_point,
                 segment_points=segment_points,
             )
@@ -558,11 +747,15 @@ class GeometryFactCompiler:
                 payload[key] = str(extra).strip()
         return payload
 
-    def _collect_named_angles(self, facts: Dict[str, Any], register_point) -> Dict[str, List[str]]:
+    def _collect_named_angles(
+        self, facts: Dict[str, Any], register_point
+    ) -> Dict[str, List[str]]:
         mapping: Dict[str, List[str]] = {}
         for bucket in ("angles", "right_angles"):
             for raw in facts.get(bucket) or []:
-                refs = [register_point(item) for item in self._extract_angle_points(raw)]
+                refs = [
+                    register_point(item) for item in self._extract_angle_points(raw)
+                ]
                 refs = [item for item in refs if item]
                 if len(refs) != 3:
                     continue
@@ -571,7 +764,9 @@ class GeometryFactCompiler:
                     if token:
                         mapping[token] = refs
                 if refs[1]:
-                    mapping.setdefault(self._normalize_named_angle_ref(f"∠{refs[1]}"), refs)
+                    mapping.setdefault(
+                        self._normalize_named_angle_ref(f"∠{refs[1]}"), refs
+                    )
         return mapping
 
     def _normalize_named_angle_ref(self, raw: Any) -> str:
@@ -586,12 +781,18 @@ class GeometryFactCompiler:
         segment_points: Dict[str, Tuple[str, str]],
     ) -> List[str]:
         entities: List[str] = []
-        for pair in (("segment1", "segment2"), ("line1", "line2"), ("object1", "object2")):
+        for pair in (
+            ("segment1", "segment2"),
+            ("line1", "line2"),
+            ("object1", "object2"),
+        ):
             first = raw.get(pair[0])
             second = raw.get(pair[1])
             if first and second:
                 for item in (first, second):
-                    entity = self._normalize_generic_entity(item, register_point, segment_points)
+                    entity = self._normalize_generic_entity(
+                        item, register_point, segment_points
+                    )
                     if entity:
                         entities.append(entity)
                 if entities:
@@ -601,11 +802,33 @@ class GeometryFactCompiler:
             if not value:
                 continue
             for item in value:
-                entity = self._normalize_generic_entity(item, register_point, segment_points)
+                entity = self._normalize_generic_entity(
+                    item, register_point, segment_points
+                )
                 if entity:
                     entities.append(entity)
             if entities:
                 return entities
+        return entities
+
+    def _extract_angle_relation_entities(self, raw: Dict[str, Any], register_point) -> List[str]:
+        entities: List[str] = []
+        for key in ("angles", "entities", "items"):
+            value = raw.get(key)
+            if not isinstance(value, (list, tuple)):
+                continue
+            for item in value:
+                refs = [register_point(point) for point in self._extract_angle_points(item)]
+                refs = [point for point in refs if point]
+                if len(refs) == 3:
+                    entities.append("angle_" + "".join(refs))
+            if entities:
+                return entities
+        for key in ("angle1", "angle2"):
+            refs = [register_point(point) for point in self._extract_angle_points(raw.get(key))]
+            refs = [point for point in refs if point]
+            if len(refs) == 3:
+                entities.append("angle_" + "".join(refs))
         return entities
 
     def _extract_binary_segment_relation_entities(
@@ -630,16 +853,127 @@ class GeometryFactCompiler:
         ]
         normalized: List[str] = []
         for item in direct_pairs:
-            entity = self._normalize_generic_entity(item, register_point, segment_points)
+            entity = self._normalize_generic_entity(
+                item, register_point, segment_points
+            )
             if entity:
                 normalized.append(entity)
         return normalized[:2]
+
+    def _extract_shape_relation_entities(
+        self,
+        raw: Dict[str, Any],
+        *,
+        register_point,
+        segment_points: Dict[str, Tuple[str, str]],
+        circle_ids_by_center: Dict[str, str],
+    ) -> List[str]:
+        entities: List[str] = []
+        raw_items: List[Any] = []
+        for key in ("shapes", "polygons", "circles", "entities", "items", "objects"):
+            value = raw.get(key)
+            if isinstance(value, (list, tuple)):
+                raw_items.extend(value)
+        for key in ("shape", "shape1", "shape2", "polygon", "polygon1", "polygon2", "circle", "circle1", "circle2", "target"):
+            if raw.get(key):
+                raw_items.append(raw.get(key))
+        for item in raw_items:
+            entity = self._normalize_shape_ref(
+                item,
+                register_point=register_point,
+                segment_points=segment_points,
+                circle_ids_by_center=circle_ids_by_center,
+            )
+            if entity and entity not in entities:
+                entities.append(entity)
+        return entities
+
+    def _extract_semantic_relation_entities(
+        self,
+        raw: Dict[str, Any],
+        *,
+        relation_type: str,
+        register_point,
+        segment_points: Dict[str, Tuple[str, str]],
+        circle_ids_by_center: Dict[str, str],
+    ) -> List[str]:
+        if relation_type in {"right", "isosceles", "equilateral", "regular", "shaded"}:
+            shape = self._normalize_shape_ref(
+                raw.get("shape") or raw.get("polygon") or raw.get("target") or raw.get("entity"),
+                register_point=register_point,
+                segment_points=segment_points,
+                circle_ids_by_center=circle_ids_by_center,
+            )
+            return [shape] if shape else []
+
+        line_ref = self._normalize_segment_ref(
+            raw.get("segment") or raw.get("line") or raw.get("entity"),
+            register_point=register_point,
+            segment_points=segment_points,
+        )
+        point_ref = register_point(raw.get("point") or raw.get("center"))
+        target = self._normalize_shape_ref(
+            raw.get("shape") or raw.get("polygon") or raw.get("circle") or raw.get("target"),
+            register_point=register_point,
+            segment_points=segment_points,
+            circle_ids_by_center=circle_ids_by_center,
+        )
+        if relation_type in {"centroid", "incenter"}:
+            return [point_ref, target]
+        if relation_type == "angle_bisector":
+            angle_entities = self._extract_angle_relation_entities(raw, register_point)
+            return [line_ref, *angle_entities[:1]]
+        if relation_type == "bisects_angle":
+            angle_entities = self._extract_angle_relation_entities(raw, register_point)
+            return [line_ref, *angle_entities[:1]]
+        return [line_ref, target]
+
+    def _extract_measurement_target_entities(
+        self,
+        raw: Dict[str, Any],
+        *,
+        measurement_type: str,
+        register_point,
+        segment_points: Dict[str, Tuple[str, str]],
+    ) -> List[str]:
+        if measurement_type in {"radius", "diameter", "altitude", "hypotenuse", "side", "width", "height", "leg", "base", "median"}:
+            segment_ref = self._normalize_segment_ref(
+                raw.get("segment") or raw.get("line") or raw.get("entity"),
+                register_point=register_point,
+                segment_points=segment_points,
+            )
+            if segment_ref:
+                return [segment_ref]
+        for key in ("shape", "polygon", "circle", "target", "entity"):
+            shape_entity = self._normalize_shape_ref(
+                raw.get(key),
+                register_point=register_point,
+                segment_points=segment_points,
+                circle_ids_by_center={},
+            )
+            if shape_entity:
+                return [shape_entity]
+            entity = self._normalize_generic_entity(
+                raw.get(key),
+                register_point,
+                segment_points,
+            )
+            if entity:
+                return [entity]
+        return self._extract_relation_entities(
+            raw,
+            register_point=register_point,
+            segment_points=segment_points,
+        )
 
     def _normalize_polygon_interior_ref(self, raw: Any) -> str:
         value = str(raw or "").strip()
         if not value:
             return ""
-        match = re.fullmatch(r"interior_of_([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*(?:[A-Za-z]\d*'*)+)", value)
+        match = re.fullmatch(
+            r"interior_of_([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*(?:[A-Za-z]\d*'*)+)",
+            value,
+        )
         if not match:
             return ""
         polygon_token = match.group(1).replace(" ", "")
@@ -656,7 +990,10 @@ class GeometryFactCompiler:
         value = str(raw or "").strip()
         if not value:
             return ""
-        match = re.fullmatch(r"(?:outside|exterior)_of_([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*(?:[A-Za-z]\d*'*)+)", value)
+        match = re.fullmatch(
+            r"(?:outside|exterior)_of_([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*(?:[A-Za-z]\d*'*)+)",
+            value,
+        )
         if not match:
             return ""
         polygon_token = match.group(1).replace(" ", "")
@@ -683,6 +1020,68 @@ class GeometryFactCompiler:
         if segment_ref:
             return segment_ref
         return register_point(raw)
+
+    def _normalize_shape_ref(
+        self,
+        raw: Any,
+        *,
+        register_point,
+        segment_points: Dict[str, Tuple[str, str]],
+        circle_ids_by_center: Dict[str, str],
+    ) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, dict):
+            shape_type = str(raw.get("type") or raw.get("shape_type") or "").strip().lower()
+            if shape_type == "circle" or raw.get("center") or raw.get("circle"):
+                circle_ref = self._normalize_circle_ref(
+                    raw.get("id") or raw.get("circle") or raw.get("center"),
+                    circle_ids_by_center,
+                )
+                return circle_ref
+            if shape_type in {"polygon", "triangle", "quadrilateral", "square", "rectangle", "rhombus", "trapezoid"} or raw.get("points"):
+                refs = [
+                    register_point(item)
+                    for item in self._extract_polygon_points(raw)
+                ]
+                refs = [item for item in refs if item]
+                if len(refs) >= 3:
+                    return "poly_" + "".join(refs)
+        if isinstance(raw, (list, tuple)):
+            refs = [register_point(item) for item in raw]
+            refs = [item for item in refs if item]
+            if len(refs) >= 3:
+                return "poly_" + "".join(refs)
+            if len(refs) == 2:
+                return self._normalize_segment_ref(
+                    refs,
+                    register_point=register_point,
+                    segment_points=segment_points,
+                )
+        value = str(raw or "").strip()
+        if not value:
+            return ""
+        if value.startswith("circle_"):
+            return value
+        if value.startswith("poly_"):
+            return value
+        circle_ref = self._normalize_circle_ref(value, circle_ids_by_center)
+        if circle_ref in circle_ids_by_center.values() or value in circle_ids_by_center:
+            return circle_ref
+        refs = [register_point(item) for item in self._split_segment_token(value)]
+        if len(refs) == 2:
+            return self._normalize_segment_ref(
+                refs,
+                register_point=register_point,
+                segment_points=segment_points,
+            )
+        polygon_refs = re.findall(r"[A-Za-z]\d*'*", self._normalize_prime_markers(value).replace(" ", ""))
+        polygon_refs = [register_point(item) for item in polygon_refs]
+        polygon_refs = [item for item in polygon_refs if item]
+        if len(polygon_refs) >= 3:
+            return "poly_" + "".join(polygon_refs)
+        point = register_point(value)
+        return point
 
     def _normalize_segment_ref(
         self,
@@ -720,7 +1119,9 @@ class GeometryFactCompiler:
                         return segment_id
                 return f"seg_{endpoints[0]}{endpoints[1]}"
         if isinstance(raw, dict):
-            endpoints = [register_point(item) for item in self._extract_segment_endpoints(raw)]
+            endpoints = [
+                register_point(item) for item in self._extract_segment_endpoints(raw)
+            ]
             endpoints = [item for item in endpoints if item]
             if len(endpoints) == 2 and endpoints[0] != endpoints[1]:
                 for segment_id, refs in segment_points.items():
@@ -740,6 +1141,11 @@ class GeometryFactCompiler:
         value = str(raw or "").strip()
         if not value:
             return ""
+        if value.startswith("circle_"):
+            return value
+        match = re.fullmatch(r"Circle\(([^)]+)\)", value, flags=re.IGNORECASE)
+        if match:
+            value = match.group(1).strip()
         if value in circle_ids_by_center:
             return circle_ids_by_center[value]
         return value
@@ -841,24 +1247,35 @@ class GeometryFactCompiler:
                 return [str(point_id).strip()]
         return []
 
-    def _iter_points(self, raw: Any) -> Iterable[str]:
+    def _iter_point_payloads(self, raw: Any) -> Iterable[Any]:
         if raw is None:
             return []
         if isinstance(raw, dict):
-            return [str(key).strip() for key in raw.keys() if str(key).strip()]
-        if isinstance(raw, (list, tuple)):
-            items: List[str] = []
-            for item in raw:
-                if isinstance(item, dict):
-                    point_id = item.get("id") or item.get("name") or item.get("label")
-                    if point_id:
-                        items.append(str(point_id).strip())
-                else:
-                    value = str(item).strip()
-                    if value:
-                        items.append(value)
+            items: List[Any] = []
+            for key, value in raw.items():
+                if isinstance(value, dict):
+                    payload = copy.deepcopy(value)
+                    payload.setdefault("id", key)
+                    items.append(payload)
+                elif str(key).strip():
+                    items.append(str(key).strip())
             return items
-        return [str(raw).strip()] if str(raw).strip() else []
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        return [raw] if str(raw).strip() else []
+
+    def _iter_points(self, raw: Any) -> Iterable[str]:
+        items: List[str] = []
+        for item in self._iter_point_payloads(raw):
+            if isinstance(item, dict):
+                point_id = item.get("id") or item.get("name") or item.get("label")
+                if point_id:
+                    items.append(str(point_id).strip())
+            else:
+                value = str(item).strip()
+                if value:
+                    items.append(value)
+        return items
 
     def _normalize_roles(self, raw_roles: Dict[str, Any]) -> Dict[str, str]:
         roles: Dict[str, str] = {}
@@ -876,7 +1293,11 @@ class GeometryFactCompiler:
         if not value:
             return ""
         value = self._normalize_prime_markers(value).replace(" ", "")
-        if value.startswith("seg_") or value.startswith("circle_") or value.startswith("arc_"):
+        if (
+            value.startswith("seg_")
+            or value.startswith("circle_")
+            or value.startswith("arc_")
+        ):
             return ""
         if re.fullmatch(r"[A-Za-z]", value):
             return value.upper()
@@ -982,7 +1403,11 @@ class GeometryFactCompiler:
                 continue
             payload.setdefault(
                 "derived",
-                {"type": "reflect_point", "source": base_id, "axis": [axis[0], axis[1]]},
+                {
+                    "type": "reflect_point",
+                    "source": base_id,
+                    "axis": [axis[0], axis[1]],
+                },
             )
 
     def _infer_fold_axis(
@@ -992,7 +1417,10 @@ class GeometryFactCompiler:
         segment_points: Dict[str, Tuple[str, str]],
     ) -> Optional[Tuple[str, str]]:
         normalized = self._normalize_prime_markers(problem_text)
-        match = re.search(r"沿\s*([A-Za-z]\d*'*[A-Za-z]\d*'*)\s*(?:折叠|翻折)", normalized)
+        compact = re.sub(r"\\[()]|[()（）\s]", "", normalized)
+        match = re.search(
+            r"沿([A-Za-z]\d*'*[A-Za-z]\d*'*)(?:折叠|翻折)", compact
+        )
         if match:
             refs = self._split_segment_token(match.group(1))
             if len(refs) == 2:
@@ -1004,9 +1432,84 @@ class GeometryFactCompiler:
             if len(endpoints) == 2:
                 first, second = endpoints
                 token = f"{first}{second}"
-                if f"沿{token}折叠" in normalized or f"沿{token}翻折" in normalized:
+                if f"沿{token}折叠" in compact or f"沿{token}翻折" in compact:
                     return first, second
         return None
+
+    def _angle_side_pairs(
+        self,
+        primitives: Sequence[Dict[str, Any]],
+    ) -> set:
+        pairs: set = set()
+        for primitive in primitives:
+            if not isinstance(primitive, dict):
+                continue
+            primitive_type = str(primitive.get("type", "")).strip().lower()
+            if primitive_type not in {"angle", "right_angle"}:
+                continue
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
+            if len(refs) != 3:
+                continue
+            first, vertex, second = refs
+            if first != vertex:
+                pairs.add(frozenset((first, vertex)))
+            if second != vertex:
+                pairs.add(frozenset((vertex, second)))
+        return pairs
+
+    def _referenced_segment_pairs(self, facts: Dict[str, Any], register_point) -> set:
+        pairs: set = set()
+
+        def visit(value: Any) -> None:
+            if value is None:
+                return
+            if isinstance(value, str):
+                refs = [register_point(item) for item in self._split_segment_token(value)]
+                refs = [item for item in refs if item]
+                if len(refs) == 2 and refs[0] != refs[1]:
+                    pairs.add(frozenset((refs[0], refs[1])))
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                for key in (
+                    "segment",
+                    "line",
+                    "segment1",
+                    "segment2",
+                    "line1",
+                    "line2",
+                    "segments",
+                    "lines",
+                    "sides",
+                    "entities",
+                ):
+                    if key in value:
+                        visit(value.get(key))
+
+        for bucket in (
+            "relations",
+            "constraints",
+            "observed_relations",
+            "text_explicit_relations",
+            "derived_relations",
+            "inferred_relations",
+            "measurements",
+            "observed_measurements",
+            "text_explicit_measurements",
+            "derived_measurements",
+            "inferred_measurements",
+            "angles",
+            "right_angles",
+        ):
+            visit(facts.get(bucket))
+        return pairs
 
     def _sanitize_constraints(
         self,
@@ -1024,14 +1527,20 @@ class GeometryFactCompiler:
         for constraint in constraints:
             if str(constraint.get("type", "")).strip().lower() != "point_on_circle":
                 continue
-            entities = [str(item).strip() for item in (constraint.get("entities") or [])]
+            entities = [
+                str(item).strip() for item in (constraint.get("entities") or [])
+            ]
             if len(entities) == 2 and entities[0] and entities[1]:
                 circle_members.setdefault(entities[1], set()).add(entities[0])
 
         sanitized: List[Dict[str, Any]] = []
         for constraint in constraints:
             relation_type = str(constraint.get("type", "")).strip().lower()
-            entities = [str(item).strip() for item in (constraint.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (constraint.get("entities") or [])
+                if str(item).strip()
+            ]
             if not entities:
                 continue
 
@@ -1039,7 +1548,9 @@ class GeometryFactCompiler:
                 anchor = entities[0]
                 for other in entities[1:]:
                     if other != anchor:
-                        sanitized.append({"type": "equal_length", "entities": [anchor, other]})
+                        sanitized.append(
+                            {"type": "equal_length", "entities": [anchor, other]}
+                        )
                 continue
 
             if relation_type == "collinear":
@@ -1067,7 +1578,9 @@ class GeometryFactCompiler:
                 endpoints = self._segment_from_primitive(segment_id, primitive_map)
                 if endpoints is None or point_id in endpoints:
                     continue
-                if self._point_lies_on_same_circle_as_segment(point_id, endpoints, circle_members):
+                if self._point_lies_on_same_circle_as_segment(
+                    point_id, endpoints, circle_members
+                ):
                     continue
                 if self._conflicts_with_angle_measurement(
                     relation_type,
@@ -1076,7 +1589,9 @@ class GeometryFactCompiler:
                     measurements,
                 ):
                     continue
-                sanitized.append({"type": relation_type, "entities": [point_id, segment_id]})
+                sanitized.append(
+                    {"type": relation_type, "entities": [point_id, segment_id]}
+                )
                 continue
 
             if relation_type == "point_in_polygon":
@@ -1084,12 +1599,21 @@ class GeometryFactCompiler:
                     continue
                 point_id, polygon_id = entities
                 primitive = primitive_map.get(polygon_id)
-                if not primitive or str(primitive.get("type", "")).strip().lower() != "polygon":
+                if (
+                    not primitive
+                    or str(primitive.get("type", "")).strip().lower() != "polygon"
+                ):
                     continue
-                refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+                refs = [
+                    str(item).strip()
+                    for item in (primitive.get("points") or [])
+                    if str(item).strip()
+                ]
                 if point_id in refs or len(refs) < 3:
                     continue
-                sanitized.append({"type": relation_type, "entities": [point_id, polygon_id]})
+                sanitized.append(
+                    {"type": relation_type, "entities": [point_id, polygon_id]}
+                )
                 continue
 
             if relation_type == "point_outside_polygon":
@@ -1097,18 +1621,30 @@ class GeometryFactCompiler:
                     continue
                 point_id, polygon_id = entities
                 primitive = primitive_map.get(polygon_id)
-                if not primitive or str(primitive.get("type", "")).strip().lower() != "polygon":
+                if (
+                    not primitive
+                    or str(primitive.get("type", "")).strip().lower() != "polygon"
+                ):
                     continue
-                refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+                refs = [
+                    str(item).strip()
+                    for item in (primitive.get("points") or [])
+                    if str(item).strip()
+                ]
                 if point_id in refs or len(refs) < 3:
                     continue
-                sanitized.append({"type": relation_type, "entities": [point_id, polygon_id]})
+                sanitized.append(
+                    {"type": relation_type, "entities": [point_id, polygon_id]}
+                )
                 continue
 
             if relation_type in {"parallel", "perpendicular", "equal_length"}:
                 if len(entities) != 2:
                     continue
-                if not all(self._segment_from_primitive(item, primitive_map) for item in entities):
+                if not all(
+                    self._segment_from_primitive(item, primitive_map)
+                    for item in entities
+                ):
                     continue
                 sanitized.append({"type": relation_type, "entities": entities})
                 continue
@@ -1116,13 +1652,52 @@ class GeometryFactCompiler:
             if relation_type == "intersect":
                 if len(entities) != 3:
                     continue
-                if not all(self._segment_from_primitive(item, primitive_map) for item in entities[:2]):
+                if not all(
+                    self._segment_from_primitive(item, primitive_map)
+                    for item in entities[:2]
+                ):
                     continue
                 sanitized.append({"type": relation_type, "entities": entities})
                 continue
 
             if relation_type == "point_on_circle" and len(entities) == 2:
                 sanitized.append({"type": relation_type, "entities": entities})
+                continue
+
+            if relation_type in self.SEMANTIC_RELATION_TYPES:
+                unique_entities = list(dict.fromkeys(entities))
+                if len(unique_entities) < 1:
+                    continue
+                if relation_type in {
+                    "congruent",
+                    "similar",
+                    "tangent",
+                    "secant",
+                    "circumscribed_to",
+                    "inscribed_in",
+                    "centroid",
+                    "incenter",
+                    "radius",
+                    "diameter",
+                    "midsegment",
+                    "chord",
+                    "side",
+                    "hypotenuse",
+                    "perpendicular_bisector",
+                    "altitude",
+                    "median",
+                    "base",
+                    "diagonal",
+                    "leg",
+                    "bisects_angle",
+                    "angle_bisector",
+                    "equal_angle",
+                } and len(unique_entities) < 2:
+                    continue
+                sanitized.append(
+                    {"type": relation_type, "entities": unique_entities}
+                )
+                continue
 
         return sanitized
 
@@ -1157,7 +1732,9 @@ class GeometryFactCompiler:
             a, b, c = entities
             candidates = ((a, b, c), (b, a, c), (c, a, b))
             return any(
-                self._has_non_straight_angle_measurement(vertex, first, second, angle_measurements)
+                self._has_non_straight_angle_measurement(
+                    vertex, first, second, angle_measurements
+                )
                 for vertex, first, second in candidates
             )
 
@@ -1172,7 +1749,11 @@ class GeometryFactCompiler:
     ) -> bool:
         pair = {str(first).strip(), str(second).strip()}
         for item in measurements:
-            entities = [str(entity).strip() for entity in (item.get("entities") or []) if str(entity).strip()]
+            entities = [
+                str(entity).strip()
+                for entity in (item.get("entities") or [])
+                if str(entity).strip()
+            ]
             if len(entities) != 3:
                 continue
             if entities[1] != vertex:
@@ -1194,7 +1775,11 @@ class GeometryFactCompiler:
         sanitized: List[Dict[str, Any]] = []
         for measurement in measurements:
             measurement_type = str(measurement.get("type", "")).strip().lower()
-            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (measurement.get("entities") or [])
+                if str(item).strip()
+            ]
             value = measurement.get("value")
             if value is None:
                 continue
@@ -1203,6 +1788,23 @@ class GeometryFactCompiler:
             if measurement_type == "angle" and len(entities) != 3:
                 continue
             if measurement_type == "ratio" and len(entities) < 2:
+                continue
+            if measurement_type in {
+                "area",
+                "perimeter",
+                "circumference",
+                "radius",
+                "diameter",
+                "altitude",
+                "hypotenuse",
+                "side",
+                "width",
+                "height",
+                "leg",
+                "base",
+                "median",
+                "scale_factor",
+            } and len(entities) < 1:
                 continue
             if len(set(entities)) != len(entities):
                 continue
@@ -1222,7 +1824,11 @@ class GeometryFactCompiler:
         primitive = primitive_map.get(segment_id)
         if not primitive or str(primitive.get("type", "")).strip().lower() != "segment":
             return None
-        refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+        refs = [
+            str(item).strip()
+            for item in (primitive.get("points") or [])
+            if str(item).strip()
+        ]
         if len(refs) != 2:
             return None
         return refs[0], refs[1]
@@ -1249,7 +1855,11 @@ class GeometryFactCompiler:
         for primitive in primitive_map.values():
             if str(primitive.get("type", "")).strip().lower() != "polygon":
                 continue
-            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
             if len(refs) == 3 and set(refs) == point_set:
                 return True
         return False
@@ -1258,7 +1868,9 @@ class GeometryFactCompiler:
         token = str(raw or "").strip().replace(" ", "")
         if not token:
             return ""
-        token = re.sub(r"^(?:△|▲|▵|三角形|triangle|tri)\s*", "", token, flags=re.IGNORECASE)
+        token = re.sub(
+            r"^(?:△|▲|▵|三角形|triangle|tri)\s*", "", token, flags=re.IGNORECASE
+        )
         token = token.lstrip("鈻砅矨")
         return token
 
@@ -1269,10 +1881,14 @@ class GeometryFactCompiler:
         register_point,
         segment_points: Dict[str, Tuple[str, str]],
         reflected_point_ids: Optional[set[str]] = None,
+        allowed_reflected_pairs: Optional[set] = None,
     ) -> None:
-        existing_pairs = {frozenset(points) for points in segment_points.values() if len(points) == 2}
+        existing_pairs = {
+            frozenset(points) for points in segment_points.values() if len(points) == 2
+        }
         additions: List[Dict[str, Any]] = []
         reflected = set(reflected_point_ids or set())
+        allowed_pairs = set(allowed_reflected_pairs or set())
         for primitive in primitives:
             if str(primitive.get("type", "")).strip().lower() != "polygon":
                 continue
@@ -1280,15 +1896,25 @@ class GeometryFactCompiler:
             refs = [item for item in refs if item]
             if len(refs) < 3:
                 continue
-            if reflected and any(ref in reflected for ref in refs):
-                continue
             for index, start in enumerate(refs):
                 end = refs[(index + 1) % len(refs)]
                 pair = frozenset((start, end))
                 if len(pair) != 2 or pair in existing_pairs:
                     continue
+                if (
+                    reflected
+                    and any(ref in reflected for ref in (start, end))
+                    and pair not in allowed_pairs
+                    and not self._is_allowed_fold_reflected_edge(
+                        [start, end],
+                        reflected_point_ids=reflected,
+                    )
+                ):
+                    continue
                 segment_id = f"seg_{start}{end}"
-                additions.append({"id": segment_id, "type": "segment", "points": [start, end]})
+                additions.append(
+                    {"id": segment_id, "type": "segment", "points": [start, end]}
+                )
                 segment_points[segment_id] = (start, end)
                 existing_pairs.add(pair)
         primitives.extend(additions)
@@ -1298,16 +1924,51 @@ class GeometryFactCompiler:
         for point_id, payload in point_payloads.items():
             if not isinstance(payload, dict):
                 continue
-            derived = payload.get("derived") if isinstance(payload.get("derived"), dict) else {}
+            derived = (
+                payload.get("derived")
+                if isinstance(payload.get("derived"), dict)
+                else {}
+            )
             if str(derived.get("type", "")).strip().lower() == "reflect_point":
                 reflected.add(str(point_id).strip())
+        return reflected
+
+    def _prime_point_ids(
+        self,
+        point_ids: Iterable[str],
+        point_order: Sequence[str],
+    ) -> set:
+        """Return prime-marked points such as B' or C1 that have an original base point."""
+
+        known = {str(item).strip() for item in point_order if str(item).strip()}
+        reflected: set = set()
+        for raw_point_id in point_ids:
+            point_id = str(raw_point_id).strip()
+            if not point_id:
+                continue
+            normalized = self._normalize_prime_markers(point_id)
+            base = ""
+            if "'" in normalized:
+                base = self._normalize_point_id(normalized.replace("'", ""))
+            else:
+                match = re.fullmatch(r"([A-Za-z])1", normalized)
+                if match:
+                    base = self._normalize_point_id(match.group(1))
+            if base and base in known and point_id != base:
+                reflected.add(point_id)
         return reflected
 
     def _has_fold_semantics(self, problem_text: str, templates: Sequence[str]) -> bool:
         if any(str(item).strip().lower() == "fold" for item in templates):
             return True
         normalized_text = self._normalize_prime_markers(problem_text)
-        return bool(re.search(r"折叠|翻折|对折|折痕|fold|reflect", normalized_text, flags=re.IGNORECASE))
+        return bool(
+            re.search(
+                r"折叠|翻折|对折|折痕|fold|reflect",
+                normalized_text,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def _apply_fold_guardrails(
         self,
@@ -1318,6 +1979,7 @@ class GeometryFactCompiler:
         reflected_point_ids: set,
         explicit_segment_pairs: set,
         explicit_polygon_point_sets: set,
+        allowed_reflected_pairs: set,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         if not reflected_point_ids:
             return list(primitives), list(constraints), list(measurements)
@@ -1330,7 +1992,11 @@ class GeometryFactCompiler:
                 continue
             primitive_id = str(primitive.get("id", "")).strip()
             primitive_type = str(primitive.get("type", "")).strip().lower()
-            refs = [str(item).strip() for item in (primitive.get("points") or []) if str(item).strip()]
+            refs = [
+                str(item).strip()
+                for item in (primitive.get("points") or [])
+                if str(item).strip()
+            ]
 
             if primitive_type == "polygon":
                 polygon_points = tuple(refs)
@@ -1343,7 +2009,15 @@ class GeometryFactCompiler:
 
             if primitive_type == "segment" and len(refs) == 2:
                 pair = frozenset((refs[0], refs[1]))
-                if any(ref in reflected_point_ids for ref in refs) and pair not in explicit_segment_pairs:
+                if (
+                    any(ref in reflected_point_ids for ref in refs)
+                    and pair not in explicit_segment_pairs
+                    and pair not in allowed_reflected_pairs
+                    and not self._is_allowed_fold_reflected_edge(
+                        refs,
+                        reflected_point_ids=reflected_point_ids,
+                    )
+                ):
                     if primitive_id:
                         removed_primitive_ids.add(primitive_id)
                     continue
@@ -1361,7 +2035,11 @@ class GeometryFactCompiler:
             if not isinstance(constraint, dict):
                 kept_constraints.append(constraint)
                 continue
-            entities = [str(item).strip() for item in (constraint.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (constraint.get("entities") or [])
+                if str(item).strip()
+            ]
             if any(item in removed_primitive_ids for item in entities):
                 continue
             relation_type = str(constraint.get("type", "")).strip().lower()
@@ -1375,7 +2053,11 @@ class GeometryFactCompiler:
                 "equal_length",
                 "intersect",
             }:
-                primitive_refs = [item for item in entities if item.startswith("seg_") or item.startswith("poly_")]
+                primitive_refs = [
+                    item
+                    for item in entities
+                    if item.startswith("seg_") or item.startswith("poly_")
+                ]
                 if any(item not in kept_primitive_ids for item in primitive_refs):
                     continue
             kept_constraints.append(constraint)
@@ -1385,12 +2067,33 @@ class GeometryFactCompiler:
             if not isinstance(measurement, dict):
                 kept_measurements.append(measurement)
                 continue
-            entities = [str(item).strip() for item in (measurement.get("entities") or []) if str(item).strip()]
+            entities = [
+                str(item).strip()
+                for item in (measurement.get("entities") or [])
+                if str(item).strip()
+            ]
             if any(item in removed_primitive_ids for item in entities):
                 continue
             kept_measurements.append(measurement)
 
         return kept_primitives, kept_constraints, kept_measurements
+
+    def _is_allowed_fold_reflected_edge(
+        self,
+        refs: Sequence[str],
+        *,
+        reflected_point_ids: set,
+    ) -> bool:
+        if len(refs) != 2:
+            return False
+        first, second = [str(item).strip() for item in refs]
+        if not first or not second or first == second:
+            return False
+        first_reflected = first in reflected_point_ids
+        second_reflected = second in reflected_point_ids
+        if first_reflected and second_reflected:
+            return True
+        return False
 
     def _infer_constraints_from_text(
         self,
@@ -1422,9 +2125,15 @@ class GeometryFactCompiler:
                 a, b, c = [register_point(item) for item in triangle_points]
                 if not a or not b or not c:
                     continue
-                seg_ab = self._normalize_segment_ref([a, b], register_point=register_point, segment_points=segment_points)
-                seg_bc = self._normalize_segment_ref([b, c], register_point=register_point, segment_points=segment_points)
-                seg_ca = self._normalize_segment_ref([c, a], register_point=register_point, segment_points=segment_points)
+                seg_ab = self._normalize_segment_ref(
+                    [a, b], register_point=register_point, segment_points=segment_points
+                )
+                seg_bc = self._normalize_segment_ref(
+                    [b, c], register_point=register_point, segment_points=segment_points
+                )
+                seg_ca = self._normalize_segment_ref(
+                    [c, a], register_point=register_point, segment_points=segment_points
+                )
                 if seg_ab and seg_bc:
                     push("equal_length", [seg_ab, seg_bc])
                 if seg_bc and seg_ca:
@@ -1441,7 +2150,10 @@ class GeometryFactCompiler:
             if self._mentions_equilateral(text_blob):
                 add_equilateral_constraints(text_blob)
 
-        for text_blob in [str(facts.get("problem_text", "")).strip(), str(facts.get("source_text", "")).strip()]:
+        for text_blob in [
+            str(facts.get("problem_text", "")).strip(),
+            str(facts.get("source_text", "")).strip(),
+        ]:
             if self._mentions_equilateral(text_blob):
                 add_equilateral_constraints(text_blob)
 
@@ -1461,7 +2173,11 @@ class GeometryFactCompiler:
             if len(points) == 2
         }
         construction_segments: set[str] = set()
-        sources = [str(item).strip() for item in (facts.get("ambiguities") or []) if str(item).strip()]
+        sources = [
+            str(item).strip()
+            for item in (facts.get("ambiguities") or [])
+            if str(item).strip()
+        ]
         sources.extend(
             str(item.get("description", "")).strip()
             for item in (facts.get("measurements") or [])
@@ -1480,7 +2196,9 @@ class GeometryFactCompiler:
             if isinstance(explicit_display.get("points"), dict):
                 display["points"].update(copy.deepcopy(explicit_display["points"]))
             if isinstance(explicit_display.get("primitives"), dict):
-                display["primitives"].update(copy.deepcopy(explicit_display["primitives"]))
+                display["primitives"].update(
+                    copy.deepcopy(explicit_display["primitives"])
+                )
 
         for primitive in primitives:
             primitive_id = str(primitive.get("id", "")).strip()
@@ -1509,7 +2227,11 @@ class GeometryFactCompiler:
     def _extract_triangle_tokens(self, text: str) -> List[List[str]]:
         tokens: List[List[str]] = []
         normalized = self._strip_polygon_markers(text)
-        for match in re.finditer(r"(?:△|▲|▵|triangle\s*)([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*)", str(text or ""), flags=re.IGNORECASE):
+        for match in re.finditer(
+            r"(?:△|▲|▵|triangle\s*)([A-Za-z]\d*'*[A-Za-z]\d*'*[A-Za-z]\d*'*)",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        ):
             refs = re.findall(r"[A-Za-z]\d*'*", match.group(1))
             if len(refs) == 3:
                 tokens.append(refs)
@@ -1521,7 +2243,9 @@ class GeometryFactCompiler:
 
     def _extract_segment_tokens(self, text: str) -> List[Tuple[str, str]]:
         result: List[Tuple[str, str]] = []
-        pattern = re.compile(r"(?<![A-Za-z0-9'])([A-Za-z]\d*'*[A-Za-z]\d*'*)(?![A-Za-z0-9'])")
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9'])([A-Za-z]\d*'*[A-Za-z]\d*'*)(?![A-Za-z0-9'])"
+        )
         for match in pattern.finditer(str(text or "")):
             token = match.group(1)
             refs = self._split_segment_token(token)
@@ -1539,7 +2263,11 @@ class GeometryFactCompiler:
         circle_members: Dict[str, set[str]],
     ) -> bool:
         for members in circle_members.values():
-            if point_id in members and endpoints[0] in members and endpoints[1] in members:
+            if (
+                point_id in members
+                and endpoints[0] in members
+                and endpoints[1] in members
+            ):
                 return True
         return False
 

@@ -8,6 +8,7 @@ import {
   BookOpen,
   Bot,
   ChevronDown,
+  ChevronRight,
   Copy,
   Loader2,
   Menu,
@@ -16,6 +17,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Search,
   Settings,
   Sparkles,
   Stethoscope,
@@ -32,8 +34,8 @@ import { useAuth } from '@/features/auth/components/auth-provider';
 import { DiagnosticProbePanel } from '@/features/diagnostic/components/diagnostic-probe/diagnostic-probe-panel';
 import { buildDiagnosticSnapshot } from '@/lib/store/diagnostic';
 import { NeuralLoader, BrainWaveLoader } from '@/features/ai-tutor/components/ai-elements/loader';
-import { MarkdownRenderer } from '@/features/ai-tutor/components/markdown/MarkdownRenderer';
 import { ToolTracePanel } from '@/features/ai-tutor/components/chat/tool-trace-panel';
+import { TutorResponseRenderer } from '@/features/ai-tutor/components/chat/tutor-response-renderer';
 import {
   MathAnimatorPreview,
   QuizPreview,
@@ -42,7 +44,6 @@ import {
   VisualPreview,
 } from '@/features/ai-tutor/pages/ai-tutor/tool-previews';
 import {
-  AI_TUTOR_DETAILED_SYSTEM_PROMPT,
   CAPABILITIES,
   CHAT_TOOLS,
   LEGACY_STORAGE_KEY,
@@ -65,7 +66,9 @@ import {
   deriveSessionTitle,
   extractQuizPreviewQuestions,
   formatSessionTime,
+  getSessionPreview,
   getDefaultTools,
+  groupSessionsByTime,
   parseApiError,
   parseSSEChunk,
   safeParseSessions,
@@ -92,16 +95,41 @@ export default function AITutorPage() {
   const [showDiagnosticPanel, setShowDiagnosticPanel] = useState(false);
   const [tappedMessageId, setTappedMessageId] = useState<string | null>(null);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [swipedSessionId, setSwipedSessionId] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const isUserScrollingRef = useRef(false);
+  const swipeStartRef = useRef<{ x: number; y: number; id: string } | null>(null);
 
   const orderedSessions = useMemo(
     () => [...sessions].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)),
     [sessions],
+  );
+
+  const filteredSessions = useMemo(() => {
+    if (!sessionSearch.trim()) return orderedSessions;
+    const q = sessionSearch.trim().toLowerCase();
+    return orderedSessions.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.messages.some((m) => m.content.toLowerCase().includes(q)),
+    );
+  }, [orderedSessions, sessionSearch]);
+
+  const groupedSessions = useMemo(
+    () => groupSessionsByTime(filteredSessions),
+    [filteredSessions],
   );
 
   const activeSession = useMemo(
@@ -153,6 +181,21 @@ export default function AITutorPage() {
     localStorage.removeItem(LEGACY_STORAGE_KEY);
   }, [hydrated, sessions]);
 
+  // 移动端兜底：页面切到后台时立即持久化，防止浏览器暂停 JS 导致丢失
+  useEffect(() => {
+    if (!hydrated) return;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        setSessions((prev) => {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(prev));
+          return prev; // 不触发额外 re-render
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [hydrated]);
+
   useEffect(() => {
     if (!activeSessionId && orderedSessions[0]?.id) {
       setActiveSessionId(orderedSessions[0].id);
@@ -186,10 +229,15 @@ export default function AITutorPage() {
     setShowScrollToBottom(false);
   }, []);
 
-  // 处理滚动事件 - 用户主动滚动时暂停自动滚动并显示返回底部按钮
+  // 处理滚动事件 - 用户主动上滚时暂停自动滚动，回到附近时恢复
   const handleScroll = useCallback(() => {
-    isUserScrollingRef.current = true;
-    setShowScrollToBottom(!isNearBottom());
+    const nearBottom = isNearBottom();
+    if (!nearBottom) {
+      isUserScrollingRef.current = true;
+    } else {
+      isUserScrollingRef.current = false;
+    }
+    setShowScrollToBottom(!nearBottom);
   }, [isNearBottom]);
 
   useEffect(() => {
@@ -254,51 +302,71 @@ export default function AITutorPage() {
 
   const _handleClearCurrent = () => {
     if (!activeSession || isTyping) return;
-    if (!window.confirm('确定清空当前会话记录吗？')) return;
-    setSessions((prev) =>
-      prev.map((session) =>
-        session.id === activeSession.id
-          ? {
-              ...session,
-              messages: [],
-              autoTitle: true,
-              title: '新会话',
-              updatedAt: new Date().toISOString(),
-            }
-          : session,
-      ),
-    );
-    setErrorText('');
+    setConfirmDialog({
+      title: '清空当前会话',
+      description: '确定清空当前会话的所有消息吗？此操作不可撤销。',
+      confirmLabel: '清空',
+      danger: true,
+      onConfirm: () => {
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === activeSession.id
+              ? {
+                  ...session,
+                  messages: [],
+                  autoTitle: true,
+                  title: '新会话',
+                  updatedAt: new Date().toISOString(),
+                }
+              : session,
+          ),
+        );
+        setErrorText('');
+      },
+    });
   };
 
   const handleClearAll = () => {
     if (isTyping) return;
-    if (!window.confirm('确定清空全部历史会话吗？')) return;
-    abortControllerRef.current?.abort();
-    const fresh = createSession();
-    setSessions([fresh]);
-    setActiveSessionId(fresh.id);
-    setInput('');
-    setErrorText('');
+    setConfirmDialog({
+      title: '清空全部历史',
+      description: `确定删除全部 ${sessions.length} 个会话吗？此操作不可撤销。`,
+      confirmLabel: '全部清空',
+      danger: true,
+      onConfirm: () => {
+        abortControllerRef.current?.abort();
+        const fresh = createSession();
+        setSessions([fresh]);
+        setActiveSessionId(fresh.id);
+        setInput('');
+        setErrorText('');
+        // 立即持久化，不等待 useEffect
+        localStorage.setItem(STORAGE_KEY, JSON.stringify([fresh]));
+      },
+    });
   };
 
-  const handleDeleteSession = (sessionId: string) => {
+  const handleDeleteSession = (targetSessionId: string) => {
     if (isTyping) return;
-    if (!window.confirm('确定删除该会话吗？')) return;
-    abortControllerRef.current?.abort();
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== sessionId);
-      if (next.length === 0) {
-        const fresh = createSession();
-        return [fresh];
-      }
-      return next;
+    const target = sessions.find((s) => s.id === targetSessionId);
+    setConfirmDialog({
+      title: '删除会话',
+      description: `确定删除「${target?.title || '新会话'}」吗？此操作不可撤销。`,
+      confirmLabel: '删除',
+      danger: true,
+      onConfirm: () => {
+        abortControllerRef.current?.abort();
+        setSessions((prev) => {
+          const next = prev.filter((s) => s.id !== targetSessionId);
+          const finalSessions = next.length === 0 ? [createSession()] : next;
+          // 立即持久化，不等待 useEffect
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(finalSessions));
+          return finalSessions;
+        });
+        // 不在此处设置 activeSessionId，由已有的 useEffect 自动修正：
+        // 当 activeSessionId 指向的 session 不存在时，自动切换到第一个 session
+      },
     });
-    if (activeSessionId === sessionId) {
-      const remaining = sessions.filter((s) => s.id !== sessionId);
-      const nextActive = remaining.length > 0 ? remaining[0].id : '';
-      setActiveSessionId(nextActive);
-    }
   };
 
   const handleCopy = (content: string) => {
@@ -538,7 +606,6 @@ export default function AITutorPage() {
             config: {
               agentIds: [UNIFIED_MENTOR_PRESET.id],
               sessionType: 'qa',
-              systemPromptAddendum: AI_TUTOR_DETAILED_SYSTEM_PROMPT,
               enabledTutorTools: selectedTools,
               tutorToolConfig: {},
               useAgenticPipeline: selectedTools.length > 0 ? useAgenticPipeline : false,
@@ -717,6 +784,25 @@ export default function AITutorPage() {
     }
   };
 
+  // 滑动删除手势处理
+  const handleSwipeTouchStart = (e: React.TouchEvent, sessionId: string) => {
+    const touch = e.touches[0];
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY, id: sessionId };
+  };
+  const handleSwipeTouchEnd = (e: React.TouchEvent, sessionId: string) => {
+    if (!swipeStartRef.current || swipeStartRef.current.id !== sessionId) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - swipeStartRef.current.x;
+    const dy = touch.clientY - swipeStartRef.current.y;
+    swipeStartRef.current = null;
+    // 水平左滑超过 60px 且垂直偏移小于 40px 时触发
+    if (dx < -60 && Math.abs(dy) < 40) {
+      setSwipedSessionId(sessionId);
+    } else if (dx > 30) {
+      setSwipedSessionId((prev) => (prev === sessionId ? null : prev));
+    }
+  };
+
   if (!hydrated || !activeSession) {
     return (
       <div className="h-mobile-app flex items-center justify-center text-gray-500 md:h-[calc(var(--app-dvh)-4rem)]">
@@ -727,7 +813,7 @@ export default function AITutorPage() {
   }
 
   return (
-    <div className="fixed inset-0 z-20 flex overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64">
+    <div className="fixed inset-0 z-20 flex flex-col overflow-hidden bg-[#faf9f7] dark:bg-[#171411] max-md:top-14 md:left-64 md:flex-row">
       {/* 会话列表侧边栏 */}
       <aside className="hidden md:flex bg-[#f5f4f2] dark:bg-[#1c1814] border-r border-gray-200/60 dark:border-gray-800/60 md:flex-col h-full overflow-hidden w-60 shrink-0">
         <div className="p-4 border-b border-gray-200/60 dark:border-gray-800/60">
@@ -773,7 +859,7 @@ export default function AITutorPage() {
                     e.stopPropagation();
                     handleDeleteSession(session.id);
                   }}
-                  className="shrink-0 p-2 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-0"
+                  className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors md:opacity-0 md:group-hover:opacity-100 disabled:opacity-0"
                   title="删除会话"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -796,85 +882,222 @@ export default function AITutorPage() {
         </div>
       </aside>
 
-      {mobileSessionsOpen && (
-        <div className="fixed inset-0 z-50 md:hidden">
-          <button
-            type="button"
-            aria-label="关闭会话列表遮罩"
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setMobileSessionsOpen(false)}
-          />
-          <aside className="absolute inset-y-0 left-0 flex w-[min(86vw,320px)] flex-col overflow-hidden border-r border-gray-200/60 bg-[#f5f4f2] pt-safe shadow-2xl dark:border-gray-800/60 dark:bg-[#1c1814]">
-            <div className="flex items-center justify-between border-b border-gray-200/60 p-4 dark:border-gray-800/60">
-              <button
-                type="button"
-                disabled={isTyping}
-                onClick={() => {
-                  setMobileSessionsOpen(false);
-                  handleNewSession();
-                }}
-                className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm transition-all hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:bg-[#201c18] dark:text-gray-200 dark:hover:bg-[#2a241f]"
-              >
-                <Plus className="h-4 w-4" />
-                <span>新对话</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setMobileSessionsOpen(false)}
-                className="ml-2 inline-flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 hover:bg-white dark:hover:bg-[#201c18]"
-                aria-label="关闭会话列表"
-              >
-                <X className="h-5 w-5" />
-              </button>
+      {/* 移动端会话抽屉 */}
+      <div
+        className={cn(
+          'fixed inset-0 z-50 md:hidden transition-opacity duration-300',
+          mobileSessionsOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+        )}
+      >
+        <button
+          type="button"
+          aria-label="关闭会话列表遮罩"
+          className={cn(
+            'absolute inset-0 bg-black/40 transition-opacity duration-300',
+            mobileSessionsOpen ? 'opacity-100' : 'opacity-0',
+          )}
+          onClick={() => setMobileSessionsOpen(false)}
+        />
+        <aside
+          className={cn(
+            'absolute inset-y-0 left-0 flex w-[min(86vw,320px)] flex-col overflow-hidden border-r border-gray-200/60 bg-[#f5f4f2] pt-safe shadow-2xl dark:border-gray-800/60 dark:bg-[#1c1814] transition-transform duration-300 ease-out',
+            mobileSessionsOpen ? 'translate-x-0' : '-translate-x-full',
+          )}
+        >
+          {/* 抽屉头部：新对话 + 关闭 */}
+          <div className="flex items-center justify-between border-b border-gray-200/60 px-4 pt-4 pb-3 dark:border-gray-800/60">
+            <button
+              type="button"
+              disabled={isTyping}
+              onClick={() => {
+                setMobileSessionsOpen(false);
+                handleNewSession();
+              }}
+              className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm transition-all hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:bg-[#201c18] dark:text-gray-200 dark:hover:bg-[#2a241f]"
+            >
+              <Plus className="h-4 w-4" />
+              <span>新对话</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileSessionsOpen(false)}
+              className="ml-2 inline-flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 hover:bg-white dark:hover:bg-[#201c18]"
+              aria-label="关闭会话列表"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* 搜索栏 */}
+          <div className="px-3 py-2 border-b border-gray-200/40 dark:border-gray-800/40">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={sessionSearch}
+                onChange={(e) => setSessionSearch(e.target.value)}
+                placeholder="搜索会话..."
+                className="w-full min-h-[40px] rounded-xl border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-300 focus:ring-1 focus:ring-gray-200 dark:border-gray-700 dark:bg-[#201c18] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:border-gray-600 dark:focus:ring-gray-700"
+              />
+              {sessionSearch && (
+                <button
+                  type="button"
+                  onClick={() => setSessionSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 scroll-touch">
-              {orderedSessions.map((session) => {
-                const active = session.id === activeSessionId;
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    disabled={isTyping}
-                    onClick={() => {
-                      setActiveSessionId(session.id);
-                      setMobileSessionsOpen(false);
-                    }}
-                    className={cn(
-                      'mb-1 flex min-h-[48px] w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-all disabled:cursor-not-allowed disabled:opacity-50',
-                      active
-                        ? 'border border-gray-200/80 bg-white text-gray-900 shadow-sm dark:border-gray-800/80 dark:bg-[#201c18] dark:text-gray-100'
-                        : 'text-gray-600 hover:bg-white/60 dark:text-gray-400 dark:hover:bg-white/5',
-                    )}
-                  >
-                    <MessageSquare className="h-4 w-4 shrink-0 text-gray-400" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{session.title}</span>
-                      <span className="mt-0.5 block text-[11px] text-gray-400 dark:text-gray-500">
-                        {formatSessionTime(session.updatedAt)}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </aside>
-        </div>
-      )}
+          </div>
+
+          {/* 会话列表 */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-1 pb-safe scroll-touch">
+            {groupedSessions.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
+                <MessageSquare className="h-8 w-8 mb-2 opacity-40" />
+                <p className="text-sm">{sessionSearch ? '未找到匹配的会话' : '暂无会话'}</p>
+              </div>
+            ) : (
+              groupedSessions.map(([groupLabel, groupSessions]) => (
+                <div key={groupLabel} className="mb-1">
+                  <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                    {groupLabel}
+                  </p>
+                  {groupSessions.map((session) => {
+                    const active = session.id === activeSessionId;
+                    const preview = getSessionPreview(session);
+                    const msgCount = session.messages.length;
+                    const isSwiped = swipedSessionId === session.id;
+                    return (
+                      <div
+                        key={session.id}
+                        className="relative mb-0.5 overflow-hidden rounded-xl"
+                        onTouchStart={(e) => handleSwipeTouchStart(e, session.id)}
+                        onTouchEnd={(e) => handleSwipeTouchEnd(e, session.id)}
+                      >
+                        {/* 滑动露出的删除按钮 */}
+                        <div
+                          className={cn(
+                            'absolute inset-y-0 right-0 flex w-20 items-center justify-center bg-red-500 text-white transition-opacity duration-200',
+                            isSwiped ? 'opacity-100' : 'opacity-0 pointer-events-none',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSwipedSessionId(null);
+                              handleDeleteSession(session.id);
+                            }}
+                            className="flex h-full w-full items-center justify-center gap-1 text-sm font-medium"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            删除
+                          </button>
+                        </div>
+
+                        {/* 会话项主体 */}
+                        <div
+                          className={cn(
+                            'relative flex min-h-[60px] w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-all duration-200',
+                            isSwiped ? '-translate-x-20' : 'translate-x-0',
+                            active
+                              ? 'bg-white text-gray-900 shadow-sm border border-gray-200/80 dark:border-gray-800/80 dark:bg-[#201c18] dark:text-gray-100'
+                              : 'text-gray-600 hover:bg-white/60 dark:text-gray-400 dark:hover:bg-white/5',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            disabled={isTyping}
+                            onClick={() => {
+                              setActiveSessionId(session.id);
+                              setMobileSessionsOpen(false);
+                              setSwipedSessionId(null);
+                            }}
+                            className="flex flex-1 items-center gap-2.5 min-w-0 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <div
+                              className={cn(
+                                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                                active
+                                  ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white'
+                                  : 'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500',
+                              )}
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </div>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <span className="block truncate font-medium">{session.title}</span>
+                                {msgCount > 0 && (
+                                  <span className="shrink-0 text-[10px] tabular-nums text-gray-400 dark:text-gray-500">
+                                    {msgCount}
+                                  </span>
+                                )}
+                              </span>
+                              {preview ? (
+                                <span className="mt-0.5 block truncate text-[12px] text-gray-400 dark:text-gray-500">
+                                  {preview}
+                                </span>
+                              ) : (
+                                <span className="mt-0.5 block text-[11px] text-gray-400 dark:text-gray-500">
+                                  {formatSessionTime(session.updatedAt)}
+                                </span>
+                              )}
+                            </span>
+                            <ChevronRight className="h-4 w-4 shrink-0 text-gray-300 dark:text-gray-600" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* 底部操作 */}
+          <div className="border-t border-gray-200/60 px-3 py-3 pb-safe dark:border-gray-800/60">
+            <button
+              type="button"
+              disabled={isTyping || sessions.length <= 1}
+              onClick={handleClearAll}
+              className="flex w-full min-h-[44px] items-center justify-center gap-2 rounded-xl text-sm text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-[#201c18] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>清空全部 ({sessions.length})</span>
+            </button>
+          </div>
+        </aside>
+      </div>
 
       {/* Main Chat Area */}
       <section className="flex-1 flex flex-col min-w-0 bg-[#faf9f7] dark:bg-[#171411] h-full overflow-hidden">
-        {/* Top header bar - Fixed height */}
+        {/* Top header bar */}
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200/60 bg-[#faf9f7] px-3 dark:border-gray-800/60 dark:bg-[#171411] md:px-6">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <button
               type="button"
               onClick={() => setMobileSessionsOpen(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm md:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm md:hidden"
               aria-label="打开会话列表"
             >
               <Menu className="h-5 w-5" />
             </button>
-            <span className="truncate text-[14px] font-semibold tracking-tight text-gray-800 dark:text-gray-100">
+            {/* 移动端显示当前会话标题，可点击切换 */}
+            <button
+              type="button"
+              onClick={() => setMobileSessionsOpen(true)}
+              className="flex min-w-0 flex-1 items-center gap-1.5 md:hidden"
+            >
+              <span className="truncate text-[14px] font-semibold tracking-tight text-gray-800 dark:text-gray-100">
+                {activeSession.title}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+            </button>
+            {/* 桌面端固定标题 */}
+            <span className="hidden md:block truncate text-[14px] font-semibold tracking-tight text-gray-800 dark:text-gray-100">
               聊天
             </span>
           </div>
@@ -887,16 +1110,17 @@ export default function AITutorPage() {
               <NotebookPen className="h-3.5 w-3.5" />
               保存到笔记本
             </button>
+            {/* 桌面端辅助按钮 */}
             <button
               disabled={isTyping}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f] transition-colors shadow-sm disabled:opacity-50"
+              className="hidden md:inline-flex items-center justify-center h-8 w-8 rounded-lg bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f] transition-colors shadow-sm disabled:opacity-50"
               title="通知"
             >
               <Bell className="h-4 w-4" />
             </button>
             <button
               disabled={isTyping}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f] transition-colors shadow-sm disabled:opacity-50"
+              className="hidden md:inline-flex items-center justify-center h-8 w-8 rounded-lg bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f] transition-colors shadow-sm disabled:opacity-50"
               title="设置"
             >
               <Settings className="h-4 w-4" />
@@ -905,7 +1129,7 @@ export default function AITutorPage() {
               onClick={() => setShowDiagnosticPanel((v) => !v)}
               disabled={isTyping}
               className={cn(
-                'inline-flex items-center justify-center h-8 w-8 rounded-lg border transition-colors shadow-sm disabled:opacity-50',
+                'hidden md:inline-flex items-center justify-center h-8 w-8 rounded-lg border transition-colors shadow-sm disabled:opacity-50',
                 showDiagnosticPanel
                   ? 'bg-primary/10 border-primary/30 text-primary'
                   : 'bg-white dark:bg-[#201c18] border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-[#2a241f]',
@@ -941,7 +1165,34 @@ export default function AITutorPage() {
                 <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-gray-100 sm:text-3xl">
                   我们先从哪里开始呢？
                 </h1>
-                <p className="text-gray-500 dark:text-gray-400">你的专属AI导师随时为你服务</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-6">你的专属AI导师随时为你服务</p>
+
+                {/* 能力滑动选择 */}
+                <div className="flex gap-2 overflow-x-auto pb-2 px-2 -mx-2 scrollbar-hide">
+                  {CAPABILITIES.filter(cap => cap.id !== '').map((cap) => {
+                    const Icon = cap.icon;
+                    const isActive = cap.id === activeCapability;
+                    return (
+                      <button
+                        key={cap.id}
+                        type="button"
+                        onClick={() => {
+                          handleCapabilitySelect(cap.id);
+                          textareaRef.current?.focus();
+                        }}
+                        className={cn(
+                          'flex items-center gap-2 px-4 py-2.5 rounded-full border whitespace-nowrap transition-all shrink-0',
+                          isActive
+                            ? 'border-orange-400 bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300'
+                            : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-600',
+                        )}
+                      >
+                        <Icon className="w-4 h-4" />
+                        <span className="text-sm font-medium">{cap.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           ) : (
@@ -1052,7 +1303,7 @@ export default function AITutorPage() {
                               return (
                                 <>
                                   <VisualPreview content={msg.content} />
-                                  <MarkdownRenderer content={msg.content} variant="prose" />
+                                  <TutorResponseRenderer content={msg.content} />
                                 </>
                               );
                             })()}
@@ -1063,8 +1314,10 @@ export default function AITutorPage() {
                       </div>
                       <div
                         className={cn(
-                          'flex gap-1 mt-2 transition-opacity duration-200 md:opacity-0 md:group-hover/message:opacity-100',
-                          tappedMessageId === msg.id ? 'opacity-100' : 'opacity-0 md:opacity-0',
+                          'flex gap-1 mt-2 transition-opacity duration-200',
+                          'md:opacity-0 md:group-hover/message:opacity-100',
+                          'max-md:opacity-60',
+                          tappedMessageId === msg.id ? '!opacity-100' : '',
                           msg.role === 'user' ? 'justify-end' : 'justify-start',
                         )}
                         onClick={(e) => e.stopPropagation()}
@@ -1075,7 +1328,7 @@ export default function AITutorPage() {
                               type="button"
                               onClick={() => handleEditMessage(msg.id, msg.content)}
                               disabled={isTyping}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 text-xs transition-colors"
                               title="编辑"
                             >
                               <Pencil className="h-3.5 w-3.5" />
@@ -1083,7 +1336,7 @@ export default function AITutorPage() {
                             <button
                               type="button"
                               onClick={() => handleCopy(msg.content)}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs transition-colors"
                               title="复制"
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1094,7 +1347,7 @@ export default function AITutorPage() {
                             <button
                               type="button"
                               onClick={() => handleCopy(msg.content)}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xs transition-colors"
                               title="复制"
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1103,7 +1356,7 @@ export default function AITutorPage() {
                               type="button"
                               onClick={() => handleRetry(msg.id)}
                               disabled={isTyping}
-                              className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 text-xs transition-colors"
                               title="重试"
                             >
                               <RefreshCw className="h-3.5 w-3.5" />
@@ -1115,7 +1368,7 @@ export default function AITutorPage() {
                               }
                               disabled={isTyping}
                               className={cn(
-                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                'min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 text-xs transition-colors',
                                 msg.feedback === 'up'
                                   ? 'text-orange-600'
                                   : 'text-gray-400 hover:text-orange-600',
@@ -1131,7 +1384,7 @@ export default function AITutorPage() {
                               }
                               disabled={isTyping}
                               className={cn(
-                                'p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1 text-xs transition-colors',
+                                'min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 text-xs transition-colors',
                                 msg.feedback === 'down'
                                   ? 'text-orange-600'
                                   : 'text-gray-400 hover:text-orange-600',
@@ -1172,7 +1425,7 @@ export default function AITutorPage() {
           {showScrollToBottom && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-4 right-6 z-10 flex items-center gap-1.5 px-3 py-2 rounded-full bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 shadow-lg text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#2a241f] hover:text-gray-900 dark:hover:text-gray-100 transition-all"
+              className="absolute bottom-4 right-6 z-10 flex min-h-[44px] items-center gap-1.5 px-3 py-2 rounded-full bg-white dark:bg-[#201c18] border border-gray-200 dark:border-gray-800 shadow-lg text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#2a241f] hover:text-gray-900 dark:hover:text-gray-100 transition-all"
             >
               <ArrowDown className="w-3.5 h-3.5" />
               回到底部
@@ -1189,7 +1442,7 @@ export default function AITutorPage() {
           <div className="mx-auto w-full px-0 sm:px-4 lg:px-10">
             <div className="relative">
               {showCapabilityMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(280px,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   {CAPABILITIES.map((cap) => {
                     const Icon = cap.icon;
                     const isActive = cap.id === activeCapability;
@@ -1226,7 +1479,7 @@ export default function AITutorPage() {
               )}
 
               {showToolsMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(240px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-[min(240px,calc(100vw-2rem))] max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-xl border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-[#201c18]">
                   <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-800">
                     <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
                       工具
@@ -1314,7 +1567,7 @@ export default function AITutorPage() {
                         title="能力模式"
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">{currentCap.label}</span>
+                        <span className="text-[11px]">{currentCap.label}</span>
                         <ChevronDown
                           className={cn(
                             'w-3 h-3 transition-transform',
@@ -1379,9 +1632,9 @@ export default function AITutorPage() {
         </div>
       </section>
 
-      {/* Right sidebar - Diagnostic Panel */}
+      {/* Right sidebar - Diagnostic Panel (desktop only) */}
       {showDiagnosticPanel && (
-        <aside className="w-80 shrink-0 border-l border-gray-200/60 dark:border-gray-800/60 bg-[#f5f4f2] dark:bg-[#1c1814] h-full overflow-y-auto p-4">
+        <aside className="hidden md:block w-80 shrink-0 border-l border-gray-200/60 dark:border-gray-800/60 bg-[#f5f4f2] dark:bg-[#1c1814] h-full overflow-y-auto p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-1.5">
               <Stethoscope className="h-4 w-4 text-primary" />
@@ -1405,6 +1658,62 @@ export default function AITutorPage() {
           />
         </aside>
       )}
+
+      {/* 移动端底部确认弹窗 */}
+      <div
+        className={cn(
+          'fixed inset-0 z-[60] flex items-end md:hidden transition-opacity duration-200',
+          confirmDialog ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+        )}
+      >
+        <button
+          type="button"
+          className="absolute inset-0 bg-black/40"
+          aria-label="关闭"
+          onClick={() => setConfirmDialog(null)}
+        />
+        <div
+          className={cn(
+            'relative w-full rounded-t-2xl bg-white dark:bg-[#1c1814] pb-safe transition-transform duration-300 ease-out',
+            confirmDialog ? 'translate-y-0' : 'translate-y-full',
+          )}
+        >
+          <div className="px-6 pt-5 pb-4">
+            {/* 拖拽指示条 */}
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-gray-300 dark:bg-gray-600" />
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+              {confirmDialog?.title}
+            </h3>
+            <p className="mt-1.5 text-sm text-gray-500 dark:text-gray-400">
+              {confirmDialog?.description}
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 min-h-[48px] rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-[#201c18] dark:text-gray-300 dark:hover:bg-[#2a241f]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmDialog?.onConfirm();
+                  setConfirmDialog(null);
+                }}
+                className={cn(
+                  'flex-1 min-h-[48px] rounded-xl text-sm font-medium text-white transition-colors',
+                  confirmDialog?.danger
+                    ? 'bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700'
+                    : 'bg-[#2d2d2d] hover:bg-black dark:bg-[#f1dfc5] dark:text-[#1a1612] dark:hover:bg-[#e8d5b8]',
+                )}
+              >
+                {confirmDialog?.confirmLabel || '确认'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

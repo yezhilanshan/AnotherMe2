@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict
@@ -24,6 +25,7 @@ class AnotherMeClient:
             self._client = httpx.Client(
                 timeout=self.timeout_seconds,
                 limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+                trust_env=False,
             )
         return self._client
 
@@ -39,39 +41,99 @@ class AnotherMeClient:
             return payload["result"]
         return payload
 
+    def _upstream_error_message(
+        self, method: str, path: str, status_code: int, text: str
+    ) -> str:
+        detail = text.strip()[:500]
+        hint = (
+            f"AnotherMe Web/Core upstream returned {status_code} for {method} {path}. "
+            f"Check ANOTHERME_BASE_URL={self.base_url!r} and make sure the Web/Core service is running and reachable."
+        )
+        return f"{hint}{f' Response: {detail}' if detail else ''}"
+
     def _post(self, path: str, json_body: Dict[str, Any]) -> Dict[str, Any]:
         client = self._get_client()
-        response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
+        try:
+            response = client.post(f"{self.base_url.rstrip('/')}{path}", json=json_body)
+        except httpx.RequestError as exc:
+            raise AnotherMeError(
+                f"Cannot reach AnotherMe Web/Core upstream at {self.base_url!r} for POST {path}: {exc}. "
+                "Start the Web/Core service or fix ANOTHERME_BASE_URL."
+            ) from exc
         if response.status_code >= 400:
-            raise AnotherMeError(f"AnotherMe POST {path} failed: {response.status_code} {response.text}")
+            raise AnotherMeError(
+                self._upstream_error_message(
+                    "POST", path, response.status_code, response.text
+                )
+            )
         return self._unwrap(response.json())
 
     def _get(self, path: str) -> Dict[str, Any]:
         client = self._get_client()
-        response = client.get(f"{self.base_url.rstrip('/')}{path}")
+        try:
+            response = client.get(f"{self.base_url.rstrip('/')}{path}")
+        except httpx.RequestError as exc:
+            raise AnotherMeError(
+                f"Cannot reach AnotherMe Web/Core upstream at {self.base_url!r} for GET {path}: {exc}. "
+                "Start the Web/Core service or fix ANOTHERME_BASE_URL."
+            ) from exc
         if response.status_code >= 400:
-            raise AnotherMeError(f"AnotherMe GET {path} failed: {response.status_code} {response.text}")
+            raise AnotherMeError(
+                self._upstream_error_message(
+                    "GET", path, response.status_code, response.text
+                )
+            )
         return self._unwrap(response.json())
 
     def submit_course_job(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         body = {
             "requirement": payload["requirement"],
             "language": payload.get("language", "zh-CN"),
-            "enableWebSearch": payload.get("options", {}).get("enable_web_search", False),
-            "enableImageGeneration": payload.get("options", {}).get("enable_image_generation", False),
-            "enableVideoGeneration": payload.get("options", {}).get("enable_video_generation", False),
+            "enableWebSearch": payload.get("options", {}).get(
+                "enable_web_search", False
+            ),
+            "enableImageGeneration": payload.get("options", {}).get(
+                "enable_image_generation", False
+            ),
+            "enableVideoGeneration": payload.get("options", {}).get(
+                "enable_video_generation", False
+            ),
             "enableTTS": payload.get("options", {}).get("enable_tts", False),
             "agentMode": payload.get("options", {}).get("agent_mode", "default"),
         }
+        # Pass model config to Next.js so it doesn't fall back to hardcoded openai.
+        # Priority: payload options > Gateway env vars.
+        model_config = payload.get("options", {}).get("model_config")
+        if model_config and isinstance(model_config, dict):
+            body["modelConfig"] = model_config
+        else:
+            env_model = os.getenv("ANOTHERME_MODEL", "")
+            env_key = os.getenv("ANOTHERME_API_KEY", "")
+            if env_model and env_key:
+                body["modelConfig"] = {
+                    "modelString": env_model,
+                    "apiKey": env_key,
+                    "baseUrl": os.getenv("ANOTHERME_API_BASE_URL") or None,
+                }
         pedagogy_profile = payload.get("pedagogy_profile")
         if isinstance(pedagogy_profile, dict) and pedagogy_profile:
             body["pedagogy_profile"] = pedagogy_profile
+        pdf_content = payload.get("pdf_content")
+        if isinstance(pdf_content, dict) and pdf_content.get("text"):
+            body["pdfContent"] = {
+                "text": str(pdf_content.get("text") or ""),
+                "images": pdf_content.get("images")
+                if isinstance(pdf_content.get("images"), list)
+                else [],
+            }
         return self._post("/api/generate-classroom", body)
 
     def poll_course_job(self, anotherme_job_id: str) -> Dict[str, Any]:
         return self._get(f"/api/generate-classroom/{anotherme_job_id}")
 
-    def wait_course_job(self, anotherme_job_id: str, poll_seconds: int, timeout_seconds: int) -> Dict[str, Any]:
+    def wait_course_job(
+        self, anotherme_job_id: str, poll_seconds: int, timeout_seconds: int
+    ) -> Dict[str, Any]:
         start = time.time()
         while True:
             data = self.poll_course_job(anotherme_job_id)

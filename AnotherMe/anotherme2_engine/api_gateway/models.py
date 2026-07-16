@@ -170,6 +170,7 @@ class Conversation(Base):
     creator_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     last_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     last_message_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JsonType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -228,7 +229,7 @@ class MessageAttachment(Base):
 class AIChatSession(Base):
     __tablename__ = "ai_chat_sessions"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default="课后答疑")
@@ -236,6 +237,9 @@ class AIChatSession(Base):
     linked_classroom_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     linked_conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     archived_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    compressed_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    summary_up_to_msg_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    preferences_json: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -249,10 +253,14 @@ class AIChatMessage(Base):
     __tablename__ = "ai_chat_messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    runtime_seq: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
+    capability: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    events_json: Mapped[list] = mapped_column(JsonType, nullable=False, default=list)
+    attachments_json: Mapped[list] = mapped_column(JsonType, nullable=False, default=list)
     model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -261,6 +269,30 @@ class AIChatMessage(Base):
     request_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     parent_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ProblemContext(Base):
+    __tablename__ = "problem_contexts"
+    __table_args__ = (UniqueConstraint("user_id", "sha256", name="uq_problem_context_user_sha256"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ocr_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    vision_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    geometry_context_json: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    problem_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
 
 
 class AIMessageFeedback(Base):
@@ -280,7 +312,7 @@ class AILearningRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    session_id: Mapped[str] = mapped_column(String(36), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
     message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("ai_chat_messages.id"), nullable=True, index=True)
     subject: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     knowledge_point: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
@@ -290,6 +322,84 @@ class AILearningRecord(Base):
     confusion_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     extract_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AIChatTurn(Base):
+    __tablename__ = "ai_chat_turns"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    capability: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running", index=True)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AIChatTurnEvent(Base):
+    __tablename__ = "ai_chat_turn_events"
+    __table_args__ = (UniqueConstraint("turn_id", "seq", name="uq_ai_chat_turn_event_seq"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    turn_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_turns.id"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    stage: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    event_metadata: Mapped[dict] = mapped_column("metadata", JsonType, nullable=False, default=dict)
+    timestamp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AIChatNotebookEntry(Base):
+    __tablename__ = "ai_chat_notebook_entries"
+    __table_args__ = (UniqueConstraint("session_id", "question_id", name="uq_ai_chat_notebook_question"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(128), ForeignKey("ai_chat_sessions.id"), nullable=False, index=True)
+    question_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    options_json: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    correct_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    difficulty: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    user_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    bookmarked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    followup_session_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
+class AIChatNotebookCategory(Base):
+    __tablename__ = "ai_chat_notebook_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class AIChatNotebookEntryCategory(Base):
+    __tablename__ = "ai_chat_notebook_entry_categories"
+    __table_args__ = (UniqueConstraint("entry_id", "category_id", name="uq_ai_chat_notebook_entry_category"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entry_id: Mapped[int] = mapped_column(Integer, ForeignKey("ai_chat_notebook_entries.id"), nullable=False, index=True)
+    category_id: Mapped[int] = mapped_column(Integer, ForeignKey("ai_chat_notebook_categories.id"), nullable=False, index=True)
 
 
 class EventLog(Base):

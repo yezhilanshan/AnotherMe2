@@ -167,6 +167,62 @@ export interface MediaGenerationExperienceRecord {
 }
 
 /**
+ * NotebookNote table - Notebook entries (migrated from localStorage)
+ */
+export interface NotebookNoteRecord {
+  id: string; // Primary key
+  notebookId: string; // FK -> notebookNotebooks.id
+  type: string; // 'manual' | 'chat' | 'solve' | 'research' | 'classroom' | 'quiz'
+  title: string;
+  content: string;
+  summary?: string;
+  userQuery?: string;
+  output?: string;
+  tags?: string[];
+  subject?: string;
+  source?: string;
+  createdAt: number;
+  updatedAt: number;
+  stageId?: string;
+  sceneId?: string;
+  isPinned?: boolean;
+  isFavorite?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * NotebookTrashRecord - Soft-deleted notes
+ */
+export interface NotebookTrashRecord extends NotebookNoteRecord {
+  deletedAt: number;
+}
+
+/**
+ * NotebookBookRecord - Notebook containers
+ */
+export interface NotebookBookRecord {
+  id: string; // Primary key
+  name: string;
+  description?: string;
+  color?: string;
+  icon?: string;
+  createdAt: number;
+  updatedAt: number;
+  recordCount: number;
+}
+
+/**
+ * NotebookSettingsRecord - User preferences for notebook UI
+ */
+export interface NotebookSettingsRecord {
+  id: string; // Always 'default'
+  sortBy: string;
+  sortOrder: string;
+  viewMode: string;
+  activeNotebookId: string | null;
+}
+
+/**
  * GeneratedAgent table - AI-generated agent profiles
  */
 export interface GeneratedAgentRecord {
@@ -207,6 +263,10 @@ class MAICDatabase extends Dexie {
   mediaFiles!: EntityTable<MediaFileRecord, 'id'>;
   mediaGenerationExperiences!: EntityTable<MediaGenerationExperienceRecord, 'id'>;
   generatedAgents!: EntityTable<GeneratedAgentRecord, 'id'>;
+  notebookNotes!: EntityTable<NotebookNoteRecord, 'id'>;
+  notebookTrash!: EntityTable<NotebookTrashRecord, 'id'>;
+  notebookBooks!: EntityTable<NotebookBookRecord, 'id'>;
+  notebookSettings!: EntityTable<NotebookSettingsRecord, 'id'>;
 
   constructor() {
     super(DATABASE_NAME);
@@ -338,6 +398,25 @@ class MAICDatabase extends Dexie {
       mediaFiles: 'id, stageId, [stageId+type]',
       generatedAgents: 'id, stageId',
       mediaGenerationExperiences: '++id, kind, providerId, success, errorCode, createdAt, [kind+providerId+success]',
+    });
+
+    // Version 10: Add notebook tables (migrated from localStorage)
+    this.version(10).stores({
+      stages: 'id, updatedAt',
+      scenes: 'id, stageId, order, [stageId+order]',
+      audioFiles: 'id, createdAt',
+      imageFiles: 'id, createdAt',
+      snapshots: '++id',
+      chatSessions: 'id, stageId, [stageId+createdAt]',
+      playbackState: 'stageId',
+      stageOutlines: 'stageId',
+      mediaFiles: 'id, stageId, [stageId+type]',
+      generatedAgents: 'id, stageId',
+      mediaGenerationExperiences: '++id, kind, providerId, success, errorCode, createdAt, [kind+providerId+success]',
+      notebookNotes: 'id, notebookId, type, updatedAt, [notebookId+updatedAt], [notebookId+isPinned]',
+      notebookTrash: 'id, deletedAt',
+      notebookBooks: 'id, updatedAt',
+      notebookSettings: 'id',
     });
   }
 }

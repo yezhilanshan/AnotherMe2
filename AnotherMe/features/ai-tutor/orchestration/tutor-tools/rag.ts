@@ -8,6 +8,7 @@
 
 import type { ToolExecutionContext, ToolExecutionResult } from './types';
 import { listClassroomBooks } from '@/lib/server/classroom-book-service';
+import { listServerNotebookRecords } from '@/lib/server/notebook-service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('RAGTool');
@@ -227,6 +228,26 @@ async function fetchClassroomBooksFromServer(userId?: string): Promise<RAGContex
   }
 }
 
+async function fetchNotebookNotesFromServer(userId?: string): Promise<RAGContext['notes']> {
+  if (!userId) return undefined;
+
+  try {
+    const notes = await listServerNotebookRecords(userId, { limit: 80 });
+    return notes.map((note) => ({
+      id: note.id,
+      title: note.title,
+      content: [note.content, note.summary, note.output].filter(Boolean).join('\n\n'),
+      tags: note.tags || [],
+      subject: note.subject || '综合',
+      source: note.source || 'notebook',
+      createdAt: note.createdAt,
+    }));
+  } catch (error) {
+    log.warn('Failed to fetch notebook notes:', error);
+    return undefined;
+  }
+}
+
 async function retrieveWithLlamaIndex(
   query: string,
   context: RAGContext,
@@ -326,6 +347,10 @@ export async function executeRAG(context: ToolExecutionContext): Promise<ToolExe
 
     if (config.userId && !ragContext.classroomBooks) {
       ragContext.classroomBooks = await fetchClassroomBooksFromServer(config.userId);
+    }
+
+    if (config.userId && !ragContext.notes) {
+      ragContext.notes = await fetchNotebookNotesFromServer(config.userId);
     }
 
     if (!ragContext.notes?.length && !ragContext.classroomBooks?.length && !ragContext.currentStage) {

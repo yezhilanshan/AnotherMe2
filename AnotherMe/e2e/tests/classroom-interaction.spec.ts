@@ -5,7 +5,10 @@ import { defaultTheme } from '../fixtures/test-data/scene-content';
 
 const TEST_STAGE_ID = 'e2e-test-stage';
 
-const SETTINGS_STORAGE = createSettingsStorage({ sidebarCollapsed: false });
+const SETTINGS_STORAGE = createSettingsStorage({
+  sidebarCollapsed: false,
+  autoPlayLecture: false,
+});
 
 /** Seed IndexedDB with stage + 3 scenes using raw IndexedDB API */
 async function seedDatabase(page: import('@playwright/test').Page) {
@@ -72,6 +75,7 @@ async function seedDatabase(page: import('@playwright/test').Page) {
               title: '基本概念',
               order: 0,
               content: makeSlideContent('基本概念', '0'),
+              actions: [{ id: 'speech-0', type: 'speech', text: '我们先了解光合作用的基本概念。' }],
               createdAt: now,
               updatedAt: now,
             },
@@ -82,6 +86,7 @@ async function seedDatabase(page: import('@playwright/test').Page) {
               title: '光反应',
               order: 1,
               content: makeSlideContent('光反应', '1'),
+              actions: [{ id: 'speech-1', type: 'speech', text: '光反应阶段会把光能转化为化学能。' }],
               createdAt: now,
               updatedAt: now,
             },
@@ -92,6 +97,7 @@ async function seedDatabase(page: import('@playwright/test').Page) {
               title: '暗反应',
               order: 2,
               content: makeSlideContent('暗反应', '2'),
+              actions: [{ id: 'speech-2', type: 'speech', text: '暗反应阶段利用前一步产生的能量固定二氧化碳。' }],
               createdAt: now,
               updatedAt: now,
             },
@@ -124,6 +130,8 @@ async function seedDatabase(page: import('@playwright/test').Page) {
 }
 
 test.describe('Classroom Interaction', () => {
+  test.describe.configure({ mode: 'serial' });
+
   test.beforeEach(async ({ page }) => {
     await seedDatabase(page);
   });
@@ -142,7 +150,37 @@ test.describe('Classroom Interaction', () => {
     // Click second scene
     await classroom.clickScene(1);
 
-    // Verify second scene is now active — heading in the top bar shows the current scene name
-    await expect(page.getByRole('heading', { name: '光反应' })).toBeVisible();
+    // Verify second scene is now active in the slide surface.
+    await expect(page.getByTestId('classroom-slide-surface').getByText('光反应')).toBeVisible();
+  });
+
+  test('mobile slide taps pause and resume playback once', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const classroom = new ClassroomPage(page);
+    await classroom.goto(TEST_STAGE_ID);
+    await classroom.waitForLoaded();
+
+    const slideSurface = page.getByTestId('classroom-slide-surface');
+    await expect(slideSurface).toBeVisible({ timeout: 10_000 });
+
+    const playButton = page.getByRole('button', { name: 'Play' }).first();
+    if (await playButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await playButton.click();
+    }
+
+    await expect(page.getByRole('button', { name: 'Pause' }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await slideSurface.click({ position: { x: 120, y: 80 } });
+    await expect(page.getByRole('button', { name: 'Play' }).first()).toBeVisible({
+      timeout: 5_000,
+    });
+
+    await slideSurface.click({ position: { x: 120, y: 80 } });
+    await expect(page.getByRole('button', { name: 'Pause' }).first()).toBeVisible({
+      timeout: 5_000,
+    });
   });
 });

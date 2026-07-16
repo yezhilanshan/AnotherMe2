@@ -186,6 +186,18 @@ export interface GatewayLearningEvent {
   created_at: string;
 }
 
+export interface GatewayLearningEventTypeSummary {
+  event_type: string;
+  count: number;
+  latest_at: string;
+}
+
+export interface GatewayLearningEventStats {
+  total_events: number;
+  by_type: GatewayLearningEventTypeSummary[];
+  knowledge_points_involved: string[];
+}
+
 export interface GatewayKnowledgePoint {
   id: string;
   subject?: string | null;
@@ -222,6 +234,8 @@ export interface GatewayQuizAnswerResult {
   posterior_mastery: number;
   attempts: number;
   correct_attempts: number;
+  weight?: number;
+  difficulty?: string | null;
 }
 
 export interface GatewayStudentKnowledgeContext {

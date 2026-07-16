@@ -842,6 +842,18 @@ export function GenerationPreviewContent() {
 
       sessionStorage.removeItem('generationSession');
       await store.saveToStorage();
+
+      // Persist to server-side storage so the classroom is accessible from other devices.
+      // Fire-and-forget — don't block navigation on this.
+      const currentState = useStageStore.getState();
+      fetch('/api/classroom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: currentState.stage, scenes: currentState.scenes }),
+      }).catch((err) => {
+        console.warn('[GenerationPreview] Failed to persist classroom to server:', err);
+      });
+
       router.push(`/classroom/${stage.id}`);
     } catch (err) {
       // AbortError is expected when navigating away — don't show as error

@@ -55,6 +55,26 @@ def test_learner_modeling_agent_applies_memory_bundle_with_parallel_subagents():
                 "derived_learning_events": [
                     {"type": "not_understood", "knowledge_points": ["勾股定理"], "weight": 1.2}
                 ],
+                "step_personalization": {
+                    "overallMode": "remedial",
+                    "standardSteps": [
+                        {
+                            "id": "step-2",
+                            "title": "建立勾股关系",
+                            "knowledgePointIds": ["勾股定理"],
+                            "abilityTags": ["建模"],
+                        }
+                    ],
+                    "stepDecisions": [
+                        {
+                            "stepId": "step-2",
+                            "mastery": 0.32,
+                            "riskLevel": "high",
+                            "expansionStrategy": "full_scaffold",
+                            "likelyStuck": True,
+                        }
+                    ],
+                },
             }
         },
     }
@@ -67,5 +87,6 @@ def test_learner_modeling_agent_applies_memory_bundle_with_parallel_subagents():
     assert profile["learner_id"] == "stu-123"
     assert "勾股定理" in metadata["required_knowledge"]
     assert len(metadata.get("learning_events") or []) >= 1
+    assert metadata["adaptive_plan"]["step_personalization"]["overallMode"] == "remedial"
     assert report["used_parallel"] is True
     assert set(report["tasks"]) >= {"learning_events", "profile_hints", "required_knowledge_hints"}

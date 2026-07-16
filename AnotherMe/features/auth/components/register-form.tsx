@@ -43,7 +43,6 @@ export function RegisterForm() {
 
       await refresh();
       router.replace('/');
-      router.refresh();
     } catch (error) {
       setErrorText(error instanceof Error ? error.message : '注册失败');
     } finally {
@@ -52,7 +51,10 @@ export function RegisterForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-5">
+    <form
+      onSubmit={handleSubmit}
+      className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 space-y-5"
+    >
       <div>
         <h1 className="text-2xl font-semibold text-gray-900">创建账号</h1>
         <p className="text-sm text-gray-500 mt-2">注册后即可使用完整课程工作区。</p>

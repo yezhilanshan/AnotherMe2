@@ -46,6 +46,31 @@ class RedisQueueClient:
     def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None:
         self.client.lpush(dlq_name, message.to_json())
 
+    def dlq_length(self, dlq_name: str) -> int:
+        """Return the number of messages in a DLQ."""
+        return int(self.client.llen(dlq_name) or 0)
+
+    def peek_dead_letters(self, dlq_name: str, offset: int = 0, limit: int = 50) -> list[QueueMessage]:
+        """Read DLQ messages without removing them (non-destructive)."""
+        raw_list = self.client.lrange(dlq_name, offset, offset + limit - 1)
+        messages = []
+        for raw in raw_list:
+            try:
+                messages.append(QueueMessage.from_json(raw))
+            except Exception:
+                continue
+        return messages
+
+    def requeue_dead_letter(self, dlq_name: str, target_queue: str, count: int = 1) -> int:
+        """Move messages from DLQ back to the target queue. Returns number moved."""
+        moved = 0
+        for _ in range(count):
+            raw = self.client.rpoplpush(dlq_name, target_queue)
+            if raw is None:
+                break
+            moved += 1
+        return moved
+
     def ping(self) -> bool:
         return bool(self.client.ping())
 
@@ -69,6 +94,15 @@ class PollingQueueClient:
 
     def push_dead_letter(self, dlq_name: str, message: QueueMessage) -> None:
         return None
+
+    def dlq_length(self, dlq_name: str) -> int:
+        return 0
+
+    def peek_dead_letters(self, dlq_name: str, offset: int = 0, limit: int = 50) -> list[QueueMessage]:
+        return []
+
+    def requeue_dead_letter(self, dlq_name: str, target_queue: str, count: int = 1) -> int:
+        return 0
 
     def ping(self) -> bool:
         return False

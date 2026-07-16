@@ -7,6 +7,7 @@ import asyncio
 import subprocess
 import wave
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -104,6 +105,7 @@ class VoiceAgent(BaseAgent):
             print(f"[VoiceAgent] 警告: edge_tts 未安装，TTS 将不可用")
         
         self.optimize_narration_with_llm = bool(config.get("optimize_narration_with_llm", True))
+        self.max_narration_chars_per_step = int(config.get("max_narration_chars_per_step", 110))
         raw_tts_concurrency = config.get("tts_concurrency", 3)
         try:
             parsed_tts_concurrency = int(raw_tts_concurrency)
@@ -148,6 +150,13 @@ class VoiceAgent(BaseAgent):
             optimized_narrations = asyncio.run(self._optimize_narrations_async(script_steps, voice_style=voice_style))
         else:
             optimized_narrations = [str(getattr(step, "narration", "") or "").strip() for step in script_steps]
+        optimized_narrations = [
+            self._compact_narration_for_tts(text, max_chars=self._resolve_max_narration_chars(voice_style))
+            for text in optimized_narrations
+        ]
+        for index, narration in enumerate(optimized_narrations):
+            if index < len(script_steps):
+                script_steps[index].narration = narration
 
         output_dir = Path(self.config.get("output_dir", str(DEFAULT_OUTPUT_DIR))) / "audio"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -737,13 +746,54 @@ class VoiceAgent(BaseAgent):
 
         raw_tts_profile = adaptive_plan.get("tts_profile")
         tts_profile: Dict[str, Any] = raw_tts_profile if isinstance(raw_tts_profile, dict) else {}
+        duration_policy = metadata.get("video_duration_policy")
+        max_narration_chars = self.max_narration_chars_per_step
+        if isinstance(duration_policy, dict):
+            try:
+                max_narration_chars = int(duration_policy.get("max_narration_chars", max_narration_chars))
+            except (TypeError, ValueError):
+                max_narration_chars = self.max_narration_chars_per_step
 
         return {
             "rate": str(tts_profile.get("rate", self.rate) or self.rate),
             "volume": str(tts_profile.get("volume", self.volume) or self.volume),
             "pause_style": str(tts_profile.get("pause_style", "normal") or "normal"),
             "mode": str(adaptive_plan.get("mode", "standard") or "standard"),
+            "max_narration_chars": max(30, max_narration_chars),
         }
+
+    def _resolve_max_narration_chars(self, voice_style: Dict[str, Any]) -> int:
+        try:
+            return max(30, int(voice_style.get("max_narration_chars", self.max_narration_chars_per_step)))
+        except (TypeError, ValueError):
+            return self.max_narration_chars_per_step
+
+    def _compact_narration_for_tts(self, narration: str, *, max_chars: int) -> str:
+        text = re.sub(r"\s+", "", str(narration or "").strip())
+        if not text:
+            return text
+        for pattern in (
+            r"同学们?，?",
+            r"接下来(我们)?",
+            r"下面(我们)?",
+            r"首先(我们)?来?",
+            r"先来复习[^。！？]*[。！？]?",
+            r"你(可能|还)?没掌握[^。！？]*[。！？]?",
+            r"学情分析[^。！？]*[。！？]?",
+        ):
+            text = re.sub(pattern, "", text)
+        if len(text) <= max_chars:
+            return text
+
+        sentences = [item for item in re.split(r"(?<=[。！？；])", text) if item]
+        compact = ""
+        for sentence in sentences:
+            if len(compact) + len(sentence) > max_chars:
+                break
+            compact += sentence
+        if compact:
+            return compact.rstrip("，,；;") + ("。" if not compact.endswith(("。", "！", "？")) else "")
+        return text[:max_chars].rstrip("，,；;") + "。"
 
     def _build_narration_prompt(
         self,
@@ -754,6 +804,7 @@ class VoiceAgent(BaseAgent):
         style = voice_style or {}
         mode = str(style.get("mode", "standard") or "standard")
         pause_style = str(style.get("pause_style", "normal") or "normal")
+        max_chars = self._resolve_max_narration_chars(style)
         step_context = step_context or {}
 
         # 如果使用 narration skills，构建增强 prompt
@@ -777,6 +828,7 @@ class VoiceAgent(BaseAgent):
         return (
             "请把下面这段几何讲解润色成适合中文 TTS 播放的旁白。\n"
             "要求：自然、清晰、不要改变数学含义、不要输出解释。\n"
+            f"长度要求：不超过 {max_chars} 个中文字符；直接讲题，不要寒暄，不要独立讲学情分析。\n"
             f"当前语音风格：mode={mode}, pause_style={pause_style}。\n"
             f"{extra_rules}\n\n"
             f"{narration}"
@@ -793,6 +845,7 @@ class VoiceAgent(BaseAgent):
         """
         style = voice_style or {}
         step_context = step_context or {}
+        max_chars = self._resolve_max_narration_chars(style)
 
         # 构建 narration context
         context = NarrationContext(
@@ -815,6 +868,7 @@ class VoiceAgent(BaseAgent):
 
 === 任务 ===
 请根据以上术语规范和讲解结构，将原始讲解内容润色成高质量的教学讲解。
+长度不超过 {max_chars} 个中文字符。直接讲题，不要寒暄，不要单独讲学情分析或前置复习。
 要求输出纯文本，不要添加标记或解释。
 """
 

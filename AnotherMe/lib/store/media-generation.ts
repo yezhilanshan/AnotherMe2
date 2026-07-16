@@ -15,13 +15,14 @@ const log = createLogger('MediaGenerationStore');
 
 // ==================== Types ====================
 
-export type MediaTaskStatus = 'pending' | 'generating' | 'done' | 'failed';
+export type MediaTaskStatus = 'pending' | 'generating' | 'done' | 'failed' | 'needs_confirmation';
 
 export interface MediaTask {
   elementId: string;
   type: 'image' | 'video';
   status: MediaTaskStatus;
   prompt: string;
+  softenedPrompt?: string; // Suggested safe prompt when CONTENT_SENSITIVE
   params: {
     aspectRatio?: string;
     style?: string;
@@ -46,6 +47,11 @@ interface MediaGenerationState {
   markGenerating: (elementId: string) => void;
   markDone: (elementId: string, objectUrl: string, poster?: string) => void;
   markFailed: (elementId: string, error: string, errorCode?: string) => void;
+
+  // Content sensitive confirmation
+  markNeedsConfirmation: (elementId: string, softenedPrompt: string) => void;
+  confirmSoftening: (elementId: string) => void;
+  rejectSoftening: (elementId: string) => void;
 
   // Retry support
   markPendingForRetry: (elementId: string) => void;
@@ -149,6 +155,59 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
         tasks: {
           ...s.tasks,
           [elementId]: { ...task, status: 'failed', error, errorCode },
+        },
+      };
+    }),
+
+  markNeedsConfirmation: (elementId, softenedPrompt) =>
+    set((s) => {
+      const task = s.tasks[elementId];
+      if (!task) return s;
+      return {
+        tasks: {
+          ...s.tasks,
+          [elementId]: {
+            ...task,
+            status: 'needs_confirmation',
+            softenedPrompt,
+            error: undefined,
+            errorCode: undefined,
+          },
+        },
+      };
+    }),
+
+  confirmSoftening: (elementId) =>
+    set((s) => {
+      const task = s.tasks[elementId];
+      if (!task || task.status !== 'needs_confirmation') return s;
+      return {
+        tasks: {
+          ...s.tasks,
+          [elementId]: {
+            ...task,
+            status: 'pending',
+            prompt: task.softenedPrompt || task.prompt,
+            softenedPrompt: undefined,
+          },
+        },
+      };
+    }),
+
+  rejectSoftening: (elementId) =>
+    set((s) => {
+      const task = s.tasks[elementId];
+      if (!task || task.status !== 'needs_confirmation') return s;
+      return {
+        tasks: {
+          ...s.tasks,
+          [elementId]: {
+            ...task,
+            status: 'failed',
+            error: '用户取消了内容柔化',
+            errorCode: 'USER_CANCELLED',
+            softenedPrompt: undefined,
+          },
         },
       };
     }),

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import multiprocessing as mp
 import os
 import shutil
 import subprocess
 import tempfile
-import base64
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from .storage import ObjectStorage
+
 try:
     from output_paths import GATEWAY_OUTPUTS_ROOT
 except ModuleNotFoundError:
@@ -33,6 +35,8 @@ class MissingInputObjectError(FileNotFoundError):
 
 
 _VIDEO_FILE_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
+_IMAGE_FILE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+_HTML_FILE_SUFFIXES = {".html", ".htm"}
 
 
 def _strip_provider_prefix(model: str | None) -> str | None:
@@ -55,22 +59,97 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     vision_role = roles.get("vision") if isinstance(roles.get("vision"), dict) else {}
     ocr_role = roles.get("ocr") if isinstance(roles.get("ocr"), dict) else {}
 
-    api_key = str(text_role.get("api_key") or text_role.get("apiKey") or raw.get("api_key") or raw.get("apiKey") or "").strip()
-    base_url = str(text_role.get("base_url") or text_role.get("baseUrl") or raw.get("base_url") or raw.get("baseUrl") or "").strip()
-    vision_api_key = str(vision_role.get("api_key") or vision_role.get("apiKey") or raw.get("vision_api_key") or raw.get("visionApiKey") or "").strip()
-    vision_base_url = str(vision_role.get("base_url") or vision_role.get("baseUrl") or raw.get("vision_base_url") or raw.get("visionBaseUrl") or "").strip()
-    ocr_api_key = str(ocr_role.get("api_key") or ocr_role.get("apiKey") or raw.get("ocr_api_key") or raw.get("ocrApiKey") or "").strip()
-    ocr_base_url = str(ocr_role.get("base_url") or ocr_role.get("baseUrl") or raw.get("ocr_base_url") or raw.get("ocrBaseUrl") or "").strip()
-    ocr_engine = str(raw.get("ocr_engine") or raw.get("ocrEngine") or "").strip().lower()
-    model = _strip_provider_prefix(str(text_role.get("model") or raw.get("model") or raw.get("model_name") or raw.get("modelName") or ""))
-    vision_model = _strip_provider_prefix(str(vision_role.get("model") or raw.get("vision_model") or raw.get("visionModel") or ""))
-    ocr_model = _strip_provider_prefix(str(ocr_role.get("model") or raw.get("ocr_model") or raw.get("ocrModel") or ""))
+    api_key = str(
+        text_role.get("api_key")
+        or text_role.get("apiKey")
+        or raw.get("api_key")
+        or raw.get("apiKey")
+        or ""
+    ).strip()
+    base_url = str(
+        text_role.get("base_url")
+        or text_role.get("baseUrl")
+        or raw.get("base_url")
+        or raw.get("baseUrl")
+        or ""
+    ).strip()
+    vision_api_key = str(
+        vision_role.get("api_key")
+        or vision_role.get("apiKey")
+        or raw.get("vision_api_key")
+        or raw.get("visionApiKey")
+        or ""
+    ).strip()
+    vision_base_url = str(
+        vision_role.get("base_url")
+        or vision_role.get("baseUrl")
+        or raw.get("vision_base_url")
+        or raw.get("visionBaseUrl")
+        or ""
+    ).strip()
+    ocr_api_key = str(
+        ocr_role.get("api_key")
+        or ocr_role.get("apiKey")
+        or raw.get("ocr_api_key")
+        or raw.get("ocrApiKey")
+        or ""
+    ).strip()
+    ocr_base_url = str(
+        ocr_role.get("base_url")
+        or ocr_role.get("baseUrl")
+        or raw.get("ocr_base_url")
+        or raw.get("ocrBaseUrl")
+        or ""
+    ).strip()
+    ocr_engine = (
+        str(raw.get("ocr_engine") or raw.get("ocrEngine") or "").strip().lower()
+    )
+    model = _strip_provider_prefix(
+        str(
+            text_role.get("model")
+            or raw.get("model")
+            or raw.get("model_name")
+            or raw.get("modelName")
+            or ""
+        )
+    )
+    vision_model = _strip_provider_prefix(
+        str(
+            vision_role.get("model")
+            or raw.get("vision_model")
+            or raw.get("visionModel")
+            or ""
+        )
+    )
+    ocr_model = _strip_provider_prefix(
+        str(ocr_role.get("model") or raw.get("ocr_model") or raw.get("ocrModel") or "")
+    )
     result: Dict[str, Any] = {}
     if text_role:
         result["__text_explicit"] = True
-    if vision_role or any(raw.get(key) for key in ("vision_api_key", "visionApiKey", "vision_base_url", "visionBaseUrl", "vision_model", "visionModel")):
+    if vision_role or any(
+        raw.get(key)
+        for key in (
+            "vision_api_key",
+            "visionApiKey",
+            "vision_base_url",
+            "visionBaseUrl",
+            "vision_model",
+            "visionModel",
+        )
+    ):
         result["__vision_explicit"] = True
-    if ocr_role or any(raw.get(key) for key in ("ocr_api_key", "ocrApiKey", "ocr_base_url", "ocrBaseUrl", "ocr_model", "ocrModel")):
+    if ocr_role or any(
+        raw.get(key)
+        for key in (
+            "ocr_api_key",
+            "ocrApiKey",
+            "ocr_base_url",
+            "ocrBaseUrl",
+            "ocr_model",
+            "ocrModel",
+        )
+    ):
         result["__ocr_explicit"] = True
     if api_key:
         result["api_key"] = api_key
@@ -93,7 +172,6 @@ def _clean_llm_config(raw: Dict[str, Any] | None) -> Dict[str, Any]:
     if ocr_model:
         result["ocr_model"] = ocr_model
     return result
-
 
 
 def _merge_runtime_configs(
@@ -169,7 +247,41 @@ def _merge_runtime_configs(
 
 def _is_video_artifact(path: str) -> bool:
     target = Path(path)
-    return target.suffix.lower() in _VIDEO_FILE_SUFFIXES and target.exists() and target.stat().st_size > 0
+    return (
+        target.suffix.lower() in _VIDEO_FILE_SUFFIXES
+        and target.exists()
+        and target.stat().st_size > 0
+    )
+
+
+def _is_image_artifact(path: str) -> bool:
+    target = Path(path)
+    return (
+        target.suffix.lower() in _IMAGE_FILE_SUFFIXES
+        and target.exists()
+        and target.stat().st_size > 0
+    )
+
+
+def _is_html_artifact(path: str) -> bool:
+    target = Path(path)
+    return (
+        target.suffix.lower() in _HTML_FILE_SUFFIXES
+        and target.exists()
+        and target.stat().st_size > 0
+    )
+
+
+def _count_interactive_steps(output_dir: Path) -> int:
+    package_path = output_dir / "interactive" / "scene_package.json"
+    if not package_path.exists():
+        return 0
+    try:
+        payload = json.loads(package_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    steps = payload.get("steps")
+    return len(steps) if isinstance(steps, list) else 0
 
 
 def _generation_subprocess_entry(
@@ -181,14 +293,19 @@ def _generation_subprocess_entry(
     llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     result_queue: "mp.queues.Queue",
+    render_mode: str = "video",
 ) -> None:
     try:
+        import sys as _sys
+
         from agents.foundation.config import (
             build_default_llm_config,
             build_ocr_model_config,
             build_vision_model_config,
         )
         from main import MathVideoGenerator
+
+        print(f"[executor] render_mode={render_mode}", file=_sys.stderr, flush=True)
 
         cleaned_config = _clean_llm_config(llm_config_override)
 
@@ -199,28 +316,23 @@ def _generation_subprocess_entry(
             return key[:4] + "..." + key[-4:]
 
         print(f"[executor] cleaned_config keys: {list(cleaned_config.keys())}")
-        print(f"[executor] api_key={_mask_key(cleaned_config.get('api_key', ''))}, "
-              f"base_url={cleaned_config.get('base_url', '')}")
-        print(f"[executor] vision_api_key={_mask_key(cleaned_config.get('vision_api_key', ''))}, "
-              f"vision_base_url={cleaned_config.get('vision_base_url', '')}")
-        print(f"[executor] ocr_api_key={_mask_key(cleaned_config.get('ocr_api_key', ''))}, "
-              f"ocr_base_url={cleaned_config.get('ocr_base_url', '')}")
-        print(f"[executor] model={cleaned_config.get('model', '')}, "
-              f"vision_model={cleaned_config.get('vision_model', '')}, "
-              f"ocr_model={cleaned_config.get('ocr_model', '')}")
-
-        # Require both api_key and base_url from the frontend.
-        # No env auto-detection — the frontend is the single source of truth.
-        if not cleaned_config.get("api_key") or not cleaned_config.get("base_url"):
-            missing = []
-            if not cleaned_config.get("api_key"):
-                missing.append("api_key")
-            if not cleaned_config.get("base_url"):
-                missing.append("base_url")
-            raise RuntimeError(
-                f"前端未提供完整的模型配置（缺少: {', '.join(missing)}）。"
-                f"请在设置页面配置 API Key 和 Base URL。"
-            )
+        print(
+            f"[executor] api_key={_mask_key(cleaned_config.get('api_key', ''))}, "
+            f"base_url={cleaned_config.get('base_url', '')}"
+        )
+        print(
+            f"[executor] vision_api_key={_mask_key(cleaned_config.get('vision_api_key', ''))}, "
+            f"vision_base_url={cleaned_config.get('vision_base_url', '')}"
+        )
+        print(
+            f"[executor] ocr_api_key={_mask_key(cleaned_config.get('ocr_api_key', ''))}, "
+            f"ocr_base_url={cleaned_config.get('ocr_base_url', '')}"
+        )
+        print(
+            f"[executor] model={cleaned_config.get('model', '')}, "
+            f"vision_model={cleaned_config.get('vision_model', '')}, "
+            f"ocr_model={cleaned_config.get('ocr_model', '')}"
+        )
 
         llm_config, vision_config, ocr_config = _merge_runtime_configs(
             base_llm_config=build_default_llm_config(),
@@ -230,10 +342,16 @@ def _generation_subprocess_entry(
         )
 
         # Log final resolved configs for debugging
-        for role, cfg in [("llm", llm_config), ("vision", vision_config), ("ocr", ocr_config)]:
-            print(f"[executor] final {role}: model={cfg.get('model', '')}, "
-                  f"api_key={_mask_key(cfg.get('api_key', ''))}, "
-                  f"base_url={cfg.get('base_url', '')}")
+        for role, cfg in [
+            ("llm", llm_config),
+            ("vision", vision_config),
+            ("ocr", ocr_config),
+        ]:
+            print(
+                f"[executor] final {role}: model={cfg.get('model', '')}, "
+                f"api_key={_mask_key(cfg.get('api_key', ''))}, "
+                f"base_url={cfg.get('base_url', '')}"
+            )
 
         # Validate that we have both api_key and base_url before attempting generation
         for role, cfg in [
@@ -252,7 +370,7 @@ def _generation_subprocess_entry(
                     missing.append("Base URL")
                 raise RuntimeError(
                     f"{role}配置不完整（缺少: {', '.join(missing)}，model={model}）。"
-                    f"请在设置页面同时配置 API Key 和 Base URL。"
+                    "请在 AnotherMe/.env.local 或服务端环境变量中配置对应 provider 的 API Key 和 Base URL。"
                 )
 
         generator = MathVideoGenerator(
@@ -267,6 +385,7 @@ def _generation_subprocess_entry(
             geometry_file=geometry_file,
             export_ggb=export_ggb,
             learner_memory=learner_memory if isinstance(learner_memory, dict) else None,
+            render_mode=render_mode,
         )
         if not str(final_video_path or "").strip():
             raise RuntimeError("AnotherMe2 generator returned empty output path")
@@ -295,6 +414,7 @@ def _run_generation_with_timeout(
     llm_config_override: Dict[str, Any] | None,
     export_ggb: bool,
     timeout_seconds: int,
+    render_mode: str = "video",
 ) -> str:
     timeout_seconds = max(60, int(timeout_seconds))
     ctx = mp.get_context("spawn")
@@ -310,6 +430,7 @@ def _run_generation_with_timeout(
             llm_config_override,
             export_ggb,
             result_queue,
+            render_mode,
         ),
     )
     process.start()
@@ -337,8 +458,12 @@ def _run_generation_with_timeout(
 
     if not payload:
         if process.exitcode == 0:
-            raise RuntimeError("AnotherMe2 generation subprocess exited without result payload")
-        raise RuntimeError(f"AnotherMe2 generation subprocess exited with code {process.exitcode}")
+            raise RuntimeError(
+                "AnotherMe2 generation subprocess exited without result payload"
+            )
+        raise RuntimeError(
+            f"AnotherMe2 generation subprocess exited with code {process.exitcode}"
+        )
 
     if not payload.get("ok"):
         raise RuntimeError(str(payload.get("error") or "AnotherMe2 generation failed"))
@@ -407,14 +532,15 @@ def _render_text_image(text: str, path: Path) -> None:
         image.save(path, format="PNG")
     except Exception:
         # Fallback to a valid 1x1 PNG to keep downstream vision flow operational.
-        png_1x1 = (
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8N7x8AAAAASUVORK5CYII="
-        )
+        png_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO8N7x8AAAAASUVORK5CYII="
         path.write_bytes(base64.b64decode(png_1x1))
 
 
 def build_requirement_from_photo(image_path: str) -> str:
-    from agents.foundation.config import build_ocr_model_config, build_vision_model_config
+    from agents.foundation.config import (
+        build_ocr_model_config,
+        build_vision_model_config,
+    )
     from agents.perception.vision_tool import VisionTool
 
     vision = VisionTool(
@@ -437,33 +563,52 @@ def run_problem_video_job(
     temp_root: str,
     output_root: str | None = None,
     keep_run_output: bool = False,
+    on_output_dir_ready: "Callable[[str], None] | None" = None,
+    render_mode: str = "video",
 ) -> ProblemVideoExecutionResult:
     workdir = Path(tempfile.mkdtemp(prefix="problem-video-", dir=temp_root))
     input_image_path = workdir / "problem_input.png"
 
     image_object_key = str(payload["image_object_key"])
     if not storage.exists(image_object_key):
-        raise MissingInputObjectError(f"required input object missing: {image_object_key}")
+        raise MissingInputObjectError(
+            f"required input object missing: {image_object_key}"
+        )
     try:
         storage.download_file(image_object_key, str(input_image_path))
     except FileNotFoundError as exc:
-        raise MissingInputObjectError(f"required input object missing: {image_object_key}") from exc
+        raise MissingInputObjectError(
+            f"required input object missing: {image_object_key}"
+        ) from exc
 
     geometry_file = payload.get("geometry_file")
     geometry_local = None
     if geometry_file:
         geometry_object_key = str(geometry_file)
         if not storage.exists(geometry_object_key):
-            raise MissingInputObjectError(f"required geometry object missing: {geometry_object_key}")
+            raise MissingInputObjectError(
+                f"required geometry object missing: {geometry_object_key}"
+            )
         geometry_local = workdir / "geometry_input.json"
         try:
             storage.download_file(geometry_object_key, str(geometry_local))
         except FileNotFoundError as exc:
-            raise MissingInputObjectError(f"required geometry object missing: {geometry_object_key}") from exc
+            raise MissingInputObjectError(
+                f"required geometry object missing: {geometry_object_key}"
+            ) from exc
 
-    run_outputs_root = Path(output_root).expanduser().resolve() if output_root else GATEWAY_OUTPUTS_ROOT
+    run_outputs_root = (
+        Path(output_root).expanduser().resolve()
+        if output_root
+        else GATEWAY_OUTPUTS_ROOT
+    )
     output_dir = run_outputs_root / workdir.name / "run_output"
     output_dir.mkdir(parents=True, exist_ok=True)
+    if on_output_dir_ready:
+        try:
+            on_output_dir_ready(str(output_dir))
+        except Exception:
+            pass
     try:
         timeout_seconds = int(os.getenv("ANOTHERME2_GENERATION_TIMEOUT_SEC", "1800"))
         final_video_path = _run_generation_with_timeout(
@@ -471,22 +616,49 @@ def run_problem_video_job(
             problem_text=payload.get("problem_text"),
             output_dir=str(output_dir),
             geometry_file=str(geometry_local) if geometry_local else None,
-            learner_memory=payload.get("learner_memory") if isinstance(payload.get("learner_memory"), dict) else None,
-            llm_config_override=payload.get("llm_config") if isinstance(payload.get("llm_config"), dict) else None,
+            learner_memory=payload.get("learner_memory")
+            if isinstance(payload.get("learner_memory"), dict)
+            else None,
+            llm_config_override=payload.get("llm_config")
+            if isinstance(payload.get("llm_config"), dict)
+            else None,
             export_ggb=True,
             timeout_seconds=timeout_seconds,
+            render_mode=render_mode,
         )
 
         if not final_video_path or not Path(final_video_path).exists():
-            raise RuntimeError("AnotherMe2 did not produce a final video/audio artifact")
-        if not _is_video_artifact(final_video_path):
             raise RuntimeError(
-                "AnotherMe2 did not produce a valid final video artifact; "
-                f"got '{final_video_path}'."
+                "AnotherMe2 did not produce a final video/audio/image/html artifact"
             )
 
-        script_steps_count = len(list((output_dir / "audio").glob("narration_*.mp3")))
-        duration = _probe_duration(final_video_path)
+        if render_mode == "matplotlib":
+            if not _is_image_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid image artifact; "
+                    f"got '{final_video_path}'."
+                )
+        elif render_mode == "interactive":
+            if not _is_html_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid interactive HTML artifact; "
+                    f"got '{final_video_path}'."
+                )
+        else:
+            if not _is_video_artifact(final_video_path):
+                raise RuntimeError(
+                    "AnotherMe2 did not produce a valid final video artifact; "
+                    f"got '{final_video_path}'."
+                )
+
+        if render_mode == "interactive":
+            script_steps_count = _count_interactive_steps(output_dir)
+            duration = 0.0
+        else:
+            script_steps_count = len(
+                list((output_dir / "audio").glob("narration_*.mp3"))
+            )
+            duration = _probe_duration(final_video_path)
         debug_bundle = _zip_debug_bundle(output_dir)
 
         requirement_hint = None
@@ -504,6 +676,137 @@ def run_problem_video_job(
         )
     except Exception:
         # Keep failed run outputs when debugging is enabled.
+        if not keep_run_output:
+            run_root = output_dir.parent
+            shutil.rmtree(output_dir, ignore_errors=True)
+            try:
+                if run_root.exists() and not any(run_root.iterdir()):
+                    run_root.rmdir()
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_photo_manim_direct_job(
+    payload: Dict[str, Any],
+    storage: ObjectStorage,
+    temp_root: str,
+    output_root: str | None = None,
+    keep_run_output: bool = False,
+    on_output_dir_ready: "Callable[[str], None] | None" = None,
+) -> ProblemVideoExecutionResult:
+    """
+    Run the photo-manim-direct pipeline.
+
+    Simplified flow: download image → call vision LLM → render Manim → return video.
+    Bypasses the full AnotherMe2 multi-agent workflow.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="photo-manim-", dir=temp_root))
+    input_image_path = workdir / "problem_input.png"
+
+    image_object_key = str(payload["image_object_key"])
+    if not storage.exists(image_object_key):
+        raise MissingInputObjectError(
+            f"required input object missing: {image_object_key}"
+        )
+    try:
+        storage.download_file(image_object_key, str(input_image_path))
+    except FileNotFoundError as exc:
+        raise MissingInputObjectError(
+            f"required input object missing: {image_object_key}"
+        ) from exc
+
+    run_outputs_root = (
+        Path(output_root).expanduser().resolve()
+        if output_root
+        else GATEWAY_OUTPUTS_ROOT
+    )
+    output_dir = run_outputs_root / workdir.name / "run_output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if on_output_dir_ready:
+        try:
+            on_output_dir_ready(str(output_dir))
+        except Exception:
+            pass
+
+    try:
+        # Resolve vision LLM config
+        llm_config = (
+            payload.get("llm_config")
+            if isinstance(payload.get("llm_config"), dict)
+            else {}
+        )
+        cleaned = _clean_llm_config(llm_config)
+
+        # Default to qwen3.7-plus via Bailian/DashScope
+        model = str(
+            payload.get("model_name") or cleaned.get("model") or "qwen3.7-plus"
+        ).strip()
+        api_key = str(
+            cleaned.get("api_key")
+            or os.getenv("DASHSCOPE_API_KEY")
+            or os.getenv("BAILIAN_API_KEY")
+            or os.getenv("QWEN_API_KEY")
+            or os.getenv("ARK_API_KEY")
+            or ""
+        ).strip()
+        base_url = str(
+            cleaned.get("base_url")
+            or os.getenv("DASHSCOPE_BASE_URL")
+            or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ).strip()
+
+        if not api_key:
+            raise RuntimeError(
+                "缺少 Vision LLM API Key。请设置 DASHSCOPE_API_KEY / BAILIAN_API_KEY 环境变量，"
+                "或在请求中提供 llm_config.api_key。"
+            )
+
+        timeout_seconds = int(os.getenv("ANOTHERME2_GENERATION_TIMEOUT_SEC", "1200"))
+
+        from tutor_engine.agents.vision_solver.photo_manim_agent import (
+            run_photo_manim_sync,
+        )
+
+        final_video_path = run_photo_manim_sync(
+            image_path=str(input_image_path),
+            output_dir=str(output_dir),
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        )
+
+        if not final_video_path or not Path(final_video_path).exists():
+            raise RuntimeError("Photo-manim-direct 未生成视频产物")
+
+        if not _is_video_artifact(final_video_path):
+            raise RuntimeError(
+                f"Photo-manim-direct 生成的产物不是有效视频: {final_video_path}"
+            )
+
+        script_steps_count = 0
+        steps_file = output_dir / "intermediate" / "script_steps.json"
+        if steps_file.exists():
+            try:
+                data = json.loads(steps_file.read_text(encoding="utf-8"))
+                script_steps_count = len(data.get("steps", []))
+            except Exception:
+                pass
+
+        duration = _probe_duration(final_video_path)
+        debug_bundle = _zip_debug_bundle(output_dir)
+
+        return ProblemVideoExecutionResult(
+            video_path=final_video_path,
+            duration_sec=duration,
+            script_steps_count=script_steps_count,
+            debug_bundle_path=debug_bundle,
+            requirement_hint=None,
+        )
+    except Exception:
         if not keep_run_output:
             run_root = output_dir.parent
             shutil.rmtree(output_dir, ignore_errors=True)
@@ -549,7 +852,11 @@ def extract_core_example_text(classroom_payload: Dict[str, Any]) -> str:
     for scene in scenes:
         actions = scene.get("actions") if isinstance(scene, dict) else []
         for action in actions or []:
-            if isinstance(action, dict) and action.get("type") == "speech" and action.get("text"):
+            if (
+                isinstance(action, dict)
+                and action.get("type") == "speech"
+                and action.get("text")
+            ):
                 return str(action["text"])
 
     first = scenes[0]

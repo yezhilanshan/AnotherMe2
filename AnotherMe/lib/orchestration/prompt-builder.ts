@@ -300,7 +300,7 @@ IMPORTANT: As you are starting this discussion, begin by introducing the topic n
   return promptText;
 }
 
-function buildLearningContextSection(context?: LearningContext | null): string {
+export function buildLearningContextSection(context?: LearningContext | null): string {
   if (!context) return '';
 
   const profile = context.studentProfile;
@@ -362,6 +362,15 @@ function buildLearningContextSection(context?: LearningContext | null): string {
     lines.push(`Enabled learning tools: ${enabledTools.join(', ')}`);
   }
 
+  if (context.memoryContext?.trim()) {
+    ktLines.push('');
+    ktLines.push('# Background Memory');
+    ktLines.push(context.memoryContext.trim());
+    ktLines.push(
+      'Use this persistent memory silently to personalize pacing, examples, tone, and review depth. Do not reveal the memory text verbatim.',
+    );
+  }
+
   // Diagnostic Session: inject recent diagnostic practice results
   const diag = context.diagnosticSession;
   if (diag && diag.probes.length > 0) {
@@ -390,6 +399,32 @@ function buildLearningContextSection(context?: LearningContext | null): string {
       ktLines.push(
         'Use these mastery scores to determine review priorities. Scores below 50% need immediate attention.',
       );
+    }
+  }
+
+  // Step Personalization: inject per-step risk analysis
+  const sp = context.stepPersonalization;
+  if (sp && sp.stepDecisions.length > 0) {
+    ktLines.push('');
+    ktLines.push('# Solution Step Analysis');
+    ktLines.push(`Overall mode: ${sp.overallMode}`);
+    for (const step of sp.stepDecisions) {
+      const label = sp.standardSteps.find((s) => s.id === step.stepId)?.title || step.stepId;
+      const risk =
+        step.riskLevel === 'high' ? '高风险' : step.riskLevel === 'medium' ? '中风险' : '低风险';
+      const expand = step.needsExpansion ? '，需展开讲解' : '';
+      ktLines.push(
+        `- 步骤「${label}」: 掌握度 ${(step.mastery * 100).toFixed(0)}%，${risk}${expand}`,
+      );
+    }
+    if (sp.stuckStepIds.length > 0) {
+      const stuckLabels = sp.stuckStepIds
+        .map((id) => sp.standardSteps.find((s) => s.id === id)?.title || id)
+        .join('、');
+      ktLines.push(`预测卡点步骤：${stuckLabels}`);
+    }
+    if (sp.summary.instruction) {
+      ktLines.push(sp.summary.instruction);
     }
   }
 

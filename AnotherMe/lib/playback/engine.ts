@@ -24,7 +24,7 @@
  */
 
 import type { Scene } from '@/lib/types/stage';
-import type { Action, SpeechAction, DiscussionAction } from '@/lib/types/action';
+import type { Action, SpeechAction, DiscussionAction, PlayVideoAction } from '@/lib/types/action';
 import type {
   EngineMode,
   TopicState,
@@ -72,6 +72,7 @@ export class PlaybackEngine {
 
   // Internal state
   private currentTrigger: TriggerEvent | null = null;
+  private activePlayVideoAction: PlayVideoAction | null = null;
   private triggerDelayTimer: ReturnType<typeof setTimeout> | null = null;
   // Reading-time timer for speech actions without pre-generated audio (TTS disabled)
   private speechTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,6 +82,8 @@ export class PlaybackEngine {
   private browserTTSChunks: string[] = []; // sentence-level chunks for sequential playback
   private browserTTSChunkIndex: number = 0; // current chunk being spoken
   private browserTTSPausedChunks: string[] = []; // remaining chunks saved on pause (for cancel+re-speak)
+  /** When true, browser TTS was blocked by autoplay and is waiting for audio unlock */
+  private browserTTSBlocked: boolean = false;
   private speechTimerRemaining: number = 0; // remaining ms (set on pause)
 
   constructor(
@@ -160,6 +163,14 @@ export class PlaybackEngine {
         clearTimeout(this.speechTimer);
         this.speechTimer = null;
       }
+      if (this.activePlayVideoAction) {
+        // The video action already advanced the cursor before awaiting the
+        // element's ended signal. Rewind it so resume() continues this same
+        // video action instead of skipping to the next action.
+        useCanvasStore.getState().pauseVideo();
+        this.actionIndex = Math.max(0, this.actionIndex - 1);
+        this.activePlayVideoAction = null;
+      }
       this.setMode('paused');
       // Freeze TTS — but skip if waiting on ProactiveCard (no active speech)
       if (!this.currentTrigger) {
@@ -172,6 +183,9 @@ export class PlaybackEngine {
           // Note: cancel fires onerror('canceled'), which we ignore (see playBrowserTTSChunk)
         } else if (this.audioPlayer.isPlaying()) {
           this.audioPlayer.pause();
+        } else if (this.audioPlayer.hasPendingPlay()) {
+          // Audio blocked by autoplay policy — cancel pending so engine can pause cleanly
+          this.audioPlayer.cancelPendingPlay();
         }
       }
     } else if (this.mode === 'live') {
@@ -233,7 +247,10 @@ export class PlaybackEngine {
     this.setMode('idle');
     this.audioPlayer.stop();
     this.cancelBrowserTTS();
+    this.browserTTSBlocked = false;
     this.actionEngine.clearEffects();
+    useCanvasStore.getState().pauseVideo();
+    this.activePlayVideoAction = null;
     if (this.triggerDelayTimer) {
       clearTimeout(this.triggerDelayTimer);
       this.triggerDelayTimer = null;
@@ -492,7 +509,7 @@ export class PlaybackEngine {
 
         this.audioPlayer
           .play(speechAction.audioId || '', speechAction.audioUrl)
-          .then((audioStarted) => {
+          .then(async (audioStarted) => {
             if (!audioStarted) {
               // No pre-generated audio — try browser-native TTS if selected
               const settings = useSettingsStore.getState();
@@ -504,11 +521,23 @@ export class PlaybackEngine {
               ) {
                 this.playBrowserTTS(speechAction);
               } else {
-                scheduleReadingTimer();
+                const serverAudioStarted = await this.playServerTTSFallback(speechAction).catch(
+                  (error) => {
+                    log.warn('Server TTS fallback failed:', error);
+                    return false;
+                  },
+                );
+                if (!serverAudioStarted) {
+                  scheduleReadingTimer();
+                }
               }
             }
           })
           .catch((err) => {
+            // AbortError: pending play was cancelled (pause/stop) — don't advance
+            if (err instanceof DOMException && err.name === 'AbortError') {
+              return;
+            }
             log.error('TTS error:', err);
             scheduleReadingTimer();
           });
@@ -580,7 +609,13 @@ export class PlaybackEngine {
       case 'wb_delete':
       case 'wb_close': {
         // Synchronous whiteboard actions — await completion, then continue
+        if (action.type === 'play_video') {
+          this.activePlayVideoAction = action as PlayVideoAction;
+        }
         await this.actionEngine.execute(action);
+        if (this.activePlayVideoAction?.id === action.id) {
+          this.activePlayVideoAction = null;
+        }
         if (this.mode === 'playing') {
           this.processNext();
         }
@@ -595,6 +630,39 @@ export class PlaybackEngine {
   }
 
   // ==================== Browser Native TTS ====================
+
+  private async playServerTTSFallback(speechAction: SpeechAction): Promise<boolean> {
+    if (this.mode !== 'playing') return false;
+
+    const settings = useSettingsStore.getState();
+    if (!settings.ttsEnabled || settings.ttsMuted || settings.ttsProviderId === 'browser-native-tts') {
+      return false;
+    }
+
+    const providerConfig = settings.ttsProvidersConfig[settings.ttsProviderId];
+    const res = await fetch('/api/generate/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: speechAction.text,
+        audioId: `lecture-fallback-${speechAction.id}`,
+        ttsProviderId: settings.ttsProviderId,
+        ttsModelId: providerConfig?.modelId,
+        ttsVoice: settings.ttsVoice,
+        ttsSpeed: settings.ttsSpeed,
+        ttsApiKey: providerConfig?.apiKey,
+        ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+      }),
+    });
+
+    if (!res.ok || this.mode !== 'playing') return false;
+
+    const data = await res.json();
+    if (!data.base64) return false;
+
+    const audioUrl = `data:audio/${data.format || 'mp3'};base64,${data.base64}`;
+    return this.audioPlayer.play(`lecture-fallback-${speechAction.id}`, audioUrl);
+  }
 
   /**
    * Split text into sentence-level chunks for sequential playback.
@@ -629,6 +697,7 @@ export class PlaybackEngine {
     if (this.browserTTSChunkIndex >= this.browserTTSChunks.length) {
       // All chunks done
       this.browserTTSActive = false;
+      this.browserTTSBlocked = false;
       this.browserTTSChunks = [];
       this.callbacks.onSpeechEnd?.();
       if (this.mode === 'playing') this.processNext();
@@ -667,16 +736,44 @@ export class PlaybackEngine {
       utterance.lang = cjkRatio > CJK_LANG_THRESHOLD ? 'zh-CN' : 'en-US';
     }
 
+    let started = false;
+    let startTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    utterance.onstart = () => {
+      started = true;
+      if (startTimeout) {
+        clearTimeout(startTimeout);
+        startTimeout = null;
+      }
+    };
+
     utterance.onend = () => {
+      if (startTimeout) {
+        clearTimeout(startTimeout);
+        startTimeout = null;
+      }
       this.browserTTSChunkIndex++;
+      this.browserTTSBlocked = false;
       if (this.mode === 'playing') {
         this.playBrowserTTSChunk(); // next chunk
       }
     };
 
     utterance.onerror = (event) => {
+      if (startTimeout) {
+        clearTimeout(startTimeout);
+        startTimeout = null;
+      }
       // 'canceled' is expected when stop/pause is called — not a real error
       if (event.error !== 'canceled') {
+        // 'not-allowed' on mobile WebViews: speechSynthesis blocked by autoplay policy.
+        // Stop processing chunks and wait for audio unlock before retrying.
+        if (event.error === 'not-allowed' && !this.browserTTSBlocked) {
+          log.warn('Browser TTS blocked by autoplay — waiting for user gesture');
+          this.browserTTSBlocked = true;
+          // Don't advance — stay on current chunk, wait for unlock
+          return;
+        }
         log.warn('Browser TTS chunk error:', event.error);
         // Skip failed chunk, try next
         this.browserTTSChunkIndex++;
@@ -687,10 +784,38 @@ export class PlaybackEngine {
       // On 'canceled': do nothing — pause handler already saved state
     };
 
+    // Mobile WebView safety net: if onstart doesn't fire within 2s,
+    // speechSynthesis likely produced no audible output (no voices, etc.).
+    // Fall back to the reading timer and advance to the next action.
+    startTimeout = setTimeout(() => {
+      if (!started && this.mode === 'playing') {
+        log.warn('Browser TTS did not start — speechSynthesis may have no voices');
+        this.browserTTSActive = false;
+        this.browserTTSBlocked = false;
+        this.browserTTSChunks = [];
+        window.speechSynthesis?.cancel();
+        this.callbacks.onSpeechEnd?.();
+        if (this.mode === 'playing') this.processNext();
+      }
+      startTimeout = null;
+    }, 2000);
+
     // Chrome bug workaround: cancel() before speak() to clear stale synthesis
     // state that can produce garbled/broken audio output.
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
+  }
+
+  /**
+   * Retry browser TTS after audio context has been unlocked via user gesture.
+   * Called externally when the user interacts with the page.
+   */
+  public retryBrowserTTSAfterUnlock(): void {
+    if (!this.browserTTSBlocked) return;
+    if (this.mode !== 'playing') return;
+    log.info('Retrying browser TTS after audio unlock');
+    this.browserTTSBlocked = false;
+    this.playBrowserTTSChunk();
   }
 
   /**

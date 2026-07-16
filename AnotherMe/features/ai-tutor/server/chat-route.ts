@@ -23,9 +23,13 @@ import {
   createGatewayAIMessage,
   createGatewayAISession,
   listGatewayAISessions,
+  streamGatewayChat,
+  isAnotherMe2GatewayConfigured,
 } from '@/lib/server/anotherme2-gateway';
 import { getAuthenticatedUserFromRequest } from '@/lib/auth/session';
 import { buildLearningContext } from '@/lib/server/learning-context';
+import { refreshMemoryFromTurn } from '@/lib/server/memory-service';
+import { extractGatewayMemories } from '@/lib/server/anotherme2-gateway/memory';
 import { createLearningContext, type LearningContext } from '@/lib/types/learning-context';
 import { createDefaultRuntime, type CapabilityHandler } from '../orchestration/capability-runtime';
 import type { CapabilityId as RuntimeCapabilityId } from '../orchestration/capability-registry';
@@ -138,7 +142,9 @@ function extractTextFromMessage(message: unknown): string {
   return text;
 }
 
-function extractLatestUserMessage(messages: unknown): { messageId: string; content: string } | null {
+function extractLatestUserMessage(
+  messages: unknown,
+): { messageId: string; content: string } | null {
   if (!Array.isArray(messages)) return null;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const item = messages[i];
@@ -202,7 +208,9 @@ type ChatCapability = NonNullable<StatelessChatRequest['capability']>;
 
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const items = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  const items = value.filter(
+    (item): item is string => typeof item === 'string' && item.trim().length > 0,
+  );
   return items.length ? items : undefined;
 }
 
@@ -237,6 +245,7 @@ function buildSelectedCapabilityPayload(params: {
       detailedAnswer: true,
       languageModel,
       conversationContext: buildConversationContext(body.messages),
+      maxRounds: typeof toolConfig?.maxRounds === 'number' ? toolConfig.maxRounds : 2,
     };
   }
 
@@ -244,7 +253,8 @@ function buildSelectedCapabilityPayload(params: {
     return {
       topic: latestUserText,
       count: typeof toolConfig?.quizCount === 'number' ? toolConfig.quizCount : 5,
-      questionType: typeof toolConfig?.questionType === 'string' ? toolConfig.questionType : 'choice',
+      questionType:
+        typeof toolConfig?.questionType === 'string' ? toolConfig.questionType : 'choice',
       difficulty: typeof toolConfig?.difficulty === 'string' ? toolConfig.difficulty : 'auto',
       knowledgeBases,
       languageModel,
@@ -264,7 +274,8 @@ function buildSelectedCapabilityPayload(params: {
   if (capability === 'math_animator') {
     return {
       concept: latestUserText,
-      outputFormat: typeof toolConfig?.outputFormat === 'string' ? toolConfig.outputFormat : 'storyboard',
+      outputFormat:
+        typeof toolConfig?.outputFormat === 'string' ? toolConfig.outputFormat : 'storyboard',
       duration: typeof toolConfig?.duration === 'number' ? toolConfig.duration : 60,
       style: typeof toolConfig?.style === 'string' ? toolConfig.style : 'default',
       languageModel,
@@ -294,7 +305,8 @@ function formatCapabilityOutput(output: Record<string, unknown> | undefined): st
       .map((item, index) => {
         if (!item || typeof item !== 'object') return '';
         const question = item as Record<string, unknown>;
-        const title = typeof question.question === 'string' ? question.question : `练习题 ${index + 1}`;
+        const title =
+          typeof question.question === 'string' ? question.question : `练习题 ${index + 1}`;
         const options = Array.isArray(question.options)
           ? `\n${question.options
               .filter((option): option is string => typeof option === 'string')
@@ -302,7 +314,8 @@ function formatCapabilityOutput(output: Record<string, unknown> | undefined): st
               .join('\n')}`
           : '';
         const answer = typeof question.answer === 'string' ? `\n\n答案：${question.answer}` : '';
-        const explanation = typeof question.explanation === 'string' ? `\n解析：${question.explanation}` : '';
+        const explanation =
+          typeof question.explanation === 'string' ? `\n解析：${question.explanation}` : '';
         return `### ${index + 1}. ${title}${options}${answer}${explanation}`;
       })
       .filter(Boolean)
@@ -332,6 +345,7 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
   let chatModel: string | undefined;
   let chatMessageCount: number | undefined;
+  const t0 = Date.now();
 
   try {
     const body: StatelessChatRequest = await req.json();
@@ -363,17 +377,24 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_API_KEY', 401, 'API Key is required');
     }
 
-    log.info('Processing request');
+    log.info('========== [STAGE-0-recv] Chat request received ==========');
     log.info(
-      `Agents: ${body.config.agentIds.join(', ')}, Messages: ${body.messages.length}, Turn: ${body.directorState?.turnCount ?? 0}`,
+      `Agents: ${body.config.agentIds.join(', ')}, Messages: ${body.messages.length}, Turn: ${body.directorState?.turnCount ?? 0}, Model: ${body.model || 'default'}, Capability: ${body.capability || 'chat'}`,
     );
 
     let persistenceSessionId: string | undefined;
     let persistenceUserId = '';
     if (body.persistence?.enabled) {
       try {
+        const t_persist_start = Date.now();
         const authUser = await getAuthenticatedUserFromRequest(req);
         persistenceUserId = authUser?.id?.trim() || '';
+        log.info(
+          'Auth resolved in ' +
+            (Date.now() - t_persist_start) +
+            'ms, userId=' +
+            (persistenceUserId || 'none'),
+        );
       } catch (error) {
         log.warn('Failed to resolve authenticated user for persistence, skip persistence:', error);
       }
@@ -381,8 +402,7 @@ export async function POST(req: NextRequest) {
     const latestUserMessage = extractLatestUserMessage(body.messages);
     const userMessageCount = countUserMessages(body.messages);
     const shouldPersistLatestUserMessage =
-      !!latestUserMessage &&
-      body.persistence?.latestUserMessageId === latestUserMessage.messageId;
+      !!latestUserMessage && body.persistence?.latestUserMessageId === latestUserMessage.messageId;
     let latestPersistedUserMessageId: string | undefined;
 
     if (body.persistence?.enabled && persistenceUserId) {
@@ -418,18 +438,24 @@ export async function POST(req: NextRequest) {
         log.warn('Chat persistence setup failed, continue without persistence:', error);
       }
     } else if (body.persistence?.enabled) {
-      log.warn('Persistence requested without authenticated user, skip persistence for this request');
+      log.warn(
+        'Persistence requested without authenticated user, skip persistence for this request',
+      );
     }
 
     let learningContext = body.learningContext;
     if (persistenceUserId) {
+      const t_lc_start = Date.now();
       learningContext = await buildLearningContext({
         userId: persistenceUserId,
         source: resolveChatSource(body.persistence?.source),
         classroomId: body.persistence?.linkedClassroomId || body.storeState.stage?.id || null,
         sceneId: body.storeState.currentSceneId,
         aiSessionId: persistenceSessionId || body.persistence?.sessionId || null,
-        topic: latestUserMessage?.content || body.config.discussionTopic || extractStageTitle(body.storeState.stage),
+        topic:
+          latestUserMessage?.content ||
+          body.config.discussionTopic ||
+          extractStageTitle(body.storeState.stage),
         language: body.storeState.stage?.language || 'zh-CN',
         extra: {
           agentIds: body.config.agentIds,
@@ -444,6 +470,7 @@ export async function POST(req: NextRequest) {
         ],
         lookbackDays: 14,
       });
+      log.info('Learning context built in ' + (Date.now() - t_lc_start) + 'ms');
 
       // Merge client-provided diagnostic session into learning context
       if (body.diagnosticSession && learningContext) {
@@ -485,7 +512,11 @@ export async function POST(req: NextRequest) {
         }
       };
 
-      function emitStageEvent(stage: string, status: 'running' | 'success' | 'error', extra?: Record<string, unknown>) {
+      function emitStageEvent(
+        stage: string,
+        status: 'running' | 'success' | 'error',
+        extra?: Record<string, unknown>,
+      ) {
         const event = {
           type: 'capability_stage' as const,
           data: { stage, status, requestId, ...extra },
@@ -498,14 +529,23 @@ export async function POST(req: NextRequest) {
 
         // Build capability runtime with registered chat handler
         const runtime = createDefaultRuntime({
-          buildContext: async () => learningContext || createLearningContext(persistenceUserId || 'anonymous'),
+          buildContext: async () =>
+            learningContext || createLearningContext(persistenceUserId || 'anonymous'),
           checkGuard: async () => ({ passed: true }),
           emitTrace: async (event) => {
             globalStreamBus.publish(event);
+            await writer
+              .write(
+                encoder.encode(
+                  `data: ${JSON.stringify({ type: 'teaching_trace', data: event })}\n\n`,
+                ),
+              )
+              .catch(() => {});
           },
           persistResult: async (result) => {
             const output = result.output as Record<string, unknown> | undefined;
-            const assistantText = typeof output?.assistantText === 'string' ? output.assistantText : '';
+            const assistantText =
+              typeof output?.assistantText === 'string' ? output.assistantText : '';
             const wasAborted = Boolean(output?.wasAborted);
             const cueUserReceived = Boolean(output?.cueUserReceived);
             const totalAgents = typeof output?.totalAgents === 'number' ? output.totalAgents : 0;
@@ -526,9 +566,7 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            const shouldTriggerExtract =
-              !wasAborted &&
-              (cueUserReceived || totalAgents === 0);
+            const shouldTriggerExtract = !wasAborted && (cueUserReceived || totalAgents === 0);
 
             if (shouldTriggerExtract && persistenceSessionId) {
               void createLearningRecordExtractJob({
@@ -543,9 +581,28 @@ export async function POST(req: NextRequest) {
 
             // Persist ClassroomBook artifact for this chat turn
             if (!wasAborted && assistantText.trim() && persistenceUserId) {
+              void refreshMemoryFromTurn({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                topic: learningContext?.metadata?.topic,
+                source: learningContext?.metadata?.source || 'chat',
+              }).catch((error) => {
+                log.warn('Failed to refresh persistent memory:', error);
+              });
+
+              // DB-backed memory extraction (fire-and-forget)
+              void extractGatewayMemories({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                sourceSessionId: persistenceSessionId || undefined,
+              }).catch(() => {});
+
               try {
                 const knowledgePointIds =
-                  (result.stages.find((s) => s.stage === 'post_process')?.output?.knowledgePointIds as string[] | undefined) || [];
+                  (result.stages.find((s) => s.stage === 'post_process')?.output
+                    ?.knowledgePointIds as string[] | undefined) || [];
                 const book = buildChatClassroomBook({
                   userId: persistenceUserId,
                   sessionId: persistenceSessionId || requestId,
@@ -563,21 +620,47 @@ export async function POST(req: NextRequest) {
             }
           },
         });
-        
+
         // v3.3+: 根据请求的 capability 选择对应的处理器
         const requestedCapability = body.capability ?? 'chat';
-        
+
         // 映射 capability 到 capabilityId 和处理器
         type CapabilityType = NonNullable<typeof requestedCapability>;
-        const capabilityHandlers: Record<CapabilityType, { capabilityId: RuntimeCapabilityId; handler: CapabilityHandler<never> }> = {
-          chat: { capabilityId: 'ai_tutor_chat', handler: aiTutorChatHandler as unknown as CapabilityHandler<never> },
-          deep_solve: { capabilityId: 'deep_solve', handler: deepSolveHandler as unknown as CapabilityHandler<never> },
-          quiz: { capabilityId: 'quiz_practice', handler: quizPracticeHandler as unknown as CapabilityHandler<never> },
-          research: { capabilityId: 'deep_research', handler: deepResearchHandler as unknown as CapabilityHandler<never> },
-          math_animator: { capabilityId: 'math_animator', handler: mathAnimatorHandler as unknown as CapabilityHandler<never> },
-          visualize: { capabilityId: 'visualize', handler: visualizeHandler as unknown as CapabilityHandler<never> },
+        const capabilityHandlers: Record<
+          CapabilityType,
+          { capabilityId: RuntimeCapabilityId; handler: CapabilityHandler<never> }
+        > = {
+          chat: {
+            capabilityId: 'ai_tutor_chat',
+            handler: aiTutorChatHandler as unknown as CapabilityHandler<never>,
+          },
+          deep_solve: {
+            capabilityId: 'deep_solve',
+            handler: deepSolveHandler as unknown as CapabilityHandler<never>,
+          },
+          quiz: {
+            capabilityId: 'quiz_practice',
+            handler: quizPracticeHandler as unknown as CapabilityHandler<never>,
+          },
+          research: {
+            capabilityId: 'deep_research',
+            handler: deepResearchHandler as unknown as CapabilityHandler<never>,
+          },
+          math_animator: {
+            capabilityId: 'math_animator',
+            handler: mathAnimatorHandler as unknown as CapabilityHandler<never>,
+          },
+          visualize: {
+            capabilityId: 'visualize',
+            handler: visualizeHandler as unknown as CapabilityHandler<never>,
+          },
+          auto: {
+            capabilityId: 'auto',
+            // auto 能力通过 gateway 调用 Python 引擎，这里只是类型占位
+            handler: aiTutorChatHandler as unknown as CapabilityHandler<never>,
+          },
         };
-        
+
         const selectedCapability = capabilityHandlers[requestedCapability as CapabilityType];
         if (!selectedCapability) {
           const errorEvent: StatelessEvent = {
@@ -591,11 +674,327 @@ export async function POST(req: NextRequest) {
           await writer.close();
           return;
         }
-        
-        // 注册对应的处理器
+
+        // 检查是否应使用 Python DeepTutor 引擎（gateway）
+        const useGatewayPipeline =
+          body.config?.useAgenticPipeline === true &&
+          requestedCapability === 'chat' &&
+          isAnotherMe2GatewayConfigured();
+
+        // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
+        const useAutoGateway = requestedCapability === 'auto' && isAnotherMe2GatewayConfigured();
+
+        // auto 能力始终通过 gateway 调用 Python DeepTutor 引擎
+        if (useAutoGateway) {
+          log.info('Using Python DeepTutor gateway for auto capability');
+          const t_gw_start = Date.now();
+
+          try {
+            const gatewayMessages = body.messages.map((msg) => {
+              const textContent =
+                msg.parts
+                  ?.filter((part) => part.type === 'text')
+                  .map((part) => (part as { text?: string }).text)
+                  .filter((text): text is string => typeof text === 'string')
+                  .join('') || '';
+              return {
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: textContent,
+              };
+            });
+
+            const gatewayWillPersistMessages = Boolean(persistenceSessionId);
+
+            const gatewayResponse = await streamGatewayChat({
+              messages: gatewayMessages,
+              model: body.model || 'gpt-4o',
+              apiKey: resolvedApiKey || '',
+              baseUrl: body.baseUrl,
+              capability: 'auto',
+              userId: persistenceUserId || 'anonymous',
+              requestId,
+              learningContext: (learningContext as unknown as Record<string, unknown>) || undefined,
+              persistenceSessionId,
+              persistMessages: gatewayWillPersistMessages,
+              persistUserMessage: false,
+              signal,
+            });
+            log.info(
+              'Gateway auto response received in ' +
+                (Date.now() - t_gw_start) +
+                'ms, status=' +
+                gatewayResponse.status,
+            );
+
+            if (!gatewayResponse.ok) {
+              const errText = await gatewayResponse.text().catch(() => 'Gateway error');
+              throw new Error(`Gateway returned ${gatewayResponse.status}: ${errText}`);
+            }
+
+            if (!gatewayResponse.body) {
+              throw new Error('Gateway returned no response body');
+            }
+
+            const reader = gatewayResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let assistantText = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed === ':heartbeat' || trimmed === ':end') continue;
+
+                if (trimmed.startsWith('data: ')) {
+                  try {
+                    const event = JSON.parse(trimmed.slice(6));
+
+                    if (event.type === 'text_delta') {
+                      const content = event.data?.content;
+                      if (typeof content === 'string') {
+                        assistantText += content;
+                      }
+                    }
+
+                    await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                  } catch {
+                    // 跳过无法解析的行
+                  }
+                }
+              }
+            }
+
+            if (persistenceSessionId && assistantText.trim()) {
+              try {
+                await createGatewayAIMessage({
+                  sessionId: persistenceSessionId,
+                  role: 'assistant',
+                  userId: persistenceUserId,
+                  content: assistantText.trim(),
+                  contentType: 'text',
+                  modelName: body.model,
+                  requestId: `auto-assistant-${persistenceSessionId}`,
+                });
+              } catch (error) {
+                log.warn('Failed to persist auto response from gateway:', error);
+              }
+            }
+
+            stopHeartbeat();
+            await writer.close();
+            return;
+          } catch (error) {
+            if (signal.aborted) {
+              log.info('Auto gateway request aborted');
+              try {
+                await writer.close();
+              } catch {
+                /* already closed */
+              }
+              return;
+            }
+            log.error('Auto gateway pipeline failed:', error);
+            const errorEvent: StatelessEvent = {
+              type: 'error',
+              data: {
+                message: `Auto 路由失败: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            };
+            await writer.write(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
+            await writer.close();
+            return;
+          }
+        }
+
+        if (useGatewayPipeline) {
+          log.info('Using Python DeepTutor gateway for agentic chat');
+          const t_gw_start = Date.now();
+
+          try {
+            // 将消息转换为 gateway 格式
+            const gatewayMessages = body.messages.map((msg) => {
+              const textContent =
+                msg.parts
+                  ?.filter((part) => part.type === 'text')
+                  .map((part) => (part as { text?: string }).text)
+                  .filter((text): text is string => typeof text === 'string')
+                  .join('') || '';
+              return {
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: textContent,
+              };
+            });
+
+            const gatewayWillPersistMessages = Boolean(persistenceSessionId);
+
+            // 调用 Python gateway 的 DeepTutor engine
+            const gatewayResponse = await streamGatewayChat({
+              messages: gatewayMessages,
+              model: body.model || 'gpt-4o',
+              apiKey: resolvedApiKey || '',
+              baseUrl: body.baseUrl,
+              capability: 'chat',
+              userId: persistenceUserId || 'anonymous',
+              requestId,
+              learningContext: (learningContext as unknown as Record<string, unknown>) || undefined,
+              persistenceSessionId,
+              persistMessages: gatewayWillPersistMessages,
+              persistUserMessage: false,
+              signal,
+            });
+            log.info(
+              'Gateway agentic response received in ' +
+                (Date.now() - t_gw_start) +
+                'ms, status=' +
+                gatewayResponse.status,
+            );
+
+            if (!gatewayResponse.ok) {
+              const errText = await gatewayResponse.text().catch(() => 'Gateway error');
+              throw new Error(`Gateway returned ${gatewayResponse.status}: ${errText}`);
+            }
+
+            if (!gatewayResponse.body) {
+              throw new Error('Gateway returned no response body');
+            }
+
+            // 流式读取 gateway 的 SSE 响应并透传给前端
+            const reader = gatewayResponse.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let assistantText = '';
+            let sessionStarted = false;
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed === ':heartbeat' || trimmed === ':end') continue;
+
+                if (trimmed.startsWith('data: ')) {
+                  try {
+                    const event = JSON.parse(trimmed.slice(6));
+
+                    if (event.type === 'agent_start' && !sessionStarted) {
+                      sessionStarted = true;
+                    }
+
+                    if (event.type === 'text_delta') {
+                      const content = event.data?.content;
+                      if (typeof content === 'string') {
+                        assistantText += content;
+                      }
+                    }
+
+                    await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                  } catch {
+                    // 跳过无法解析的行
+                  }
+                }
+              }
+            }
+
+            // 持久化助手消息
+            if (!gatewayWillPersistMessages && persistenceSessionId && assistantText.trim()) {
+              try {
+                await createGatewayAIMessage({
+                  sessionId: persistenceSessionId,
+                  role: 'assistant',
+                  userId: persistenceUserId,
+                  content: assistantText.trim(),
+                  contentType: 'text',
+                  modelName: body.model,
+                  requestId: `chat-assistant-${persistenceSessionId}-${latestUserMessage?.messageId || 'none'}`,
+                });
+              } catch (error) {
+                log.warn('Failed to persist assistant response from gateway:', error);
+              }
+            }
+
+            // 触发学习记录提取
+            if (persistenceSessionId) {
+              void createLearningRecordExtractJob({
+                sessionId: persistenceSessionId,
+                userId: persistenceUserId || undefined,
+                latestUserMessageId: latestPersistedUserMessageId,
+                messageCount: userMessageCount,
+              }).catch((error) => {
+                log.warn('Failed to enqueue learning record extract job:', error);
+              });
+            }
+
+            // 持久化 ClassroomBook
+            if (assistantText.trim() && persistenceUserId) {
+              void refreshMemoryFromTurn({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                topic: learningContext?.metadata?.topic,
+                source: learningContext?.metadata?.source || 'chat',
+              }).catch((error) => {
+                log.warn('Failed to refresh persistent memory from gateway:', error);
+              });
+
+              // DB-backed memory extraction (fire-and-forget)
+              void extractGatewayMemories({
+                userId: persistenceUserId,
+                userMessage: latestUserMessage?.content || '',
+                assistantMessage: assistantText.trim(),
+                sourceSessionId: persistenceSessionId || undefined,
+              }).catch(() => {});
+
+              try {
+                const book = buildChatClassroomBook({
+                  userId: persistenceUserId,
+                  sessionId: persistenceSessionId || requestId,
+                  requestId,
+                  assistantText: assistantText.trim(),
+                  topic: learningContext?.metadata?.topic,
+                  sourceCapability: 'ai_tutor_chat',
+                });
+                await saveClassroomBook(book);
+              } catch (error) {
+                log.warn('Failed to persist ClassroomBook artifact:', error);
+              }
+            }
+
+            stopHeartbeat();
+            await writer.close();
+            return;
+          } catch (error) {
+            if (signal.aborted) {
+              log.info('Gateway request aborted');
+              try {
+                await writer.close();
+              } catch {
+                /* already closed */
+              }
+              return;
+            }
+            log.error('Gateway pipeline failed, falling back to TypeScript pipeline:', error);
+            // 如果 gateway 失败，继续使用 TypeScript pipeline 作为 fallback
+          }
+        }
+
+        // 注册对应的处理器（TypeScript pipeline 作为 fallback）
         runtime.registerHandler(selectedCapability.handler);
-        
-        log.info(`Using capability: ${requestedCapability} (capabilityId: ${selectedCapability.capabilityId})`);
+
+        log.info(
+          `Using capability: ${requestedCapability} (capabilityId: ${selectedCapability.capabilityId})`,
+        );
 
         const selectedPayload = buildSelectedCapabilityPayload({
           capability: requestedCapability as ChatCapability,
@@ -625,9 +1024,9 @@ export async function POST(req: NextRequest) {
         let emittedVisibleText = false;
         let serverDrivenDoneEmitted = false;
         const structuredResultOnly =
-          requestedCapability === 'math_animator'
-          || requestedCapability === 'visualize'
-          || requestedCapability === 'quiz';
+          requestedCapability === 'math_animator' ||
+          requestedCapability === 'visualize' ||
+          requestedCapability === 'quiz';
 
         const writeEvent = async (event: StatelessEvent) => {
           await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
@@ -656,10 +1055,12 @@ export async function POST(req: NextRequest) {
               continue;
             }
 
-            const rawAgentEvent = stageResult.output?.agentEvent as {
-              type?: string;
-              data?: Record<string, unknown>;
-            } | undefined;
+            const rawAgentEvent = stageResult.output?.agentEvent as
+              | {
+                  type?: string;
+                  data?: Record<string, unknown>;
+                }
+              | undefined;
             let agentEvent = rawAgentEvent as StatelessEvent | undefined;
             if (rawAgentEvent?.type && agentEvent) {
               if (rawAgentEvent.type === 'text_delta') {
@@ -672,7 +1073,8 @@ export async function POST(req: NextRequest) {
                     type: 'text_delta',
                     data: {
                       content,
-                      messageId: typeof rawMessageId === 'string' ? rawMessageId : assistantMessageId,
+                      messageId:
+                        typeof rawMessageId === 'string' ? rawMessageId : assistantMessageId,
                     },
                   };
                 }
@@ -803,14 +1205,12 @@ export async function POST(req: NextRequest) {
       `Chat request failed [model=${chatModel ?? 'unknown'}, messages=${chatMessageCount ?? 0}]:`,
       error,
     );
+    const totalMs = Date.now() - t0;
+    log.error('Total request processing time before error: ' + totalMs + 'ms');
     const message = error instanceof Error ? error.message : 'Failed to process request';
     if (/api key required/i.test(message)) {
       return apiError('MISSING_API_KEY', 401, message);
     }
-    return apiError(
-      'INTERNAL_ERROR',
-      500,
-      message,
-    );
+    return apiError('INTERNAL_ERROR', 500, message);
   }
 }

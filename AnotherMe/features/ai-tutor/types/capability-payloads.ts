@@ -28,6 +28,12 @@ export interface DeepSolvePayload {
   languageModel?: LanguageModel;
   /** 对话上下文 */
   conversationContext?: string;
+  /** ReAct 最大轮次 */
+  maxRounds?: number;
+  /** 教学模式：standard=直接解答，socratic=苏格拉底启发式引导 */
+  teachingMode?: 'standard' | 'socratic';
+  /** 苏格拉底提示层级，仅 teachingMode='socratic' 时生效 */
+  socraticHintLevel?: number;
 }
 
 export interface DeepSolveResult {
@@ -171,10 +177,12 @@ export interface VisualizePayload {
 export interface VisualizeResult {
   success: boolean;
   response: string;
-  code?: string | {
-    language: string;
-    content: string;
-  };
+  code?:
+    | string
+    | {
+        language: string;
+        content: string;
+      };
   render_type?: VisualizeFormat;
   preview?: string;
   format: VisualizeFormat;
@@ -253,7 +261,51 @@ export interface CapabilityContentEvent {
   content: string;
 }
 
-export type CapabilityEvent =
-  | CapabilityStageEvent
-  | CapabilityToolEvent
-  | CapabilityContentEvent;
+export type CapabilityEvent = CapabilityStageEvent | CapabilityToolEvent | CapabilityContentEvent;
+
+// ============================================================
+// Auto - 智能路由（苏格拉底式启发教学）
+// ============================================================
+
+export interface AutoPayload {
+  /** 用户消息 */
+  message: string;
+  /** 对话历史 */
+  conversationHistory?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** 启用的原子工具 */
+  enabledTools?: Array<
+    'rag' | 'web_search' | 'code_execution' | 'reason' | 'paper_search' | 'brainstorm'
+  >;
+  /** Auto 配置 */
+  autoConfig?: {
+    /** 可启用的能力列表（空=全部） */
+    enabledCapabilities?: string[];
+    /** 最大委派迭代次数 */
+    maxIterations?: number;
+    /** 每步最大重试次数 */
+    maxRetriesPerStep?: number;
+    /** 同一能力最大调用次数 */
+    maxSameCapabilityCalls?: number;
+  };
+  /** 语言 */
+  language?: 'zh' | 'en';
+  /** 语言模型 */
+  languageModel?: LanguageModel;
+}
+
+export interface AutoResult {
+  success: boolean;
+  response: string;
+  iterations: number;
+  delegations: Array<{
+    capability: string;
+    succeeded: boolean;
+    errorMessage?: string;
+  }>;
+  atomicCalls: Array<{
+    toolName: string;
+    succeeded: boolean;
+  }>;
+  finalPath: 'router_text' | 'synthesized' | 'terminal_failure';
+  error?: string;
+}

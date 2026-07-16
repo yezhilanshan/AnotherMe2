@@ -5,7 +5,11 @@ import { Readable } from 'node:stream';
 import { constants as fsConstants } from 'node:fs';
 import { type NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/server/api-response';
-import { getAnotherMe2ProblemVideoResult, isAnotherMe2GatewayError } from '@/lib/server/anotherme2-gateway';
+import {
+  getAnotherMe2ProblemVideoResult,
+  getGatewayBaseUrl,
+  isAnotherMe2GatewayError,
+} from '@/lib/server/anotherme2-gateway';
 
 export const maxDuration = 60;
 
@@ -105,6 +109,9 @@ export async function GET(
 
     if (/^https?:\/\//i.test(rawVideoUrl)) {
       return NextResponse.redirect(rawVideoUrl, 307);
+    }
+    if (rawVideoUrl.startsWith('/v1/objects/')) {
+      return NextResponse.redirect(`${getGatewayBaseUrl()}${rawVideoUrl}`, 307);
     }
 
     const filePath = resolveLocalPath(rawVideoUrl);

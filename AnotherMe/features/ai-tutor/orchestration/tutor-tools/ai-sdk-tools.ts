@@ -4,7 +4,7 @@
  * 将六个 AI导师工具包装为 AI SDK 的 tool 格式，支持 agentic tool calling。
  * 工具列表：brainstorm / rag / web_search / code_execution / reason / paper_search
  *
- * 参考 DeepTutor 的 agentic pipeline 实现：
+ * 参考 AnotherMe 的 agentic pipeline 实现：
  * - thinking -> acting -> observing -> responding 四阶段
  * - 模型按需选择工具，而非预执行全部
  */
@@ -21,7 +21,7 @@ import { executeRAG } from './rag';
 import { executeCodeExecution } from './code-execution';
 
 // ============================================================================
-// Tool Schemas (匹配 DeepTutor 的工具参数定义)
+// Tool Schemas (匹配 AnotherMe 的工具参数定义)
 // ============================================================================
 
 const brainstormSchema = z.object({

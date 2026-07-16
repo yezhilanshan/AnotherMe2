@@ -20,7 +20,7 @@ import { quizPracticeHandler } from '../orchestration/handlers/quiz-practice-han
 import { visualizeHandler } from '../orchestration/handlers/visualize-handler';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { getAuthenticatedUserFromRequest } from '@/lib/auth/session';
-import { createLearningContext } from '@/lib/types/learning-context';
+import { buildLearningContext } from '@/lib/server/learning-context';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('CapabilitiesAPI');
@@ -117,6 +117,7 @@ function normalizeCapabilityPayload(
           ? body.enabledTools
           : ['rag', 'web_search', 'code_execution', 'reason'],
         knowledgeBases,
+        maxRounds: typeof body.maxRounds === 'number' ? body.maxRounds : 2,
       };
     case 'deep_research':
       return {
@@ -289,8 +290,9 @@ export async function POST(req: NextRequest, context: Params) {
         startHeartbeat();
 
         const runtime = createDefaultRuntime({
-          buildContext: async ({ payload }) => createLearningContext(userId, {
-            metadata: {
+          buildContext: async ({ payload }) =>
+            buildLearningContext({
+              userId,
               source: 'chat',
               topic: typeof payload.topic === 'string'
                 ? payload.topic
@@ -300,10 +302,12 @@ export async function POST(req: NextRequest, context: Params) {
               language: 'zh-CN',
               grade: null,
               extra: { capabilityId },
-            },
+              enabledTools: [{ id: 'notebook', enabled: true, config: {} }],
           }),
           checkGuard: async () => ({ passed: true }),
-          emitTrace: async () => {},
+          emitTrace: async (event) => {
+            await writeEvent({ type: 'teaching_trace', data: event });
+          },
           persistResult: async () => {},
         });
 
